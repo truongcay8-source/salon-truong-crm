@@ -1,0 +1,25 @@
+# Biến môi trường / khóa bí mật
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+npm-debug.log*
+dist/
+build/
+
+# Vercel
+.vercel/
+
+# Hệ điều hành / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Dữ liệu thật, backup (không đẩy lên Git)
+*.bak
+*.dump
+backup/
+exports/
