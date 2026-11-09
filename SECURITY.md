@@ -1,24 +1,16 @@
-# Kiến trúc bảo mật CRM Salon Trường
+# Bảo mật CRM Salon Nếp
 
-## Nguyên tắc bắt buộc
-1. Không có đăng ký xong dùng ngay. Tài khoản mới luôn là `PENDING` và `role = NULL`.
-2. `PENDING` không được đọc khách hàng, lịch, hồ sơ tóc, doanh số hoặc hoa hồng.
-3. Quản lý có thể duyệt `STAFF` và `RECEPTION`. Chỉ `OWNER` có thể duyệt `MANAGER`.
-4. Doanh số nằm trong bảng `invoices`: chỉ `OWNER`/`MANAGER` được `SELECT`.
-5. Hoa hồng nằm trong bảng `commissions`: nhân viên chỉ `SELECT` được hàng có `staff_id = auth.uid()`; quản lý/lãnh đạo xem toàn bộ.
-6. Không coi việc ẩn nút/menu là bảo mật. UI chỉ là trải nghiệm; quyền thật nằm ở PostgreSQL RLS.
-7. Không cho client cập nhật trực tiếp `profiles.role` hoặc `profiles.status`. Duyệt tài khoản qua RPC `approve_user()`.
-8. Mật khẩu không lưu trong bảng ứng dụng hoặc localStorage khi production; dùng Supabase Auth/Auth provider.
-9. Bật HTTPS, audit log, backup và MFA cho OWNER trước khi dùng dữ liệu thật.
+## Nguyên tắc
+1. **Quyền kiểm tra ở máy chủ**, không dựa vào việc ẩn nút trên giao diện. Mọi API đều kiểm tra vai trò (`server/index.js`: `OWNER`, `MGR`, và các kiểm tra trong `server/logic.js`).
+2. **Mật khẩu** lưu dạng băm bcrypt, không lưu bản rõ. Mật khẩu ban đầu ngẫu nhiên, bắt buộc đổi ở lần đăng nhập đầu. Đổi mật khẩu sẽ đăng xuất các phiên khác.
+3. **Phiên đăng nhập**: cookie `HttpOnly`, `SameSite=Lax`, `Secure` khi đặt `COOKIE_SECURE=1`; hết hạn sau 14 ngày. Khóa tài khoản / đặt lại mật khẩu xóa phiên ngay.
+4. **Chống dò mật khẩu**: sai 5 lần / 10 phút theo tài khoản + IP thì tạm khóa.
+5. **Dữ liệu khách**: nhân viên không xuất Excel, không xem tổng chi tiêu và tiền các lượt không phải của mình. Xóa khách chỉ Lãnh đạo (xóa mềm).
+6. **Tiền**: nhân viên chỉ ghi/sửa lượt của mình trong ngày; sửa/xóa lượt sau đó phải qua Quản lý, xóa bắt buộc ghi lý do. Giảm giá bắt buộc ghi lý do. Mọi thao tác tiền, thẻ, xuất dữ liệu ghi vào nhật ký thao tác (chỉ Lãnh đạo xem).
+7. **Ảnh**: chỉ nhận JPG/PNG/WEBP (kiểm tra nội dung file, không tin đuôi file), tối đa 8MB, chỉ xem khi đã đăng nhập.
+8. **Không đẩy dữ liệu thật lên Git**: thư mục `data/` đã nằm trong `.gitignore`.
 
-## Luồng đăng ký
-`Đăng ký Auth` → trigger tạo `profiles(PENDING, role=NULL)` → không có quyền dữ liệu → Owner/Manager mở danh sách chờ duyệt → gán role → RPC `approve_user()` → `ACTIVE` → RLS tự cấp đúng phạm vi.
-
-## Phân quyền dữ liệu
-- OWNER: toàn bộ dữ liệu và cấu hình.
-- MANAGER: xem doanh số, toàn bộ hoa hồng, khách, lịch; duyệt Staff/Reception.
-- STAFF: xem khách/lịch/hồ sơ tóc phục vụ công việc; chỉ xem hoa hồng của bản thân; không xem doanh số.
-- RECEPTION: xem khách/lịch; tạo giao dịch theo workflow; không query báo cáo doanh số; hoa hồng (nếu có) chỉ của chính mình.
-
-## Lưu ý bản demo
-`index.html/app.js` là prototype giao diện chạy localStorage để duyệt UX. Nó mô phỏng luồng chờ duyệt nhưng không thể cung cấp bảo mật production. File `supabase_schema.sql` là baseline cần triển khai lên database thật.
+## Trước khi dùng dữ liệu thật
+- Chạy sau HTTPS (Caddy/Cloudflare) và đặt `COOKIE_SECURE=1`.
+- Xóa file `data/mat-khau-ban-dau.txt` sau khi đã phát mật khẩu.
+- Sao lưu thư mục `DATA_DIR` ra ngoài máy chủ hằng tuần.
