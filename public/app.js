@@ -1159,12 +1159,14 @@ VIEWS.attendance = async (main) => {
 async function attSetup(box, reload) {
   const c = await api('/attendance/setup');
   box.innerHTML = `<h3>⚙️ Cài đặt chấm công (Lãnh đạo)</h3>
-    <div class="small muted">Làm 1 lần khi đang đứng ở tiệm. Nhân viên chấm được khi <b>đang dùng wifi tiệm</b> HOẶC <b>định vị trong bán kính</b> quanh tiệm.</div>
+    <div class="small muted">Làm 1 lần khi đang đứng ở tiệm. Nhân viên chấm được khi <b>định vị trong bán kính</b> quanh tiệm${c.shop_ips ? ' HOẶC <b>đang dùng wifi tiệm</b>' : ' (chỉ dùng GPS — chưa lưu wifi tiệm)'}.</div>
     <div class="stat-line"><span>📍 Vị trí tiệm</span><b>${c.shop_lat ? `${Number(c.shop_lat).toFixed(5)}, ${Number(c.shop_lng).toFixed(5)}` : 'chưa có'}</b></div>
     <div class="stat-line"><span>📶 IP wifi tiệm</span><b>${esc(c.shop_ips || 'chưa có')}</b></div>
     <div class="stat-line"><span class="muted">Mạng bạn đang dùng</span><span>${esc(c.your_ip)}</span></div>
     <div class="row" style="margin:8px 0"><button class="btn sm" id="sgps">📍 Lấy vị trí hiện tại làm vị trí tiệm</button><button class="btn sm" id="swifi">📶 Mạng đang dùng là wifi tiệm</button>${c.shop_ips ? '<button class="btn sm" id="cwifi">Xóa wifi đã lưu</button>' : ''}</div>
-    <form id="asf"><div class="form-grid"><div><label>Bán kính cho phép (m)</label><input type="number" name="shop_radius" value="${esc(c.shop_radius)}" min="30" step="10"></div>
+    <form id="asf"><div class="form-grid"><div class="full small muted">Hoặc nhập toạ độ tiệm (Google Maps: giữ ngón tay lên vị trí tiệm → copy 2 số, VD 21.02850, 105.85420):</div>
+    <div class="full"><label>Toạ độ tiệm</label><input name="coords" placeholder="21.02850, 105.85420" value="${c.shop_lat ? `${c.shop_lat}, ${c.shop_lng}` : ''}"></div>
+    <div><label>Bán kính cho phép (m)</label><input type="number" name="shop_radius" value="${esc(c.shop_radius)}" min="30" step="10"></div>
     <div><label>Giờ vào ca</label><input type="time" name="work_start" value="${esc(c.work_start)}"></div><div><label>Cho phép trễ (phút)</label><input type="number" name="late_grace" value="${esc(c.late_grace)}" min="0"></div></div>
     <div class="modal-foot"><button class="btn primary">Lưu</button></div></form>
     <div class="small muted">Lưu ý: wifi gia đình/tiệm thường đổi IP khi modem khởi động lại → nếu nhân viên báo không chấm được bằng wifi, bấm lại "Mạng đang dùng là wifi tiệm". Định vị trong nhà có thể lệch 20–100m.</div>`;
@@ -1172,7 +1174,13 @@ async function attSetup(box, reload) {
   $('#sgps').onclick = async () => { const p = await getPos(); if (!p) return toast('Không lấy được vị trí — cho phép trình duyệt dùng vị trí'); if (p.accuracy > 100 && !confirm(`Vị trí đang lệch khoảng ${p.accuracy}m. Vẫn lưu?`)) return; save({ use: 'gps', ...p }); };
   $('#swifi').onclick = () => { if (confirm('Bạn đang kết nối WIFI CỦA TIỆM (không phải 4G)?')) save({ use: 'wifi' }); };
   if ($('#cwifi')) $('#cwifi').onclick = () => save({ use: 'clear_wifi' });
-  $('#asf').onsubmit = (e) => { e.preventDefault(); save(formData($('#asf'))); };
+  $('#asf').onsubmit = (e) => {
+    e.preventDefault();
+    const d = formData($('#asf'));
+    const m = String(d.coords || '').match(/(-?\d{1,2}\.\d+)\s*[,; ]\s*(-?\d{1,3}\.\d+)/);
+    if (d.coords && !m) return toast('Toạ độ chưa đúng dạng: 21.02850, 105.85420');
+    save({ ...d, ...(m && (Number(m[1]) !== Number(c.shop_lat) || Number(m[2]) !== Number(c.shop_lng)) ? { use: 'gps', lat: Number(m[1]), lng: Number(m[2]) } : {}) });
+  };
 }
 
 VIEWS.more = async (main) => {
