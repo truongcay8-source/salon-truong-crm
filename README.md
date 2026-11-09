@@ -54,6 +54,16 @@ Lãnh đạo đổi tên, vai trò, khóa/mở, đặt lại mật khẩu trong 
 
 VPS Ubuntu 1 CPU / 1GB RAM là đủ cho 6 người.
 
+**Cách nhanh nhất — 1 lệnh** (đăng nhập VPS bằng root, dán lệnh dưới):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/truongcay8-source/salon-truong-crm/main/scripts/install-vps.sh | bash
+```
+
+Script tự cài Node.js, Caddy (HTTPS miễn phí), chạy nền, bật tường lửa, đặt giờ Việt Nam, rồi in ra đường link (dạng `https://1-2-3-4.sslip.io` nếu chưa có tên miền) và mật khẩu ban đầu của 6 tài khoản. Có tên miền riêng: trỏ bản ghi A về IP VPS rồi chạy `... | DOMAIN=crm.tenmien.vn bash`. **Chạy lại đúng lệnh này để cập nhật bản mới**, dữ liệu giữ nguyên.
+
+Cài thủ công:
+
 ```bash
 # 1. Cài Node 22 + Caddy (tự cấp HTTPS miễn phí)
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs caddy
