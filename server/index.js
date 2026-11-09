@@ -10,6 +10,7 @@ const L = require('./logic');
 const { importWorkbook } = require('./importer');
 const { exportWorkbook } = require('./exporter');
 const { startBackups, backupNow } = require('./backup');
+const staffMod = require('./staff');
 
 const { HttpError, bad, int, str, today } = L;
 const app = express();
@@ -297,6 +298,12 @@ app.get('/api/appointments', (req, res) => {
     FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id
     WHERE a.date BETWEEN ? AND ?${extra} ORDER BY a.date, a.time`).all(...params));
 });
+function offWarning(a) {
+  const o = staffMod.offAt(a.staff_id, a.date, a.time, a.duration);
+  if (!o) return null;
+  const name = db.prepare('SELECT full_name FROM users WHERE id=?').get(a.staff_id).full_name;
+  return `${name} nghỉ ${o.from_time ? o.from_time + '–' + o.to_time : 'cả ngày'} ${a.date.split('-').reverse().join('/')}${o.reason ? ' (' + o.reason + ')' : ''}. Vẫn đặt?`;
+}
 function apptInput(b) {
   if (!L.isDate(b.date)) throw bad('Chọn ngày hẹn');
   if (!/^\d{2}:\d{2}$/.test(String(b.time || ''))) throw bad('Chọn giờ hẹn');
@@ -312,6 +319,7 @@ app.post('/api/appointments', (req, res) => {
   if (a.staff_id) {
     const clash = db.prepare("SELECT time FROM appointments WHERE staff_id=? AND date=? AND time=? AND status IN ('booked','arrived')").get(a.staff_id, a.date, a.time);
     if (clash && !req.body.force) return res.status(409).json({ error: 'Thợ này đã có lịch lúc ' + a.time + '. Vẫn đặt?', clash: true });
+    const w = offWarning(a); if (w && !req.body.force) return res.status(409).json({ error: w, clash: true });
   }
   const cols = Object.keys(a);
   const id = db.prepare(`INSERT INTO appointments(${cols.join(',')},created_by) VALUES (${cols.map(() => '?').join(',')},?)`).run(...cols.map((k) => a[k]), req.user.id).lastInsertRowid;
@@ -322,7 +330,10 @@ app.put('/api/appointments/:id', (req, res) => {
   const id = int(req.params.id);
   if (!db.prepare('SELECT 1 FROM appointments WHERE id=?').get(id)) throw new HttpError(404, 'Không tìm thấy lịch hẹn');
   const a = apptInput(req.body);
-  const old = db.prepare('SELECT status FROM appointments WHERE id=?').get(id);
+  const old = db.prepare('SELECT status, staff_id, date, time FROM appointments WHERE id=?').get(id);
+  if (a.staff_id && ['booked', 'arrived'].includes(a.status) && (a.staff_id !== old.staff_id || a.date !== old.date || a.time !== old.time)) {
+    const w = offWarning(a); if (w && !req.body.force) return res.status(409).json({ error: w, clash: true });
+  }
   if (['cancelled', 'noshow'].includes(a.status) && !['cancelled', 'noshow'].includes(old.status)) {
     Object.assign(a, cancelFields(a.status, req.body.cancel_reason, req.user));
   }
@@ -521,6 +532,8 @@ app.get('/api/dashboard', (req, res) => {
   res.json({ today: t, appointments: appts, today_report: rep, month_report: month, reminder_counts: rem.counts,
     customers: db.prepare('SELECT COUNT(*) n FROM customers WHERE deleted=0').get().n });
 });
+
+staffMod.mount(app, { MGR, OWNER });
 
 // ---------- Nhập / xuất Excel ----------
 const xlsxUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });

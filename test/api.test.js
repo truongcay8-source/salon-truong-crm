@@ -161,6 +161,37 @@ test('luồng chính và phân quyền', async () => {
   await thu.post('/reminders/done', { customer_id: ids.lan, type: 'birthday', ref: r.data.birthdays[0].ref });
   assert.equal((await thu.get('/reminders')).data.counts.birthdays, 0);
 
+  // Lịch off: nhân viên xin → chờ duyệt; quản lý duyệt → đặt lịch trùng bị cảnh báo
+  const d2 = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
+  const nv6 = await login('nhanvien6');
+  r = await nv6.post('/offs', { date: d2, reason: 'Việc nhà' });
+  assert.equal(r.data.status, 'pending');
+  assert.equal((await nv6.post(`/offs/${r.data.id}/decide`, { status: 'approved' })).status, 403);
+  assert.equal((await mgr.post(`/offs/${r.data.id}/decide`, { status: 'approved' })).status, 200);
+  assert.equal((await thu.post('/appointments', { guest_name: 'Khách A', staff_id: staff['Nhân viên 6'], date: d2, time: '10:00', service: 'Cắt nam + Gội' })).status, 409, 'thợ nghỉ');
+  r = await thu.post('/offs', { date: d2, from_time: '13:00', to_time: '15:00' });
+  assert.equal(r.status, 200);
+  r = await thu.get('/schedule?date=' + d2);
+  assert.equal(r.data.offs.filter((o) => o.status === 'approved').length, 1, 'nhân viên thấy lịch nghỉ đã duyệt của người khác + đơn của mình');
+
+  // Chấm công: chưa cài → từ chối; Lãnh đạo cài wifi tiệm → chấm được; GPS xa → từ chối
+  assert.equal((await thu.post('/attendance', { kind: 'in' })).status, 400);
+  assert.equal((await mgr.post('/attendance/setup', { use: 'wifi' })).status, 403);
+  assert.equal((await owner.post('/attendance/setup', { use: 'gps', lat: 21.0285, lng: 105.8542, shop_radius: 150 })).status, 200);
+  r = await thu.post('/attendance', { kind: 'in', lat: 21.04, lng: 105.86, accuracy: 20 });
+  assert.equal(r.status, 400); assert.match(r.data.error, /cách tiệm/);
+  r = await thu.post('/attendance', { kind: 'in', lat: 21.0287, lng: 105.8543, accuracy: 15 });
+  assert.equal(r.status, 200); assert.equal(r.data.method, 'gps');
+  assert.equal((await thu.post('/attendance', { kind: 'in', lat: 21.0287, lng: 105.8543, accuracy: 15 })).status, 400, 'chấm trùng');
+  await owner.post('/attendance/setup', { use: 'wifi' });
+  r = await thu.post('/attendance', { kind: 'out' });
+  assert.equal(r.status, 200); assert.equal(r.data.method, 'wifi');
+  assert.equal((await thu.post('/attendance/manual', { user_id: staff['Chị Thu'], date: d2, kind: 'in', time: '09:00', note: 'x' })).status, 403);
+  assert.equal((await mgr.post('/attendance/manual', { user_id: staff['Thoại'], date: d2, kind: 'in', time: '09:30' })).status, 400, 'chấm hộ phải có lý do');
+  r = await thu.get('/attendance/report');
+  assert.ok(r.data.summary.every((p) => p.user_id === staff['Chị Thu']), 'nhân viên chỉ thấy công của mình');
+  assert.equal(r.data.summary[0].days, 1);
+
   // Khóa tài khoản nghỉ việc → mất phiên ngay
   assert.equal((await owner.put('/users/' + staff['Dương'], { active: false })).status, 200);
   assert.equal((await duong.get('/me')).status, 401);

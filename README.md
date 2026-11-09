@@ -12,6 +12,9 @@ Phần mềm quản lý salon chạy trên trình duyệt (điện thoại + má
 | **Ảnh trước/sau** | Chụp từ điện thoại, tự nén ~1600px, gắn vào từng lượt làm. Chỉ người đã đăng nhập mới xem được. |
 | **Lịch hẹn** | Theo ngày / theo thợ, cảnh báo trùng giờ, trạng thái Đã đặt → Đã đến → Hoàn thành / Hủy / Không đến, bấm "Thu tiền" từ lịch. |
 | **Lượt làm (thu tiền)** | Nhiều dịch vụ/lượt, thợ chính + người phụ, phụ thu, giảm giá (bắt buộc lý do), trừ thẻ trả trước, hình thức thanh toán, tip. |
+| **Lịch theo ngày** | Bảng giờ × thợ (giống sổ đặt lịch): lịch hẹn, khách đã làm, giờ nghỉ của thợ. Bấm ô trống để đặt lịch. Nút **Lịch của tôi** (7 ngày tới). Lịch hẹn chọn được nhiều dịch vụ; bấm Thu tiền tự điền sẵn các dịch vụ. |
+| **Lịch off** | Nhân viên xin nghỉ (cả ngày / vài giờ, nhiều ngày) → quản lý duyệt. Đặt khách vào giờ thợ nghỉ sẽ bị cảnh báo. |
+| **Chấm công** | Vào ca / Ra ca trên điện thoại, chỉ chấm được khi dùng **wifi tiệm** hoặc **định vị trong bán kính** quanh tiệm (Lãnh đạo cài 1 lần tại tiệm). Bảng công: ngày công, tổng giờ, đi muộn, quên chấm ra, ngày nghỉ. Quản lý chấm hộ phải ghi lý do. |
 | **Hóa đơn** | Lưu lượt xong tự hiện hóa đơn: in máy in nhiệt 80mm, hoặc **Copy gửi Zalo**. Ghi số dư thẻ còn lại. Địa chỉ, SĐT, số tài khoản, lời cảm ơn chỉnh trong Cài đặt › Tham số. |
 | **Hủy lịch / không đến** | Bắt buộc chọn lý do; ghi ai hủy, lúc nào. Hiện ở Nhắc nhở › *Khách hủy / không đến* (14 ngày) kèm tin nhắn mẫu mời đặt lại, bấm "Đã mời" khi xong. |
 | **Doanh số & hoa hồng** | Theo nhân viên × nhóm (Cắt / Gội & chăm sóc / Hóa chất / Bán sản phẩm). HH theo % từng dịch vụ, % người phụ, % bán thẻ mới/mua lại. Tách **doanh số dịch vụ** và **tiền vào thực tế** (tiền bán thẻ tính khi bán, doanh số tính khi dùng — không cộng 2 lần). |

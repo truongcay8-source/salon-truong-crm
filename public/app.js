@@ -101,6 +101,8 @@ const PAGES = [
   ['reminders', 'Nhắc nhở', '🔔', () => true],
   ['cards', 'Thẻ trả trước', '💳', () => true],
   ['sales', 'Doanh số', '📊', () => true],
+  ['attendance', 'Chấm công', '🕘', () => true],
+  ['offs', 'Lịch off', '🌴', () => true],
   ['excel', 'Nhập / Xuất Excel', '📥', isMgr],
   ['settings', 'Cài đặt', '⚙️', () => true],
 ];
@@ -252,7 +254,7 @@ VIEWS.dashboard = async (main) => {
     <div class="kpi"><div class="l">Hoa hồng tháng (tạm tính)</div><div class="v">${money(mineMonth ? mineMonth.total_commission : 0)}</div></div>`;
   const rc = d.reminder_counts;
   main.innerHTML = header(`Chào ${S.me.full_name}`, `Hôm nay ${dmy(d.today)}`,
-    `<button class="btn" id="qAppt">+ Lịch hẹn</button><button class="btn primary" id="qVisit">+ Ghi lượt làm</button>`) +
+    `<button class="btn" data-goto2="attendance">🕘 Chấm công</button><button class="btn" id="qAppt">+ Lịch hẹn</button><button class="btn primary" id="qVisit">+ Ghi lượt làm</button>`) +
     `<div class="grid kpis">${kpis}</div>
     <div class="grid two">
       <div class="card"><h3>Lịch hẹn hôm nay (${d.appointments.length})</h3>${apptList(d.appointments)}</div>
@@ -261,6 +263,7 @@ VIEWS.dashboard = async (main) => {
           .map(([k, l]) => `<div class="stat-line"><a href="#reminders">${l}</a><b>${rc[k]}</b></div>`).join('')}
       </div></div>`;
   $('#qAppt').onclick = () => apptForm({ date: d.today });
+  $$('[data-goto2]', main).forEach((b) => (b.onclick = () => go(b.dataset.goto2)));
   $('#qVisit').onclick = () => visitForm({});
   bindApptList(main, () => VIEWS.dashboard(main));
 };
@@ -366,21 +369,92 @@ async function showReceipt(id) {
 }
 
 // ---------- Lịch hẹn ----------
+const WD = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+const wday = (d) => WD[new Date(d + 'T00:00:00').getDay()];
+const toMin = (t) => { const m = String(t || '').match(/^(\d{1,2}):(\d{2})/); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+const fromMin = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 VIEWS.appointments = async (main) => {
   const date = S.params.date || S.today;
-  const staffId = S.params.staff || '';
-  const rows = await api(`/appointments?from=${date}&to=${date}${staffId ? '&staff_id=' + staffId : ''}`);
-  main.innerHTML = header('Lịch hẹn', '', `<button class="btn primary" id="newAppt">+ Đặt lịch</button>`) +
+  const mine = S.params.mine === '1';
+  const mode = S.params.view || 'grid';
+  const reload = () => VIEWS.appointments(main);
+  const set = (p) => go('appointments', { date, ...(mine ? { mine: '1' } : {}), ...(mode !== 'grid' ? { view: mode } : {}), ...p });
+  const top = header('Lịch hẹn', `${wday(date)} ${dmy(date)}`, `<button class="btn primary" id="newAppt">+ Đặt lịch</button>`) +
     `<div class="card"><div class="row"><button class="btn sm" id="prev">‹</button><input type="date" id="d" value="${date}" style="width:auto"><button class="btn sm" id="next">›</button>
-    <button class="btn sm" id="tod">Hôm nay</button><span class="spacer"></span><select id="st" style="width:auto">${staffOptions(Number(staffId), 'Tất cả thợ')}</select></div></div>
-    <div class="card"><h3>${dmy(date)} · ${rows.filter((r) => !['cancelled', 'noshow'].includes(r.status)).length} lịch</h3>${apptList(rows)}</div>`;
-  const set = (d, s = staffId) => go('appointments', { date: d, ...(s ? { staff: s } : {}) });
-  $('#prev').onclick = () => set(addDays(date, -1)); $('#next').onclick = () => set(addDays(date, 1));
-  $('#tod').onclick = () => set(S.today); $('#d').onchange = (e) => set(e.target.value);
-  $('#st').onchange = (e) => set(date, e.target.value);
-  $('#newAppt').onclick = () => apptForm({ date }, () => VIEWS.appointments(main));
-  bindApptList(main, () => VIEWS.appointments(main), rows);
+    <button class="btn sm" id="tod">Hôm nay</button><span class="spacer"></span>
+    <button class="btn sm ${mine ? 'primary' : ''}" id="mine">${mine ? '✓ ' : ''}Lịch của tôi</button>
+    <button class="btn sm" id="mode">${mode === 'grid' ? '☰ Danh sách' : '▦ Bảng giờ'}</button></div></div>`;
+  let body;
+  if (mode === 'list' || mine) {
+    // Danh sách 7 ngày (lịch của tôi) hoặc danh sách trong ngày
+    const to = mine ? addDays(date, 6) : date;
+    let rows = await api(`/appointments?from=${date}&to=${to}${mine ? '&staff_id=' + S.me.id : ''}`);
+    const sc = mine ? null : await api('/schedule?date=' + date);
+    body = `<div class="card"><h3>${mine ? `Lịch của ${esc(S.me.full_name)} · 7 ngày từ ${dmy(date)}` : dmy(date)} · ${rows.filter((r) => !['cancelled', 'noshow'].includes(r.status)).length} lịch</h3>${apptList(rows, mine)}</div>
+      ${sc && sc.visits.length ? `<div class="card"><h3>✓ Khách đã làm (không qua lịch hẹn) · ${sc.visits.length}</h3>${sc.visits.map(visitChipLine).join('')}</div>` : ''}`;
+    main.innerHTML = top + body;
+    bindApptList(main, reload, rows);
+  } else {
+    const sc = await api('/schedule?date=' + date);
+    main.innerHTML = top + `<div class="card grid-card">${scheduleGrid(sc)}</div>
+      <div class="small muted" style="margin:0 4px 12px">Bấm ô trống để đặt lịch · bấm lịch để Thu tiền / Sửa / Hủy. <span class="chip-k brand">Đã đặt</span> <span class="chip-k warn">Đã đến</span> <span class="chip-k ok">Đã làm</span> <span class="chip-k off">Nghỉ</span></div>`;
+    $$('[data-slot]', main).forEach((td) => (td.onclick = (e) => {
+      if (e.target.closest('[data-ap],[data-vv]')) return;
+      const [time, staff] = td.dataset.slot.split('|');
+      apptForm({ date, time, staff_id: Number(staff) || null }, reload);
+    }));
+    $$('[data-ap]', main).forEach((el) => (el.onclick = () => {
+      const a = sc.appointments.find((x) => x.id === Number(el.dataset.ap));
+      openModal(`${a.time} · ${a.name}`, `<div id="oneAp">${apptList([a])}</div>`);
+      bindApptList($('#oneAp'), () => { closeModal(); reload(); }, [a]);
+    }));
+    $$('[data-vv]', main).forEach((el) => (el.onclick = () => go('customer', { id: el.dataset.vv })));
+  }
+  $('#prev').onclick = () => set({ date: addDays(date, -1) }); $('#next').onclick = () => set({ date: addDays(date, 1) });
+  $('#tod').onclick = () => set({ date: S.today }); $('#d').onchange = (e) => set({ date: e.target.value });
+  $('#mine').onclick = () => go('appointments', { date, ...(mine ? {} : { mine: '1' }) });
+  $('#mode').onclick = () => go('appointments', { date, ...(mode === 'grid' ? { view: 'list' } : {}) });
+  $('#newAppt').onclick = () => apptForm({ date }, reload);
 };
+function visitChipLine(v) {
+  return `<div class="list-item"><div class="time-pill">${esc(v.time || '')}</div><div style="flex:1"><a href="#customer?id=${v.customer_id}"><b>${esc(v.customer_name)}</b></a>
+    <div class="small muted">${esc(v.services || '')} · ${esc(staffName(v.main_staff_id))}${v.assistant_id ? ' + ' + esc(staffName(v.assistant_id)) : ''}</div></div><span class="badge ok">Đã làm</span></div>`;
+}
+function scheduleGrid(sc) {
+  const live = (a) => !['cancelled', 'noshow'].includes(a.status);
+  const ids = new Set(activeStaff().filter((u) => u.role !== 'owner').map((u) => u.id));
+  for (const a of sc.appointments) if (a.staff_id) ids.add(a.staff_id);
+  for (const v of sc.visits) if (v.main_staff_id) ids.add(v.main_staff_id);
+  const cols = [...ids].map((id) => ({ id, name: staffName(id) }));
+  const hasNone = sc.appointments.some((a) => !a.staff_id && live(a));
+  if (hasNone) cols.push({ id: 0, name: 'Chưa chọn thợ' });
+  const times = [...sc.appointments.map((a) => toMin(a.time)), ...sc.visits.map((v) => toMin(v.time))].filter((x) => x != null);
+  const start = Math.min(9 * 60, ...times.map((t) => t - (t % 30))), end = Math.max(20 * 60 + 30, ...times);
+  const slot = (t) => t - (t % 30);
+  const offOf = (uid, t) => sc.offs.find((o) => o.user_id === uid && o.status === 'approved' && (!o.from_time || (t + 30 > toMin(o.from_time) && t < toMin(o.to_time))));
+  let html = `<div class="table-wrap sched"><table><thead><tr><th class="tcol">Giờ</th>${cols.map((c) => {
+    const off = sc.offs.find((o) => o.user_id === c.id && o.status === 'approved');
+    return `<th class="${c.id === S.me.id ? 'me' : ''}">${esc(c.name)}${off ? `<div class="small" style="color:var(--bad)">Nghỉ ${off.from_time ? off.from_time + '–' + off.to_time : 'cả ngày'}</div>` : ''}</th>`;
+  }).join('')}</tr></thead><tbody>`;
+  const noTime = sc.visits.filter((v) => toMin(v.time) == null);
+  if (noTime.length) {
+    html += `<tr><td class="tcol small">Không ghi giờ</td>` + cols.map((c) => `<td>${noTime.filter((v) => v.main_staff_id === c.id)
+      .map((v) => `<div class="ev done" data-vv="${v.customer_id}"><b>✓</b> ${esc(v.customer_name)}<div class="small">${esc(v.services || '')}</div></div>`).join('')}</td>`).join('') + '</tr>';
+  }
+  for (let t = start; t <= end; t += 30) {
+    html += `<tr><td class="tcol">${fromMin(t)}</td>` + cols.map((c) => {
+      const ap = sc.appointments.filter((a) => (a.staff_id || 0) === c.id && slot(toMin(a.time)) === t);
+      const vs = sc.visits.filter((v) => v.main_staff_id === c.id && slot(toMin(v.time)) === t);
+      const off = c.id && offOf(c.id, t);
+      const inner = ap.map((a) => `<div class="ev ${a.status}" data-ap="${a.id}"><b>${esc(a.time)}</b> ${esc(a.name)}${a.service ? `<div class="small">${esc(a.service)}</div>` : ''}</div>`).join('')
+        + vs.map((v) => `<div class="ev done" data-vv="${v.customer_id}"><b>✓ ${esc(v.time || '')}</b> ${esc(v.customer_name)}<div class="small">${esc(v.services || '')}</div></div>`).join('');
+      return `<td class="${off ? 'offc' : ''} ${c.id === S.me.id ? 'me' : ''}" data-slot="${fromMin(t)}|${c.id}">${inner || (off ? '<span class="small">Nghỉ</span>' : '')}</td>`;
+    }).join('') + '</tr>';
+  }
+  return html + '</tbody></table></div>';
+}
+const splitSvc = (t) => String(t || '').split(/\s*\+\s*|\s*,\s*/).map((x) => x.trim()).filter(Boolean);
+const SVC_MIN = { 'Cắt': 45, 'Gội & chăm sóc': 30, 'Hóa chất': 120, 'Bán sản phẩm': 0 }; // thời lượng gợi ý
 function apptForm(a = {}, after) {
   const isEdit = !!a.id;
   openModal(isEdit ? 'Sửa lịch hẹn' : 'Đặt lịch hẹn', `<form id="af"><div class="form-grid">
@@ -391,11 +465,24 @@ function apptForm(a = {}, after) {
     <div><label>Giờ</label><input type="time" name="time" value="${a.time || '09:00'}" step="900" required></div>
     <div><label>Thợ</label><select name="staff_id">${staffOptions(a.staff_id, 'Chưa chọn')}</select></div>
     <div><label>Thời lượng (phút)</label><input type="number" name="duration" value="${a.duration || 60}" min="15" step="15"></div>
-    <div class="full"><label>Dịch vụ dự kiến</label><input name="service" list="svcList" value="${esc(a.service || '')}"><datalist id="svcList">${S.services.filter((s) => s.active).map((s) => `<option value="${esc(s.name)}">`).join('')}</datalist></div>
+    <div class="full"><label>Dịch vụ dự kiến (chọn được nhiều)</label><div id="svcChips" class="chips"></div>
+      <div class="row"><select id="svcAdd" style="flex:1"><option value="">+ Thêm dịch vụ…</option>${S.groups.map((g) => `<optgroup label="${esc(g)}">${S.services.filter((x) => x.active && x.grp === g).map((x) => `<option>${esc(x.name)}</option>`).join('')}</optgroup>`).join('')}</select></div>
+      <input type="hidden" name="service" value="${esc(a.service || '')}"></div>
     ${isEdit ? `<div class="full"><label>Trạng thái</label><select name="status">${Object.entries(APPT).map(([k, v]) => `<option value="${k}" ${a.status === k ? 'selected' : ''}>${v[0]}</option>`).join('')}</select></div>` : ''}
     <div class="full"><label>Ghi chú</label><textarea name="note">${esc(a.note || '')}</textarea></div></div>
     <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu lịch hẹn</button></div></form>`);
   bindPicker($('#af'));
+  const svcIn = $('#af [name=service]');
+  let chosen = splitSvc(svcIn.value);
+  const drawChips = () => {
+    svcIn.value = chosen.join(' + ');
+    $('#svcChips').innerHTML = chosen.map((n, i) => `<span class="chip">${esc(n)}<button type="button" data-rm="${i}" aria-label="Bỏ">×</button></span>`).join('') || '<span class="small muted">Chưa chọn dịch vụ</span>';
+    $$('[data-rm]', $('#svcChips')).forEach((b) => (b.onclick = () => { chosen.splice(Number(b.dataset.rm), 1); drawChips(); }));
+    const mins = chosen.reduce((t, n) => t + (SVC_MIN[(S.services.find((x) => x.name === n) || {}).grp] || 0), 0);
+    if (mins && !a.id) $('#af [name=duration]').value = Math.max(30, mins);
+  };
+  $('#svcAdd').onchange = (e) => { if (e.target.value && !chosen.includes(e.target.value)) chosen.push(e.target.value); e.target.value = ''; drawChips(); };
+  drawChips();
   $('#af').onsubmit = (e) => {
     e.preventDefault();
     const btn = $('#af button.primary');
@@ -526,8 +613,8 @@ async function visitForm(v = {}, after) {
     .map((s) => `<option value="${s.id}" data-price="${s.price}" ${s.id === sel ? 'selected' : ''}>${esc(s.name)}${s.price ? ' · ' + (s.price / 1000) + 'k' : ''}</option>`).join('')}</optgroup>`).join('');
   let items = v.items ? v.items.map((i) => ({ service_id: i.service_id, name: i.name, price: i.price })) : [];
   if (!items.length) {
-    const guess = v.service && S.services.find((s) => s.name === v.service);
-    items = [guess ? { service_id: guess.id, price: guess.price } : { service_id: '', price: '' }];
+    items = splitSvc(v.service).map((n) => S.services.find((s) => s.name === n)).filter(Boolean).map((g) => ({ service_id: g.id, price: g.price }));
+    if (!items.length) items = [{ service_id: '', price: '' }];
   }
   const custSel = v.customer || (v.customer_id ? { id: v.customer_id, code: v.customer_code || '', name: v.customer_name || '' } : null);
   openModal(isEdit ? `Sửa lượt ${v.code}` : 'Ghi lượt làm / thu tiền', `<form id="vf"><div class="form-grid">
@@ -952,6 +1039,141 @@ VIEWS.settings = async (main) => {
     $('#bk').onclick = (e) => guard(e.target, async () => { await api('/backups', { method: 'POST' }); toast('Đã sao lưu'); reload(); });
   }
 };
+
+// ---------- Lịch off nhân viên ----------
+const OFF_ST = { pending: ['Chờ duyệt', 'warn'], approved: ['Đã duyệt', 'ok'], rejected: ['Từ chối', 'bad'] };
+VIEWS.offs = async (main) => {
+  const from = S.params.from || addDays(S.today, -7);
+  const to = addDays(from, 45);
+  const rows = await api(`/offs?from=${from}&to=${to}`);
+  const pend = rows.filter((o) => o.status === 'pending');
+  const byDate = {};
+  for (const o of rows) (byDate[o.date] = byDate[o.date] || []).push(o);
+  main.innerHTML = header('Lịch off', isMgr() ? 'Nhân viên xin nghỉ → quản lý duyệt. Ngày nghỉ hiện trên lịch hẹn và cảnh báo khi đặt khách.' : 'Xin nghỉ → chờ quản lý duyệt', `<button class="btn primary" id="newOff">+ ${isMgr() ? 'Thêm lịch nghỉ' : 'Xin nghỉ'}</button>`) +
+    (isMgr() && pend.length ? `<div class="card"><h3>⏳ Chờ duyệt (${pend.length})</h3>${pend.map(offLine).join('')}</div>` : '') +
+    `<div class="card"><div class="row"><button class="btn sm" id="pv">‹ Trước</button><span class="small muted">${dmy(from)} → ${dmy(to)}</span><button class="btn sm" id="nx">Sau ›</button></div>
+    ${Object.keys(byDate).sort().map((d) => `<div class="off-day ${d === S.today ? 'today' : ''}"><b>${wday(d)} ${dmy(d)}</b>${byDate[d].map(offLine).join('')}</div>`).join('') || '<div class="empty">Chưa có lịch nghỉ</div>'}</div>`;
+  const reload = () => VIEWS.offs(main);
+  $('#pv').onclick = () => go('offs', { from: addDays(from, -30) }); $('#nx').onclick = () => go('offs', { from: addDays(from, 30) });
+  $('#newOff').onclick = () => offForm(reload);
+  $$('[data-od]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/offs/${b.dataset.id}/decide`, { method: 'POST', body: { status: b.dataset.od } }); reload(); })));
+  $$('[data-odel]', main).forEach((b) => (b.onclick = () => { if (confirm('Xóa lịch nghỉ này?')) guard(b, async () => { await api('/offs/' + b.dataset.odel, { method: 'DELETE' }); reload(); }); }));
+};
+function offLine(o) {
+  const canDel = isMgr() || (o.user_id === S.me.id && o.status === 'pending');
+  return `<div class="list-item"><div style="flex:1"><b>${esc(o.staff_name)}</b> · ${o.from_time ? `${esc(o.from_time)}–${esc(o.to_time)}` : 'Cả ngày'} <span class="badge ${OFF_ST[o.status][1]}">${OFF_ST[o.status][0]}</span>
+    ${o.reason ? `<div class="small">${esc(o.reason)}</div>` : ''}${o.decided_by_name && o.status !== 'pending' ? `<div class="small muted">duyệt: ${esc(o.decided_by_name)}</div>` : ''}</div>
+    <div class="row">${isMgr() && o.status === 'pending' ? `<button class="btn sm primary" data-od="approved" data-id="${o.id}">Duyệt</button><button class="btn sm" data-od="rejected" data-id="${o.id}">Từ chối</button>` : ''}
+    ${canDel ? `<button class="btn sm" data-odel="${o.id}">Xóa</button>` : ''}</div></div>`;
+}
+function offForm(after) {
+  openModal(isMgr() ? 'Thêm lịch nghỉ' : 'Xin nghỉ', `<form id="of"><div class="form-grid">
+    ${isMgr() ? `<div class="full"><label>Nhân viên</label><select name="user_id">${staffOptions(S.me.id, '')}</select></div>` : ''}
+    <div><label>Từ ngày</label><input type="date" name="date" value="${addDays(S.today, 1)}" required></div>
+    <div><label>Đến ngày (nghỉ nhiều ngày)</label><input type="date" name="date_to"></div>
+    <div class="full"><label style="display:flex;gap:8px;color:var(--text)"><input type="checkbox" name="part"> Chỉ nghỉ vài giờ</label></div>
+    <div class="parttime hidden"><label>Từ giờ</label><input type="time" name="from_time" value="13:00" step="900"></div>
+    <div class="parttime hidden"><label>Đến giờ</label><input type="time" name="to_time" value="17:00" step="900"></div>
+    <div class="full"><label>Lý do</label><input name="reason" placeholder="VD: việc gia đình, khám bệnh…"></div></div>
+    <div class="err"></div><div class="modal-foot"><button class="btn primary">${isMgr() ? 'Lưu' : 'Gửi xin nghỉ'}</button></div></form>`);
+  const f = $('#of');
+  f.part.onchange = () => $$('.parttime', f).forEach((x) => x.classList.toggle('hidden', !f.part.checked));
+  f.onsubmit = (e) => {
+    e.preventDefault();
+    guard($('#of button.primary'), async () => {
+      const d = formData(f);
+      const end = d.date_to && d.date_to > d.date ? d.date_to : d.date;
+      let n = 0, clash = 0;
+      for (let x = d.date; x <= end && n < 31; x = addDays(x, 1), n++) {
+        const r = await api('/offs', { method: 'POST', body: { user_id: d.user_id, date: x, reason: d.reason, from_time: d.part ? d.from_time : '', to_time: d.part ? d.to_time : '' } });
+        clash += r.appointments_that_day;
+      }
+      closeModal(); toast(`Đã ${isMgr() ? 'lưu' : 'gửi'} ${n} ngày nghỉ${clash ? ` — ⚠ có ${clash} lịch khách trong những ngày này, nhớ chuyển thợ` : ''}`); after();
+    });
+  };
+}
+
+// ---------- Chấm công ----------
+function getPos() {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) return resolve(null);
+    navigator.geolocation.getCurrentPosition((p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: Math.round(p.coords.accuracy) }),
+      () => resolve(null), { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 });
+  });
+}
+const mins2h = (m) => `${Math.floor(m / 60)}g${String(m % 60).padStart(2, '0')}`;
+VIEWS.attendance = async (main) => {
+  const t = S.today;
+  const from = S.params.from || t.slice(0, 8) + '01', to = S.params.to || t;
+  const uid = S.params.u || '';
+  const [me, rep] = await Promise.all([api('/attendance/me'), api(`/attendance/report?from=${from}&to=${to}${uid ? '&user_id=' + uid : ''}`)]);
+  const lastKind = me.records.length ? me.records[me.records.length - 1].kind : null;
+  const M = { gps: '📍 GPS', wifi: '📶 Wifi', manual: '✍ Chấm hộ' };
+  main.innerHTML = header('Chấm công', `Giờ vào ca: ${esc(rep.work_start || '09:00')} · trễ quá ${rep.late_grace} phút tính đi muộn`) +
+    `<div class="card"><h3>Hôm nay ${dmy(me.today)}</h3>
+      ${!me.configured ? `<div class="small" style="color:var(--warn)">⚠ Chưa cài vị trí / wifi tiệm. ${S.me.role === 'owner' ? 'Kéo xuống mục Cài đặt chấm công.' : 'Nhờ Lãnh đạo cài.'}</div>` : ''}
+      <div class="row" style="gap:12px;margin:10px 0"><button class="btn primary big-btn" id="cin" ${lastKind === 'in' ? 'disabled' : ''}>🟢 Vào ca</button><button class="btn big-btn" id="cout" ${lastKind !== 'in' ? 'disabled' : ''}>🔴 Ra ca</button></div>
+      <div class="small muted">${me.on_shop_wifi ? '📶 Bạn đang dùng wifi tiệm' : me.has_gps ? `📍 Sẽ kiểm tra định vị (trong bán kính ${me.radius}m quanh tiệm)` : ''}</div>
+      ${me.records.map((r) => `<div class="stat-line"><span>${r.kind === 'in' ? 'Vào' : 'Ra'} · ${M[r.method] || r.method}${r.distance != null ? ' · cách ' + r.distance + 'm' : ''}</span><b>${esc(r.time)}</b></div>`).join('')}</div>
+    <div class="card"><div class="row"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="tt" value="${to}" style="width:auto">
+      ${isMgr() ? `<select id="u" style="width:auto">${staffOptions(Number(uid), 'Tất cả')}</select><button class="btn sm" id="man">+ Chấm công hộ</button>` : ''}</div>
+      <h3 style="margin-top:12px">Tổng hợp</h3><div class="table-wrap"><table><thead><tr><th>Nhân viên</th><th class="num">Ngày công</th><th class="num">Tổng giờ</th><th class="num">Đi muộn</th><th class="num">Quên chấm ra</th><th class="num">Nghỉ (ngày)</th></tr></thead>
+      <tbody>${rep.summary.map((p) => `<tr><td>${esc(p.staff_name)}</td><td class="num">${p.days}</td><td class="num">${mins2h(p.minutes)}</td><td class="num">${p.late_days ? `${p.late_days} lần · ${p.late_minutes}′` : '0'}</td><td class="num">${p.missing_out || 0}</td><td class="num">${p.off_days || 0}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">Chưa có dữ liệu</td></tr>'}</tbody></table></div>
+      <h3 style="margin-top:12px">Chi tiết từng ngày</h3><div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Nhân viên</th><th>Vào</th><th>Ra</th><th class="num">Giờ làm</th><th></th></tr></thead>
+      <tbody>${rep.days.map((d) => `<tr><td>${wday(d.date)} ${dmy(d.date).slice(0, 5)}</td><td>${esc(d.staff_name)}</td>
+        <td>${esc(d.in || '—')} <span class="small muted">${d.in_method ? M[d.in_method] : ''}</span>${d.late_minutes ? ` <span class="badge bad">muộn ${d.late_minutes}′</span>` : ''}</td>
+        <td>${esc(d.out || '—')}${d.missing_out ? ' <span class="badge warn">quên chấm ra</span>' : ''}</td><td class="num">${d.minutes ? mins2h(d.minutes) : ''}</td>
+        <td>${isMgr() ? d.records.map((r) => `<button class="btn sm" data-adel="${r.id}" title="Xóa lần chấm ${r.kind === 'in' ? 'vào' : 'ra'} ${r.time}">✕ ${r.time}</button>`).join('') : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">—</td></tr>'}</tbody></table></div></div>
+    ${S.me.role === 'owner' ? '<div class="card" id="attSetup"></div>' : ''}`;
+  const reload = () => VIEWS.attendance(main);
+  const punch = (kind, btn) => guard(btn, async () => {
+    btn.textContent = 'Đang lấy vị trí…';
+    const pos = me.on_shop_wifi ? null : await getPos();
+    if (!me.on_shop_wifi && !pos && !me.configured) throw new Error('Chưa cài vị trí tiệm');
+    try {
+      const r = await api('/attendance', { method: 'POST', body: { kind, ...(pos || {}) } });
+      toast(`Đã chấm ${kind === 'in' ? 'VÀO' : 'RA'} lúc ${r.time} (${r.method === 'wifi' ? 'wifi tiệm' : 'GPS, cách ' + r.distance + 'm'})`);
+    } catch (e) {
+      if (!pos && !me.on_shop_wifi) throw new Error('Không lấy được vị trí: bấm "Cho phép" khi trình duyệt hỏi vị trí (Cài đặt › Safari/Chrome › Vị trí), hoặc kết nối wifi tiệm.');
+      throw e;
+    }
+    reload();
+  });
+  $('#cin').onclick = (e) => punch('in', e.currentTarget);
+  $('#cout').onclick = (e) => punch('out', e.currentTarget);
+  const setR = (p) => go('attendance', { from, to, ...(uid ? { u: uid } : {}), ...p });
+  $('#f').onchange = (e) => setR({ from: e.target.value }); $('#tt').onchange = (e) => setR({ to: e.target.value });
+  if (isMgr()) {
+    $('#u').onchange = (e) => setR({ u: e.target.value });
+    $('#man').onclick = () => {
+      openModal('Chấm công hộ', `<form id="mf"><div class="form-grid"><div class="full"><label>Nhân viên</label><select name="user_id">${staffOptions(Number(uid) || null)}</select></div>
+        <div><label>Ngày</label><input type="date" name="date" value="${S.today}"></div><div><label>Giờ</label><input type="time" name="time" value="09:00"></div>
+        <div><label>Loại</label><select name="kind"><option value="in">Vào ca</option><option value="out">Ra ca</option></select></div>
+        <div class="full"><label>Lý do (bắt buộc)</label><input name="note" placeholder="VD: quên chấm, điện thoại hết pin"></div></div><div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu</button></div></form>`);
+      $('#mf').onsubmit = (e) => { e.preventDefault(); guard($('#mf button.primary'), async () => { await api('/attendance/manual', { method: 'POST', body: formData($('#mf')) }); closeModal(); reload(); }); };
+    };
+    $$('[data-adel]', main).forEach((b) => (b.onclick = () => { if (confirm('Xóa lần chấm công này?')) guard(b, async () => { await api('/attendance/' + b.dataset.adel, { method: 'DELETE' }); reload(); }); }));
+  }
+  if (S.me.role === 'owner') attSetup($('#attSetup'), reload);
+};
+async function attSetup(box, reload) {
+  const c = await api('/attendance/setup');
+  box.innerHTML = `<h3>⚙️ Cài đặt chấm công (Lãnh đạo)</h3>
+    <div class="small muted">Làm 1 lần khi đang đứng ở tiệm. Nhân viên chấm được khi <b>đang dùng wifi tiệm</b> HOẶC <b>định vị trong bán kính</b> quanh tiệm.</div>
+    <div class="stat-line"><span>📍 Vị trí tiệm</span><b>${c.shop_lat ? `${Number(c.shop_lat).toFixed(5)}, ${Number(c.shop_lng).toFixed(5)}` : 'chưa có'}</b></div>
+    <div class="stat-line"><span>📶 IP wifi tiệm</span><b>${esc(c.shop_ips || 'chưa có')}</b></div>
+    <div class="stat-line"><span class="muted">Mạng bạn đang dùng</span><span>${esc(c.your_ip)}</span></div>
+    <div class="row" style="margin:8px 0"><button class="btn sm" id="sgps">📍 Lấy vị trí hiện tại làm vị trí tiệm</button><button class="btn sm" id="swifi">📶 Mạng đang dùng là wifi tiệm</button>${c.shop_ips ? '<button class="btn sm" id="cwifi">Xóa wifi đã lưu</button>' : ''}</div>
+    <form id="asf"><div class="form-grid"><div><label>Bán kính cho phép (m)</label><input type="number" name="shop_radius" value="${esc(c.shop_radius)}" min="30" step="10"></div>
+    <div><label>Giờ vào ca</label><input type="time" name="work_start" value="${esc(c.work_start)}"></div><div><label>Cho phép trễ (phút)</label><input type="number" name="late_grace" value="${esc(c.late_grace)}" min="0"></div></div>
+    <div class="modal-foot"><button class="btn primary">Lưu</button></div></form>
+    <div class="small muted">Lưu ý: wifi gia đình/tiệm thường đổi IP khi modem khởi động lại → nếu nhân viên báo không chấm được bằng wifi, bấm lại "Mạng đang dùng là wifi tiệm". Định vị trong nhà có thể lệch 20–100m.</div>`;
+  const save = (body) => api('/attendance/setup', { method: 'POST', body }).then(() => { toast('Đã lưu'); reload(); }).catch((e) => toast(e.message));
+  $('#sgps').onclick = async () => { const p = await getPos(); if (!p) return toast('Không lấy được vị trí — cho phép trình duyệt dùng vị trí'); if (p.accuracy > 100 && !confirm(`Vị trí đang lệch khoảng ${p.accuracy}m. Vẫn lưu?`)) return; save({ use: 'gps', ...p }); };
+  $('#swifi').onclick = () => { if (confirm('Bạn đang kết nối WIFI CỦA TIỆM (không phải 4G)?')) save({ use: 'wifi' }); };
+  if ($('#cwifi')) $('#cwifi').onclick = () => save({ use: 'clear_wifi' });
+  $('#asf').onsubmit = (e) => { e.preventDefault(); save(formData($('#asf'))); };
+}
 
 VIEWS.more = async (main) => {
   main.innerHTML = header('Thêm') + `<div class="card">${PAGES.filter((p) => p[3]() && !MOBILE.includes(p[0])).map((p) => `<button class="nav-btn" data-goto="${p[0]}"><span>${p[2]}</span>${p[1]}</button>`).join('')}
