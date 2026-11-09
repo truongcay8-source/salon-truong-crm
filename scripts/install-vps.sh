@@ -67,7 +67,9 @@ fi
 cat > /etc/caddy/Caddyfile <<CADDY
 $DOMAIN {
   encode gzip
-  request_body { max_size 25MB }
+  request_body {
+    max_size 25MB
+  }
   reverse_proxy localhost:$PORT
 }
 CADDY
