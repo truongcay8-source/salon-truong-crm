@@ -208,6 +208,8 @@ const DEFAULT_SETTINGS = {
   for (const [col, type] of [['cancel_reason', 'TEXT'], ['cancelled_at', 'TEXT'], ['cancelled_by', 'INTEGER'], ['followup_at', 'TEXT']]) {
     if (!have.has(col)) db.exec(`ALTER TABLE appointments ADD COLUMN ${col} ${type}`);
   }
+  // Gói thẻ có hạn cố định (VD: thẻ tri ân hết hạn 25/10/2027 dù tặng ngày nào)
+  if (!db.prepare('PRAGMA table_info(card_types)').all().some((c) => c.name === 'fixed_expiry')) db.exec('ALTER TABLE card_types ADD COLUMN fixed_expiry TEXT');
 }
 const insSetting = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)');
 for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) insSetting.run(k, v);
@@ -238,6 +240,7 @@ const DEFAULT_CARD_TYPES = [
   ['Thẻ Bạc', 2000000, 2200000, 6], ['Thẻ Vàng', 5000000, 5750000, 12],
   ['Thẻ Kim cương', 10000000, 12000000, 12], ['Thẻ Black (VIP)', 50000000, 62500000, 24],
 ];
+const GIFT_CARD = { name: 'Thẻ tri ân 1Tr', value: 1000000, expires: '2027-10-25' };
 const GROUPS = ['Cắt', 'Gội & chăm sóc', 'Hóa chất', 'Bán sản phẩm'];
 
 function seed() {
@@ -248,6 +251,10 @@ function seed() {
   if (db.prepare('SELECT COUNT(*) c FROM card_types').get().c === 0) {
     const ins = db.prepare('INSERT INTO card_types(name,price,value,months) VALUES (?,?,?,?)');
     for (const c of DEFAULT_CARD_TYPES) ins.run(...c);
+  }
+  // Thẻ tri ân khai trương: anh Trường tặng khách cũ quay lại, 1 triệu, hạn 25/10/2026 – 25/10/2027
+  if (!db.prepare('SELECT 1 FROM card_types WHERE name=?').get(GIFT_CARD.name)) {
+    db.prepare('INSERT INTO card_types(name,price,value,months,fixed_expiry) VALUES (?,0,?,12,?)').run(GIFT_CARD.name, GIFT_CARD.value, GIFT_CARD.expires);
   }
   if (db.prepare('SELECT COUNT(*) c FROM users').get().c === 0) {
     // 6 tài khoản ban đầu. Mật khẩu tạm ngẫu nhiên, bắt buộc đổi ở lần đăng nhập đầu.
@@ -285,4 +292,4 @@ function nextCode(table, prefix, width) {
   return prefix + String(max + 1).padStart(width, '0');
 }
 
-module.exports = { db, DATA_DIR, getSettings, num, audit, nextCode, GROUPS };
+module.exports = { db, DATA_DIR, getSettings, num, audit, nextCode, GROUPS, GIFT_CARD };

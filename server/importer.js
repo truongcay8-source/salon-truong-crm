@@ -1,7 +1,7 @@
 'use strict';
 const ExcelJS = require('exceljs');
 const crypto = require('crypto');
-const { db, nextCode, GROUPS } = require('./db');
+const { db, nextCode, GROUPS, GIFT_CARD } = require('./db');
 const L = require('./logic');
 
 const ROLLBACK = Symbol('dry-run');
@@ -67,7 +67,10 @@ function readTable(ws, mustHave, maxScan = 8) {
     const map = {};
     row.eachCell({ includeEmpty: false }, (cell, col) => {
       const h = asText(cell.value);
-      if (h && !(norm(h) in map)) map[norm(h)] = col;
+      if (!h) return;
+      let k = norm(h), n = 1;
+      while (k in map) k = norm(h) + '#' + ++n; // cột trùng tên (VD: 3 cột "ĐV") → "đv", "đv#2", "đv#3"
+      map[k] = col;
     });
     if (mustHave.every((h) => norm(h) in map)) {
       const rows = [];
@@ -93,6 +96,23 @@ function guessName(text) {
   let s = String(text).split(/[\n(–-]| \d/)[0];
   s = s.replace(/(?:\+?84|0)[\d.\s]{8,}/g, '').replace(/\s+/g, ' ').trim();
   return (s || String(text)).slice(0, 60);
+}
+
+// Công thức + hóa chất đã dùng (Hóa chất 1–4, lượng, đơn vị), thời gian xử lý, chi phí HC ước tính
+function chemText(r) {
+  const parts = [];
+  const f = asText(r.get('Công thức / tỷ lệ pha')); if (f) parts.push(f);
+  const chems = [];
+  for (let i = 1; i <= 4; i++) {
+    const n = asText(r.get('Hóa chất ' + i)); if (!n) continue;
+    const q = asText(r.get('Lượng ' + i));
+    const unit = asText(r.get(i === 1 ? 'ĐV' : 'ĐV#' + i)) || '';
+    chems.push(q ? `${n} ${Math.round(Number(q) * 10) / 10 || q}${unit}` : n);
+  }
+  if (chems.length) parts.push('Hóa chất: ' + chems.join('; '));
+  const t = asNum(r.get('Thời gian xử lý (phút)')); if (t) parts.push(`Thời gian: ${t} phút`);
+  const cost = asNum(r.get('Chi phí hóa chất ước tính (VNĐ)')); if (cost) parts.push(`Chi phí HC ước tính: ${cost.toLocaleString('vi-VN')}đ`);
+  return parts.length ? parts.join('\n') : null;
 }
 
 // ---------- Nhân viên ----------
@@ -240,7 +260,13 @@ async function importWorkbook(buffer, opts, user) {
         const ref = asText(r.get('Mã lượt'));
         const name = asText(r.get('Tên khách'));
         if (!date || !ref || (!name && !asText(r.get('Mã khách')))) continue;
-        if (db.prepare('SELECT 1 FROM visits WHERE import_ref=?').get('NK:' + ref)) { summary.visits_skipped_existing++; continue; }
+        const prev = db.prepare('SELECT id, formula FROM visits WHERE import_ref=?').get('NK:' + ref);
+        if (prev) {
+          // lượt đã nhập: bổ sung chi tiết hóa chất nếu bản cũ chưa có
+          const ft = chemText(r);
+          if (ft && ft !== prev.formula && (!prev.formula || ft.startsWith(prev.formula))) { db.prepare('UPDATE visits SET formula=? WHERE id=?').run(ft, prev.id); summary.visits_updated = (summary.visits_updated || 0) + 1; }
+          summary.visits_skipped_existing++; continue;
+        }
         const customerId = cust.upsert('NK', { code: asText(r.get('Mã khách')), name, phone: asText(r.get('Số điện thoại')) }, false);
         if (!customerId) { summary.visits_skipped_invalid++; continue; }
         const svcNames = ['Dịch vụ 1', 'Dịch vụ 2', 'Dịch vụ 3'].map((k) => asText(r.get(k))).filter(Boolean);
@@ -265,7 +291,7 @@ async function importWorkbook(buffer, opts, user) {
           assistant_id: staffOf(r.get('Người phụ')), items,
           surcharge: diff > 0 ? diff : 0, discount: diff < 0 ? -diff : 0, discount_reason: diff < 0 ? reason : null,
           payment_method: pm, hair_before: asText(r.get('Tình trạng tóc trước khi làm')), wish: asText(r.get('Mong muốn của khách')),
-          formula: asText(r.get('Công thức / tỷ lệ pha')), result: asText(r.get('Kết quả sau làm')), note: notes || null,
+          formula: chemText(r), result: asText(r.get('Kết quả sau làm')), note: notes || null,
           import_ref: 'NK:' + ref,
         }, importer, null, { imported: true });
         summary.visits_created++;
@@ -410,14 +436,19 @@ async function importWorkbook(buffer, opts, user) {
         const name = asText(r.get('Tên khách hàng'));
         const value = asNum(r.get('Mệnh giá thẻ'));
         if (!code || !name || !value) continue;
-        if (db.prepare('SELECT 1 FROM cards WHERE code=?').get(code)) { summary.cards_skipped_existing++; continue; }
+        const giftType = db.prepare('SELECT id FROM card_types WHERE name=?').get(GIFT_CARD.name);
+        if (db.prepare('SELECT 1 FROM cards WHERE code=?').get(code)) {
+          // bản nhập trước đặt hạn sai (ngày cấp + 12 tháng) → sửa về hạn chung 25/10/2027
+          db.prepare("UPDATE cards SET expires_at=?, name=?, card_type_id=? WHERE code=? AND sale_type='gift'").run(GIFT_CARD.expires, GIFT_CARD.name, giftType && giftType.id, code);
+          summary.cards_skipped_existing++; continue;
+        }
         const customerId = cust.upsert('APP', { name, phone: asText(r.get('Số điện thoại')) }, false);
         if (!customerId) continue;
         const soldAt = asDate(r.get('Ngày cấp thẻ')) || L.today();
         const used = asNum(r.get('Đã chi dùng'));
         const note = [asText(r.get('Ghi chú')), asText(r.get('Trạng thái'))].filter(Boolean).join(' · ') || null;
-        const id = db.prepare(`INSERT INTO cards(code,customer_id,name,price,value,sold_at,expires_at,seller_id,sale_type,commission,status,note,created_by)
-          VALUES (?,?,?,0,?,?,?,?,'gift',0,?,?,?)`).run(code, customerId, 'Voucher 1 triệu', value, soldAt, L.addMonths(soldAt, 12),
+        const id = db.prepare(`INSERT INTO cards(code,customer_id,card_type_id,name,price,value,sold_at,expires_at,seller_id,sale_type,commission,status,note,created_by)
+          VALUES (?,?,?,?,0,?,?,?,?,'gift',0,?,?,?)`).run(code, customerId, giftType && giftType.id, GIFT_CARD.name, value, soldAt, GIFT_CARD.expires,
           staffOf(r.get('NV phụ trách')), used >= value ? 'closed' : 'active', note, user.id).lastInsertRowid;
         if (used) {
           const svc = asText(r.get('Dịch vụ thực hiện'));

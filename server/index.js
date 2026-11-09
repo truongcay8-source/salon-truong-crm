@@ -463,6 +463,7 @@ app.get('/api/cards', (req, res) => {
   let where = '1=1';
   if (req.query.customer_id) { where += ' AND cd.customer_id=?'; params.push(int(req.query.customer_id)); }
   if (req.query.status) { where += ' AND cd.status=?'; params.push(String(req.query.status)); }
+  if (req.query.q) { const q = String(req.query.q).trim(); where += " AND cd.sale_type='gift' AND (UPPER(cd.code)=UPPER(?) OR c.phone=?)"; params.push(q, L.normPhone(q)); }
   const rows = db.prepare(`SELECT cd.*, c.name customer_name, c.code customer_code, c.phone, u.full_name seller_name
     FROM cards cd JOIN customers c ON c.id=cd.customer_id LEFT JOIN users u ON u.id=cd.seller_id WHERE ${where} ORDER BY cd.id DESC`).all(...params);
   res.json(rows.map(L.cardRow).map((c) => (req.user.role === 'staff' && c.seller_id !== req.user.id ? { ...c, commission: null } : c)));

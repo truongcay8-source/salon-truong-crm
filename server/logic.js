@@ -55,8 +55,9 @@ function sellCard(input, user) {
   if (value <= 0) throw bad('Giá trị thẻ phải lớn hơn 0');
   const soldAt = isDate(input.sold_at) ? input.sold_at : today();
   const months = type ? type.months : int(input.months) || 12;
-  const expires = isDate(input.expires_at) ? input.expires_at : addMonths(soldAt, months);
-  const saleType = ['new', 'renewal', 'gift'].includes(input.sale_type) ? input.sale_type : 'new';
+  const expires = isDate(input.expires_at) ? input.expires_at : type && type.fixed_expiry ? type.fixed_expiry : addMonths(soldAt, months);
+  // Gói giá 0đ (thẻ tặng) luôn là "Tặng": không hoa hồng, không tính tiền vào
+  const saleType = price === 0 ? 'gift' : ['new', 'renewal', 'gift'].includes(input.sale_type) ? input.sale_type : 'new';
   const sellerId = user.role === 'staff' ? user.id : int(input.seller_id) || user.id;
   const rate = saleType === 'new' ? num('card_new_rate') : saleType === 'renewal' ? num('card_renewal_rate') : 0;
   const seller = db.prepare('SELECT commission_enabled FROM users WHERE id=?').get(sellerId);
@@ -109,7 +110,8 @@ function saveVisit(input, user, existing, opts = {}) {
   if (!cardId) cardPaid = 0;
   if (cardId) {
     const card = db.prepare('SELECT * FROM cards WHERE id=?').get(cardId);
-    if (!card || card.customer_id !== customerId) throw bad('Thẻ không thuộc khách này');
+    // Thẻ tặng được phép cho người khác dùng (khách tặng lại bạn bè/người nhà); thẻ mua thì chỉ chủ thẻ dùng
+    if (!card || (card.customer_id !== customerId && card.sale_type !== 'gift')) throw bad('Thẻ không thuộc khách này');
     if (card.status !== 'active') throw bad('Thẻ đã đóng/hoàn');
     if (card.expires_at && card.expires_at < date && (isNew || existing.card_id !== cardId)) throw bad('Thẻ đã hết hạn ' + card.expires_at + ' — nhờ quản lý gia hạn');
     let bal = cardBalance(cardId);
@@ -166,7 +168,9 @@ function saveVisit(input, user, existing, opts = {}) {
     const ins = db.prepare('INSERT INTO visit_items(visit_id,service_id,name,grp,price,commission_rate) VALUES (?,?,?,?,?,?)');
     for (const i of cleanItems) ins.run(id, i.service_id, i.name, i.grp, i.price, i.commission_rate);
     if (cardId && cardPaid > 0) {
-      db.prepare('INSERT INTO card_txns(card_id,visit_id,amount,note,created_by) VALUES (?,?,?,?,?)').run(cardId, id, -cardPaid, 'Dùng cho lượt làm', user.id);
+      const owner = db.prepare('SELECT customer_id FROM cards WHERE id=?').get(cardId).customer_id;
+      const forName = owner !== customerId ? db.prepare('SELECT name FROM customers WHERE id=?').get(customerId).name : null;
+      db.prepare('INSERT INTO card_txns(card_id,visit_id,amount,note,created_by) VALUES (?,?,?,?,?)').run(cardId, id, -cardPaid, forName ? 'Dùng cho ' + forName + ' (được tặng lại)' : 'Dùng cho lượt làm', user.id);
     }
     if (input.appointment_id) {
       db.prepare("UPDATE appointments SET status='done', visit_id=? WHERE id=?").run(id, int(input.appointment_id));
@@ -243,10 +247,12 @@ function salesReport(from, to, user) {
   }
   let rows = [...per.values()].map((r) => ({ ...r, total_commission: r.main_commission + r.assistant_commission + r.card_commission }))
     .filter((r) => r.active || r.main_count || r.assist_count || r.cards_count);
+  const giftCards = new Set(db.prepare("SELECT id FROM cards WHERE sale_type='gift'").all().map((c) => c.id));
   const summary = {
     visits: visits.length,
     service_sales: visits.reduce((s, v) => s + v.total, 0),
     paid_by_card: visits.reduce((s, v) => s + v.card_paid, 0),
+    paid_by_gift: visits.reduce((s, v) => s + (v.card_id && giftCards.has(v.card_id) ? v.card_paid : 0), 0),
     service_cash: visits.reduce((s, v) => s + v.cash_paid, 0),
     card_sales: cards.reduce((s, c) => s + c.price, 0),
     tips: visits.reduce((s, v) => s + v.tip, 0),
