@@ -89,7 +89,7 @@ test('luồng chính và phân quyền', async () => {
   assert.equal(r.data.main_commission, Math.round(1250000 * (1600000 / 1250000) * 0.15));
   assert.equal(r.data.assistant_commission, 48000);
   ids.visit = r.data.id;
-  assert.equal((await duong.get('/cards?customer_id=' + ids.lan)).data[0].balance, 1200000);
+  assert.equal((await duong.get('/cards?customer_id=' + ids.lan)).data.find((c) => c.id === ids.card).balance, 1200000);
   assert.equal((await duong.post('/visits', { customer_id: ids.lan, main_staff_id: staff['Dương'], items: [{ service_id: nhuom.id }], discount: 1000 })).status, 400, 'giảm giá phải có lý do');
   assert.equal((await duong.post('/visits', { customer_id: ids.lan, main_staff_id: staff['Dương'], items: [{ service_id: nhuom.id }], card_id: ids.card, card_paid: 5000000 })).status, 400, 'vượt số dư thẻ');
   assert.equal((await duong.post('/visits', { date: '2020-01-01', customer_id: ids.lan, main_staff_id: staff['Dương'], items: [{ service_id: nhuom.id }], payment_method: 'Tiền mặt' })).status, 403, 'nhân viên không ghi lùi ngày');
@@ -123,6 +123,19 @@ test('luồng chính và phân quyền', async () => {
   assert.equal(r.data.summary.money_in, 600000 + 2000000, 'tiền vào = thu dịch vụ + bán thẻ');
   assert.equal(r.data.summary.paid_by_card, 1000000);
 
+  // Thẻ tri ân 1Tr: giá 0 → tự là thẻ tặng, hạn cố định 25/10/2027, người khác dùng được (tặng lại)
+  const gift = types.find((t) => t.name === 'Thẻ tri ân 1Tr');
+  r = await thu.post('/cards', { customer_id: ids.lan, card_type_id: gift.id, sale_type: 'new' });
+  assert.equal(r.data.sale_type, 'gift'); assert.equal(r.data.commission, 0); assert.equal(r.data.expires_at, '2027-10-25'); assert.equal(r.data.balance, 1000000);
+  const giftId = r.data.id, giftCode = r.data.code;
+  const ban = (await thu.post('/customers', { name: 'Bạn của Lan' })).data.id;
+  assert.equal((await duong.get('/cards?status=active&q=' + giftCode)).data.length, 1);
+  r = await duong.post('/visits', { customer_id: ban, main_staff_id: staff['Dương'], items: [{ service_id: nhuom.id }], card_id: giftId, payment_method: 'Tiền mặt' });
+  assert.equal(r.status, 200, JSON.stringify(r.data)); assert.equal(r.data.card_paid, 1000000); assert.equal(r.data.cash_paid, 250000, 'dịch vụ cao hơn thẻ → trả thêm');
+  assert.equal((await duong.post('/visits', { customer_id: ban, main_staff_id: staff['Dương'], items: [{ service_id: nhuom.id }], card_id: ids.card })).status, 400, 'thẻ mua không cho người khác dùng');
+  assert.equal((await mgr.get('/reports/sales')).data.summary.paid_by_gift, 1000000);
+  await mgr.del('/visits/' + r.data.id, { reason: 'dọn dữ liệu kiểm thử' });
+
   // Quyền Excel, tài khoản, nhật ký
   assert.equal((await duong.get('/export')).status, 403);
   assert.equal((await mgr.call('GET', '/export')).status, 200);
@@ -134,10 +147,10 @@ test('luồng chính và phân quyền', async () => {
   // Quản lý sửa rồi xóa lượt → hoàn số dư thẻ, ghi nhật ký
   r = await mgr.put('/visits/' + ids.visit, { customer_id: ids.lan, main_staff_id: staff['Dương'], items: [{ service_id: nhuom.id }], card_id: ids.card, card_paid: 1250000 });
   assert.equal(r.status, 200); assert.equal(r.data.cash_paid, 0);
-  assert.equal((await mgr.get('/cards?customer_id=' + ids.lan)).data[0].balance, 950000);
+  assert.equal((await mgr.get('/cards?customer_id=' + ids.lan)).data.find((c) => c.id === ids.card).balance, 950000);
   assert.equal((await mgr.del('/visits/' + ids.visit, {})).status, 400, 'xóa phải có lý do');
   assert.equal((await mgr.del('/visits/' + ids.visit, { reason: 'Ghi nhầm' })).status, 200);
-  assert.equal((await mgr.get('/cards?customer_id=' + ids.lan)).data[0].balance, 2200000);
+  assert.equal((await mgr.get('/cards?customer_id=' + ids.lan)).data.find((c) => c.id === ids.card).balance, 2200000);
   const log = (await owner.get('/audit')).data.map((a) => a.action);
   for (const a of ['delete_visit', 'update_visit', 'sell_card', 'export_excel']) assert.ok(log.includes(a), a);
 

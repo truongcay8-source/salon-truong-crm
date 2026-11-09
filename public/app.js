@@ -469,7 +469,8 @@ VIEWS.customer = async (main) => {
       ${c.gender ? `<div class="stat-line"><span class="muted">Giới tính</span><b>${esc(c.gender)}</b></div>` : ''}
       ${c.source ? `<div class="stat-line"><span class="muted">Nguồn</span><b>${esc(c.source)}</b></div>` : ''}
       ${activeCards.map((k) => `<div class="stat-line"><span class="muted">💳 ${esc(k.name)} (${esc(k.code)})</span><b>${money(k.balance)}</b></div>`).join('')}
-    </div><div class="card"><h3>Lưu ý tóc</h3><div class="pre">${esc(c.hair_notes || '—')}</div>${c.notes ? `<h3 style="margin-top:12px">Ghi chú</h3><div class="pre">${esc(c.notes)}</div>` : ''}</div></div>
+    </div><div class="card"><h3>Lưu ý tóc</h3><div class="pre">${esc(c.hair_notes || '—')}</div>
+      ${(() => { const lv = c.visits.find((x) => x.formula); return lv ? `<h3 style="margin-top:12px">🧪 Công thức hóa chất gần nhất <span class="small muted">${dmy(lv.date)}</span></h3><div class="pre small">${esc(lv.formula)}</div>` : ''; })()}${c.notes ? `<h3 style="margin-top:12px">Ghi chú</h3><div class="pre">${esc(c.notes)}</div>` : ''}</div></div>
     <div class="card"><div class="tabs">${[['visits', `Lượt làm (${c.visits.length})`], ['photos', `Ảnh (${c.photos.length})`], ['cards', `Thẻ (${c.cards.length})`], ['appts', `Lịch hẹn (${c.appointments.length})`]]
       .map(([k, l]) => `<button data-tab="${k}" class="${tab === k ? 'active' : ''}">${l}</button>`).join('')}</div><div id="tabBody"></div></div>`;
   const reload = () => VIEWS.customer(main);
@@ -579,12 +580,28 @@ async function visitForm(v = {}, after) {
       ${cardSel ? `<div class="row"><span>Trừ thẻ</span><span class="num">−${money(cardPaid)}</span></div>` : ''}
       <div class="row"><span><b>Khách trả thêm</b></span><span class="num big">${money(Math.max(0, total - cardPaid))}</span></div>`;
   };
-  const loadCards = async (customerId) => {
-    cards = customerId ? (await api('/cards?status=active&customer_id=' + customerId)).filter((c) => c.balance > 0 || c.id === v.card_id) : [];
-    $('#cardBox').innerHTML = cards.length ? `<div class="form-grid"><div><label>Trừ vào thẻ trả trước</label><select name="card_id"><option value="">Không dùng thẻ</option>
-      ${cards.map((c) => `<option value="${c.id}" ${v.card_id === c.id ? 'selected' : ''}>${esc(c.code)} · ${esc(c.name)} · còn ${money(c.balance)}${c.expires_at < S.today ? ' (HẾT HẠN)' : ''}</option>`).join('')}</select></div>
-      <div><label>Số tiền trừ thẻ (trống = tự tính)</label><input type="number" name="card_paid" min="0" step="1000" value="${isEdit && v.card_id ? v.card_paid : ''}"><div class="small muted" id="cardHint"></div></div></div>` : '';
+  let extraCards = [];
+  const loadCards = async (customerId, pick) => {
+    const own = customerId ? (await api('/cards?status=active&customer_id=' + customerId)).filter((c) => c.balance > 0 || c.id === v.card_id) : [];
+    if (v.card_id && !own.some((c) => c.id === v.card_id) && !extraCards.some((c) => c.id === v.card_id)) {
+      const all = await api('/cards?status=active'); const c = all.find((x) => x.id === v.card_id); if (c) extraCards.push(c);
+    }
+    cards = [...own, ...extraCards.filter((c) => !own.some((o) => o.id === c.id))];
+    const sel = pick || v.card_id;
+    $('#cardBox').innerHTML = (cards.length ? `<div class="form-grid"><div><label>Trừ vào thẻ</label><select name="card_id"><option value="">Không dùng thẻ</option>
+      ${cards.map((c) => `<option value="${c.id}" ${sel === c.id ? 'selected' : ''}>${esc(c.code)} · ${esc(c.name)} · còn ${money(c.balance)}${c.customer_id !== Number(customerId) ? ' · thẻ của ' + esc(c.customer_name) : ''}${c.expires_at < S.today ? ' (HẾT HẠN)' : ''}</option>`).join('')}</select></div>
+      <div><label>Số tiền trừ thẻ (trống = tự tính)</label><input type="number" name="card_paid" min="0" step="1000" value="${isEdit && v.card_id ? v.card_paid : ''}"><div class="small muted" id="cardHint"></div></div></div>` : '')
+      + (customerId ? `<div class="row small" style="margin-top:6px"><span class="muted">Khách dùng thẻ tặng của người khác?</span><input id="giftQ" placeholder="Mã thẻ (T1M-…) hoặc SĐT chủ thẻ" style="width:auto;flex:1;min-width:150px"><button type="button" class="btn sm" id="giftFind">Tìm thẻ</button></div>` : '');
     if (cards.length) { f.card_id.onchange = calc; f.card_paid.oninput = calc; }
+    const gb = $('#giftFind');
+    if (gb) gb.onclick = () => guard(gb, async () => {
+      const q = $('#giftQ').value.trim(); if (!q) return;
+      const found = (await api('/cards?status=active&q=' + encodeURIComponent(q))).filter((c) => c.balance > 0);
+      if (!found.length) return toast('Không thấy thẻ tặng còn số dư với mã/SĐT này');
+      extraCards = [...extraCards, ...found.filter((c) => !extraCards.some((e) => e.id === c.id))];
+      await loadCards(customerId, found[0].id);
+      toast(`Đã chọn thẻ ${found[0].code} của ${found[0].customer_name}`);
+    });
     calc();
   };
   bindPicker(f, loadCards);
@@ -704,7 +721,7 @@ function bindCardTable(root, cards, reload) {
 function cardForm(customer, after) {
   openModal('Bán thẻ trả trước', `<form id="sf"><div class="form-grid">
     <div class="full"><label>Khách hàng *</label>${customerPicker('customer_id', customer && customer.id ? customer : null)}</div>
-    <div class="full"><label>Gói thẻ</label><select name="card_type_id">${S.cardTypes.filter((t) => t.active).map((t) => `<option value="${t.id}">${esc(t.name)} · bán ${money(t.price)} → dùng ${money(t.value)} · ${t.months} tháng</option>`).join('')}<option value="">Thẻ tùy chỉnh…</option></select></div>
+    <div class="full"><label>Gói thẻ</label><select name="card_type_id">${S.cardTypes.filter((t) => t.active).map((t) => `<option value="${t.id}">${esc(t.name)} · ${t.price ? `bán ${money(t.price)} → dùng ${money(t.value)}` : `TẶNG ${money(t.value)}`} · ${t.fixed_expiry ? 'hạn đến ' + dmy(t.fixed_expiry) : t.months + ' tháng'}</option>`).join('')}<option value="">Thẻ tùy chỉnh…</option></select></div>
     <div><label>Giá bán (trống = theo gói)</label><input type="number" name="price" min="0" step="1000"></div>
     <div><label>Giá trị dùng (trống = theo gói)</label><input type="number" name="value" min="0" step="1000"></div>
     <div><label>Loại</label><select name="sale_type"><option value="new">Khách mua mới</option><option value="renewal">Mua lại / nạp thêm</option><option value="gift">Tặng (không HH)</option></select></div>
@@ -745,11 +762,11 @@ VIEWS.sales = async (main) => {
   const G = S.groups;
   main.innerHTML = header('Doanh số & hoa hồng', isMgr() ? 'Toàn tiệm' : 'Chỉ hiển thị số liệu của bạn') +
     `<div class="card"><div class="row"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="t" value="${to}" style="width:auto">
-      <button class="btn sm" data-p="today">Hôm nay</button><button class="btn sm" data-p="month">Tháng này</button><button class="btn sm" data-p="last">Tháng trước</button></div></div>
+      <button class="btn sm" data-p="today">Hôm nay</button><button class="btn sm" data-p="month">Tháng này</button><button class="btn sm" data-p="last">Tháng trước</button><button class="btn sm" data-p="all">Từ khai trương</button></div></div>
     ${s ? `<div class="grid kpis">
       <div class="kpi"><div class="l">Doanh số dịch vụ</div><div class="v">${money(s.service_sales)}</div><div class="s">${s.visits} lượt · giảm giá ${money(s.discounts)}</div></div>
       <div class="kpi"><div class="l">Tiền vào thực tế</div><div class="v">${money(s.money_in)}</div><div class="s">thu dịch vụ ${money(s.service_cash)} + bán thẻ ${money(s.card_sales)}</div></div>
-      <div class="kpi"><div class="l">Dịch vụ trả bằng thẻ</div><div class="v">${money(s.paid_by_card)}</div><div class="s">đã thu tiền lúc bán thẻ</div></div>
+      <div class="kpi"><div class="l">Dịch vụ trả bằng thẻ</div><div class="v">${money(s.paid_by_card)}</div><div class="s">${s.paid_by_gift ? `trong đó thẻ tặng ${money(s.paid_by_gift)} (chi phí tri ân, không có tiền vào)` : 'đã thu tiền lúc bán thẻ'}</div></div>
       <div class="kpi"><div class="l">Tip</div><div class="v">${money(s.tips)}</div><div class="s">không tính doanh số</div></div></div>
       <div class="card"><h3>Tiền vào theo hình thức</h3>${Object.entries(s.by_method).map(([k, v]) => `<div class="stat-line"><span>${esc(k)}</span><b>${money(v)}</b></div>`).join('') || '<div class="empty">—</div>'}</div>` : ''}
     ${!isMgr() ? r.rows.map((x) => `<div class="card"><h3>${esc(x.name)}</h3>
@@ -773,6 +790,7 @@ VIEWS.sales = async (main) => {
     const t = S.today;
     if (b.dataset.p === 'today') set(t, t);
     if (b.dataset.p === 'month') set(t.slice(0, 8) + '01', t);
+    if (b.dataset.p === 'all') set('2026-10-25', t);
     if (b.dataset.p === 'last') { const f = addDays(t.slice(0, 8) + '01', -1); set(f.slice(0, 8) + '01', f); }
   }));
 };
@@ -809,6 +827,7 @@ VIEWS.excel = async (main) => {
         ${s.appointments_past_skipped ? `<div class="stat-line"><span>Lịch ngày đã qua (bỏ qua)</span><b>${s.appointments_past_skipped}</b></div>` : ''}
         ${s.appointments_skipped ? `<div class="stat-line"><span>Lịch đã có (bỏ qua)</span><b>${s.appointments_skipped}</b></div>` : ''}
         ${s.cards_created || s.cards_skipped_existing ? `<div class="stat-line"><span>Thẻ voucher mới / đã có</span><b>${s.cards_created} / ${s.cards_skipped_existing}</b></div>` : ''}
+        ${s.visits_updated ? `<div class="stat-line"><span>Lượt cũ được bổ sung công thức hóa chất</span><b>${s.visits_updated}</b></div>` : ''}
         <div class="stat-line"><span>Dịch vụ mới</span><b>${s.services_added}</b></div>
         ${s.staff_created.length ? `<div class="small">Nhân viên lạ được tạo (không đăng nhập được): ${s.staff_created.map(esc).join(', ')}</div>` : ''}
         ${s.matched_by_name.length ? `<details class="small"><summary>${s.matched_by_name.length} khách ghép theo TÊN — nên kiểm tra</summary>${s.matched_by_name.map(esc).join(', ')}</details>` : ''}
