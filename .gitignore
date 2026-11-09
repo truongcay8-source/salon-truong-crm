@@ -23,3 +23,9 @@ Thumbs.db
 *.dump
 backup/
 exports/
+
+# Dữ liệu chạy thật (CSDL, ảnh khách, sao lưu) — tuyệt đối không đẩy lên Git
+data/
+*.db
+*.db-wal
+*.db-shm
