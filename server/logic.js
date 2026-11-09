@@ -279,7 +279,7 @@ function reminders() {
   const t = today();
   const done = new Set(db.prepare('SELECT customer_id||\'|\'||type||\'|\'||ref k FROM reminder_log').all().map((r) => r.k));
   const isDone = (cid, type, ref) => done.has(`${cid}|${type}|${ref}`);
-  const out = { birthdays: [], cards: [], returns: [], appointments: [] };
+  const out = { birthdays: [], cards: [], returns: [], appointments: [], cancels: [] };
 
   const bdEnd = addDays(t, Number(s.birthday_days || 7));
   for (const c of db.prepare('SELECT id,code,name,phone,birthday FROM customers WHERE deleted=0 AND birthday IS NOT NULL').all()) {
@@ -323,11 +323,20 @@ function reminders() {
       WHERE a.date=? AND a.status='booked' ORDER BY a.time`).all(tomorrow)) {
     out.appointments.push({ ...a, ref: String(a.id), done: a.customer_id ? isDone(a.customer_id, 'appointment', String(a.id)) : false });
   }
+  // Khách hủy / không đến trong 14 ngày qua, chưa có lịch mới → mời đặt lại
+  const hasNew = db.prepare("SELECT 1 FROM appointments WHERE customer_id=? AND id<>? AND date>=? AND status IN ('booked','arrived')");
+  for (const a of db.prepare(`SELECT a.*, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, u.full_name staff_name, cb.full_name cancelled_by_name
+      FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id LEFT JOIN users cb ON cb.id=a.cancelled_by
+      WHERE a.status IN ('cancelled','noshow') AND a.date>=? ORDER BY a.date DESC, a.time DESC`).all(addDays(t, -14))) {
+    if (a.customer_id && hasNew.get(a.customer_id, a.id, t)) continue;
+    out.cancels.push({ ...a, ref: String(a.id), done: !!a.followup_at });
+  }
   out.counts = {
     birthdays: out.birthdays.filter((x) => !x.done).length,
     cards: out.cards.filter((x) => !x.done).length,
     returns: out.returns.filter((x) => !x.done).length,
     appointments: out.appointments.filter((x) => !x.done).length,
+    cancels: out.cancels.filter((x) => !x.done).length,
   };
   return out;
 }

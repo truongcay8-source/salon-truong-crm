@@ -197,7 +197,18 @@ const DEFAULT_SETTINGS = {
   card_new_rate: '0.05',
   card_renewal_rate: '0.03',
   payment_methods: 'Tiền mặt,Chuyển khoản,Quẹt thẻ',
+  salon_address: '',
+  salon_phone: '',
+  bank_info: '',
+  receipt_footer: 'Cảm ơn quý khách đã tin chọn Nếp Hair. Hẹn gặp lại!',
 };
+// Nâng cấp CSDL cũ: thêm cột cho lịch hẹn (lý do hủy, ai hủy, đã mời đặt lại)
+{
+  const have = new Set(db.prepare('PRAGMA table_info(appointments)').all().map((c) => c.name));
+  for (const [col, type] of [['cancel_reason', 'TEXT'], ['cancelled_at', 'TEXT'], ['cancelled_by', 'INTEGER'], ['followup_at', 'TEXT']]) {
+    if (!have.has(col)) db.exec(`ALTER TABLE appointments ADD COLUMN ${col} ${type}`);
+  }
+}
 const insSetting = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)');
 for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) insSetting.run(k, v);
 
