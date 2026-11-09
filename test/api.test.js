@@ -94,6 +94,21 @@ test('luồng chính và phân quyền', async () => {
   assert.equal((await duong.post('/visits', { customer_id: ids.lan, main_staff_id: staff['Dương'], items: [{ service_id: nhuom.id }], card_id: ids.card, card_paid: 5000000 })).status, 400, 'vượt số dư thẻ');
   assert.equal((await duong.post('/visits', { date: '2020-01-01', customer_id: ids.lan, main_staff_id: staff['Dương'], items: [{ service_id: nhuom.id }], payment_method: 'Tiền mặt' })).status, 403, 'nhân viên không ghi lùi ngày');
 
+  // Hóa đơn: thợ làm lượt xem được, người khác không
+  r = await duong.get(`/visits/${ids.visit}/receipt`);
+  assert.equal(r.status, 200); assert.equal(r.data.visit.total, 1600000); assert.equal(r.data.card_balance, 1200000); assert.ok(r.data.salon.name);
+  assert.equal((await thu.get(`/visits/${ids.visit}/receipt`)).status, 403);
+
+  // Hủy lịch: bắt buộc lý do, hiện ở nhắc "mời đặt lại", đánh dấu đã mời
+  const apptId = (await thu.get(`/appointments?from=${tomorrow}`)).data[0].id;
+  assert.equal((await thu.post(`/appointments/${apptId}/status`, { status: 'cancelled' })).status, 400);
+  assert.equal((await thu.post(`/appointments/${apptId}/status`, { status: 'cancelled', reason: 'Khách ốm' })).status, 200);
+  r = await duong.get('/reminders');
+  const cx = r.data.cancels.find((x) => x.id === apptId);
+  assert.ok(cx); assert.equal(cx.cancel_reason, 'Khách ốm'); assert.equal(cx.cancelled_by_name, 'Chị Thu'); assert.equal(r.data.counts.cancels, 1);
+  await duong.post(`/appointments/${apptId}/followup`);
+  assert.equal((await duong.get('/reminders')).data.counts.cancels, 0);
+
   // Nhân viên khác không thấy tiền lượt của Dương
   r = await thu.get('/visits/' + ids.visit);
   assert.equal(r.data.total, null); assert.equal(r.data.masked, true); assert.equal(r.data.formula, '5.14 60ml + oxi 30');
@@ -129,7 +144,7 @@ test('luồng chính và phân quyền', async () => {
   // Nhắc nhở: sinh nhật hôm nay, lịch ngày mai
   r = await thu.get('/reminders');
   assert.ok(r.data.birthdays.some((b) => b.id === ids.lan));
-  assert.ok(r.data.appointments.length >= 1);
+  assert.equal(r.data.appointments.length, 0, 'lịch đã hủy không cần gọi xác nhận');
   await thu.post('/reminders/done', { customer_id: ids.lan, type: 'birthday', ref: r.data.birthdays[0].ref });
   assert.equal((await thu.get('/reminders')).data.counts.birthdays, 0);
 

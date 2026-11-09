@@ -99,7 +99,7 @@ app.use('/api', auth);
 app.get('/api/me', (req, res) => {
   const { token, ...u } = req.user;
   const s = getSettings();
-  res.json({ user: u, settings: { salon_name: s.salon_name, payment_methods: s.payment_methods.split(',').map((x) => x.trim()) }, groups: GROUPS, today: today() });
+  res.json({ user: u, settings: { salon_name: s.salon_name, salon_address: s.salon_address, salon_phone: s.salon_phone, bank_info: s.bank_info, receipt_footer: s.receipt_footer, payment_methods: s.payment_methods.split(',').map((x) => x.trim()) }, groups: GROUPS, today: today() });
 });
 app.post('/api/me/password', (req, res) => {
   const u = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
@@ -165,7 +165,7 @@ app.post('/api/users/:id/reset-password', OWNER, (req, res) => {
 // ---------- Cài đặt ----------
 app.get('/api/settings', MGR, (req, res) => res.json(getSettings()));
 app.put('/api/settings', OWNER, (req, res) => {
-  const allowed = ['salon_name', 'return_days', 'birthday_days', 'card_expiry_days', 'card_low_balance', 'assistant_rate', 'card_new_rate', 'card_renewal_rate', 'payment_methods'];
+  const allowed = ['salon_name', 'salon_address', 'salon_phone', 'bank_info', 'receipt_footer', 'return_days', 'birthday_days', 'card_expiry_days', 'card_low_balance', 'assistant_rate', 'card_new_rate', 'card_renewal_rate', 'payment_methods'];
   const up = db.prepare('UPDATE settings SET value=? WHERE key=?');
   for (const k of allowed) if (req.body[k] != null) up.run(String(req.body[k]).trim(), k);
   audit(req.user.id, 'update_settings', 'settings', null, req.body);
@@ -322,6 +322,10 @@ app.put('/api/appointments/:id', (req, res) => {
   const id = int(req.params.id);
   if (!db.prepare('SELECT 1 FROM appointments WHERE id=?').get(id)) throw new HttpError(404, 'Không tìm thấy lịch hẹn');
   const a = apptInput(req.body);
+  const old = db.prepare('SELECT status FROM appointments WHERE id=?').get(id);
+  if (['cancelled', 'noshow'].includes(a.status) && !['cancelled', 'noshow'].includes(old.status)) {
+    Object.assign(a, cancelFields(a.status, req.body.cancel_reason, req.user));
+  }
   const cols = Object.keys(a);
   db.prepare(`UPDATE appointments SET ${cols.map((k) => k + '=?').join(',')} WHERE id=?`).run(...cols.map((k) => a[k]), id);
   audit(req.user.id, 'update_appointment', 'appointment', id, { status: a.status, date: a.date, time: a.time });
@@ -331,8 +335,26 @@ app.post('/api/appointments/:id/status', (req, res) => {
   const id = int(req.params.id);
   const st = req.body.status;
   if (!['booked', 'arrived', 'done', 'cancelled', 'noshow'].includes(st)) throw bad('Trạng thái không hợp lệ');
-  db.prepare('UPDATE appointments SET status=? WHERE id=?').run(st, id);
-  audit(req.user.id, 'appointment_status', 'appointment', id, { status: st });
+  if (!db.prepare('SELECT 1 FROM appointments WHERE id=?').get(id)) throw new HttpError(404, 'Không tìm thấy lịch hẹn');
+  if (['cancelled', 'noshow'].includes(st)) {
+    const f = cancelFields(st, req.body.reason, req.user);
+    db.prepare('UPDATE appointments SET status=?, cancel_reason=?, cancelled_at=?, cancelled_by=?, followup_at=NULL WHERE id=?')
+      .run(st, f.cancel_reason, f.cancelled_at, f.cancelled_by, id);
+  } else {
+    db.prepare('UPDATE appointments SET status=? WHERE id=?').run(st, id);
+  }
+  audit(req.user.id, 'appointment_status', 'appointment', id, { status: st, reason: str(req.body.reason) });
+  res.json({ ok: true });
+});
+function cancelFields(status, reason, user) {
+  const r = str(reason);
+  if (status === 'cancelled' && !r) throw bad('Ghi lý do khách hủy lịch');
+  return { cancel_reason: r || 'Khách không đến', cancelled_at: L.localDate(new Date()) + ' ' + new Date().toTimeString().slice(0, 5), cancelled_by: user.id };
+}
+// Đánh dấu đã nhắn/gọi mời khách hủy lịch đặt lại
+app.post('/api/appointments/:id/followup', (req, res) => {
+  const id = int(req.params.id);
+  db.prepare('UPDATE appointments SET followup_at=? WHERE id=?').run(L.localDate(new Date()), id);
   res.json({ ok: true });
 });
 
@@ -349,6 +371,15 @@ app.get('/api/visits', (req, res) => {
     v.can_edit = L.canEditVisit(req.user, v);
     return v;
   }));
+});
+// Hóa đơn cho khách: dữ liệu lượt + thông tin salon + số dư thẻ sau khi trừ
+app.get('/api/visits/:id/receipt', (req, res) => {
+  const v = L.getVisit(int(req.params.id));
+  if (!v || v.status !== 'done') throw new HttpError(404, 'Không tìm thấy lượt làm');
+  if (L.maskVisitMoney(v, req.user).masked) throw new HttpError(403, 'Chỉ thợ làm lượt này hoặc quản lý mới xem được hóa đơn');
+  const s = getSettings();
+  res.json({ visit: v, card_balance: v.card_id ? L.cardBalance(v.card_id) : null,
+    salon: { name: s.salon_name, address: s.salon_address, phone: s.salon_phone, bank_info: s.bank_info, footer: s.receipt_footer } });
 });
 app.get('/api/visits/:id', (req, res) => {
   const v = L.getVisit(int(req.params.id));

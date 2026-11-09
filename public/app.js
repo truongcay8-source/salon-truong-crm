@@ -148,7 +148,7 @@ function go(page, params = {}) {
   history.pushState({}, '', '#' + page + (q ? '?' + q : ''));
   route();
 }
-window.addEventListener('popstate', () => S.me && route());
+window.addEventListener('popstate', () => { closeModal(); if (S.me) route(); });
 function route() {
   const [page, q] = (location.hash.slice(1) || 'dashboard').split('?');
   S.page = page; S.params = Object.fromEntries(new URLSearchParams(q || ''));
@@ -257,7 +257,7 @@ VIEWS.dashboard = async (main) => {
     <div class="grid two">
       <div class="card"><h3>Lịch hẹn hôm nay (${d.appointments.length})</h3>${apptList(d.appointments)}</div>
       <div class="card"><h3>Việc cần làm</h3>
-        ${[['birthdays', '🎂 Sinh nhật sắp tới'], ['cards', '💳 Thẻ sắp hết hạn / hết tiền'], ['returns', '🔁 Khách đến hạn quay lại'], ['appointments', '📞 Gọi xác nhận lịch ngày mai']]
+        ${[['birthdays', '🎂 Sinh nhật sắp tới'], ['cards', '💳 Thẻ sắp hết hạn / hết tiền'], ['returns', '🔁 Khách đến hạn quay lại'], ['appointments', '📞 Gọi xác nhận lịch ngày mai'], ['cancels', '❌ Khách hủy / không đến – mời đặt lại']]
           .map(([k, l]) => `<div class="stat-line"><a href="#reminders">${l}</a><b>${rc[k]}</b></div>`).join('')}
       </div></div>`;
   $('#qAppt').onclick = () => apptForm({ date: d.today });
@@ -269,11 +269,12 @@ function apptList(rows, showDate) {
   return rows.map((a) => `<div class="list-item"><div class="time-pill">${esc(a.time)}${showDate ? `<div class="small muted">${dmy(a.date).slice(0, 5)}</div>` : ''}</div>
     <div style="flex:1;min-width:0"><div class="t">${a.customer_id ? `<a href="#customer?id=${a.customer_id}">${esc(a.name)}</a>` : esc(a.name) + ' <span class="badge">khách mới</span>'}</div>
       <div class="small muted">${esc(a.service || '')}${a.staff_name ? ' · ' + esc(a.staff_name) : ''} · ${telLinks(a.phone)}</div>
-      ${a.note ? `<div class="small">${esc(a.note)}</div>` : ''}</div>
+      ${a.note ? `<div class="small">${esc(a.note)}</div>` : ''}
+      ${a.cancel_reason && ['cancelled', 'noshow'].includes(a.status) ? `<div class="small" style="color:var(--bad)">Lý do: ${esc(a.cancel_reason)}</div>` : ''}</div>
     <div style="text-align:right"><span class="badge ${APPT[a.status][1]}">${APPT[a.status][0]}</span>
       <div class="row" style="justify-content:flex-end;margin-top:6px">
       ${a.status === 'booked' ? `<button class="btn sm" data-ast="arrived" data-id="${a.id}">Đã đến</button>` : ''}
-      ${['booked', 'arrived'].includes(a.status) ? `<button class="btn sm primary" data-avisit="${a.id}">Thu tiền</button><button class="btn sm" data-aedit="${a.id}">Sửa</button>` : ''}
+      ${['booked', 'arrived'].includes(a.status) ? `<button class="btn sm primary" data-avisit="${a.id}">Thu tiền</button><button class="btn sm" data-aedit="${a.id}">Sửa</button><button class="btn sm" data-acancel="${a.id}">Hủy / không đến</button>` : ''}
       </div></div></div>`).join('');
 }
 function bindApptList(root, reload, rows) {
@@ -285,6 +286,83 @@ function bindApptList(root, reload, rows) {
     visitForm({ customer_id: a.customer_id, customer: { id: a.customer_id, code: a.customer_code || '', name: a.name }, main_staff_id: a.staff_id, appointment_id: a.id, service: a.service }, reload);
   }));
   $$('[data-aedit]', root).forEach((b) => (b.onclick = async () => apptForm(await find(b.dataset.aedit), reload)));
+  $$('[data-acancel]', root).forEach((b) => (b.onclick = async () => cancelForm(await find(b.dataset.acancel), reload)));
+}
+
+// ---------- Hủy lịch / khách không đến ----------
+const CANCEL_REASONS = ['Khách bận việc đột xuất', 'Khách đổi sang ngày khác', 'Khách ốm', 'Thời tiết xấu', 'Salon/thợ báo đổi lịch', 'Không liên lạc được'];
+const firstName = (n) => String(n || '').trim();
+function msgCancel(a) {
+  return `${S.settings.salon_name} xin chào ${firstName(a.name)}. Salon đã hủy lịch hẹn lúc ${a.time} ngày ${dmy(a.date)} theo yêu cầu của mình. Khi nào tiện, mình nhắn lại để salon giữ giờ đẹp và thợ quen cho mình nhé. Cảm ơn mình!`;
+}
+function msgRebook(a) {
+  return a.status === 'noshow'
+    ? `${S.settings.salon_name} xin chào ${firstName(a.name)}. Hôm ${dmy(a.date)} salon có giữ lịch ${a.time} nhưng chưa thấy mình ghé, mong là mọi việc đều ổn ạ. Mình muốn hẹn lại ngày nào để salon xếp lịch cho mình?`
+    : `${S.settings.salon_name} xin chào ${firstName(a.name)}. Lịch hẹn ${dmy(a.date)} của mình đã được hủy. Tuần này salon còn trống vài khung giờ đẹp, mình muốn đặt lại ngày nào để salon giữ chỗ ạ?`;
+}
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); toast('Đã copy — mở Zalo và dán (giữ ngón tay → Dán)'); }
+  catch { prompt('Copy đoạn này để gửi khách:', t); }
+}
+function msgBox(text, phone) {
+  return `<div class="totals"><div class="small muted">Tin nhắn gửi khách (sửa được):</div><textarea id="msgT" rows="4">${esc(text)}</textarea>
+    <div class="row" style="margin-top:8px"><button class="btn sm primary" id="msgCopy" type="button">📋 Copy tin nhắn</button>
+    ${phone ? `<a class="btn sm" href="https://zalo.me/${esc(phone)}" target="_blank" rel="noopener">Mở Zalo khách</a><a class="btn sm" href="sms:${esc(phone)}">SMS</a>` : '<span class="small muted">Khách chưa có SĐT</span>'}</div></div>`;
+}
+function bindMsgBox() { const b = $('#msgCopy'); if (b) b.onclick = () => copyText($('#msgT').value); }
+function cancelForm(a, reload) {
+  openModal(`Hủy lịch · ${a.name}`, `<form id="cf"><div class="small muted">${esc(a.time)} ${dmy(a.date)}${a.staff_name ? ' · ' + esc(a.staff_name) : ''}${a.service ? ' · ' + esc(a.service) : ''}</div>
+    <label>Loại</label><select name="status"><option value="cancelled">Khách báo hủy</option><option value="noshow">Khách không đến (không báo)</option></select>
+    <label>Lý do</label><select name="pick">${CANCEL_REASONS.map((r) => `<option>${esc(r)}</option>`).join('')}<option value="">Khác (ghi bên dưới)</option></select>
+    <label>Ghi thêm</label><input name="extra" placeholder="VD: hẹn lại tuần sau, khách xin dời sang 15h…">
+    <div class="err"></div><div class="modal-foot"><button class="btn primary">Xác nhận hủy</button></div></form>`);
+  const f = $('#cf');
+  f.status.onchange = () => { if (f.status.value === 'noshow') f.pick.value = 'Không liên lạc được'; };
+  f.onsubmit = (e) => {
+    e.preventDefault();
+    const reason = [f.pick.value, f.extra.value.trim()].filter(Boolean).join(' · ');
+    if (!reason) { $('#cf .err').textContent = 'Chọn hoặc ghi lý do'; return; }
+    guard($('#cf button.primary'), async () => {
+      await api(`/appointments/${a.id}/status`, { method: 'POST', body: { status: f.status.value, reason } });
+      const done = { ...a, status: f.status.value };
+      openModal('Đã hủy lịch', `<div>Lịch <b>${esc(a.time)} ${dmy(a.date)}</b> của <b>${esc(a.name)}</b> đã chuyển sang <b>${APPT[done.status][0]}</b>.
+        ${a.staff_name ? `Thợ <b>${esc(a.staff_name)}</b> và quản lý sẽ thấy ở mục <b>Nhắc nhở › Khách hủy / không đến</b>.` : ''}</div>
+        ${msgBox(done.status === 'cancelled' ? msgCancel(done) : msgRebook(done), a.phone)}`);
+      bindMsgBox(); refreshReminderBadge(); reload && reload();
+    });
+  };
+}
+
+// ---------- Hóa đơn ----------
+async function showReceipt(id) {
+  let r;
+  try { r = await api(`/visits/${id}/receipt`); } catch (e) { return toast(e.message); }
+  const v = r.visit, s = r.salon;
+  const line = (l, val, b) => `<div class="rc-row${b ? ' b' : ''}"><span>${l}</span><span>${val}</span></div>`;
+  const paid = v.cash_paid;
+  const html = `<div id="receipt" class="receipt">
+    <div class="rc-c"><b class="rc-name">${esc(s.name)}</b>${s.address ? `<div>${esc(s.address)}</div>` : ''}${s.phone ? `<div>ĐT: ${esc(s.phone)}</div>` : ''}</div>
+    <div class="rc-c rc-title">HÓA ĐƠN DỊCH VỤ</div>
+    ${line('Số', esc(v.code))}${line('Ngày', `${dmy(v.date)} ${esc(v.time || '')}`)}
+    ${line('Khách', esc(v.customer_name))}${line('Thợ', esc(v.main_staff_name || '') + (v.assistant_name ? ' + ' + esc(v.assistant_name) : ''))}
+    <hr>${v.items.map((i) => line(esc(i.name), money(i.price))).join('')}
+    ${v.surcharge ? line('Phụ thu', money(v.surcharge)) : ''}${v.discount ? line('Giảm giá' + (v.discount_reason ? ` (${esc(v.discount_reason)})` : ''), '−' + money(v.discount)) : ''}
+    <hr>${line('Tổng dịch vụ', money(v.total), true)}
+    ${v.card_paid ? line(`Trừ thẻ ${esc(v.card_code || '')}`, '−' + money(v.card_paid)) : ''}
+    ${line('Khách thanh toán', money(paid), true)}${v.payment_method && paid ? line('Hình thức', esc(v.payment_method)) : ''}
+    ${v.tip ? line('Tip cho thợ', money(v.tip)) : ''}
+    ${r.card_balance != null ? line(`Số dư thẻ còn lại`, money(r.card_balance), true) : ''}
+    ${s.bank_info && paid ? `<hr><div class="rc-c small">${esc(s.bank_info)}</div>` : ''}
+    <hr><div class="rc-c">${esc(s.footer || 'Cảm ơn quý khách!')}</div></div>`;
+  const text = [`${s.name} – HÓA ĐƠN ${v.code}`, `Ngày: ${dmy(v.date)} ${v.time || ''}`, `Khách: ${v.customer_name}`, '',
+    ...v.items.map((i) => `• ${i.name}: ${money(i.price)}`),
+    v.surcharge ? `• Phụ thu: ${money(v.surcharge)}` : '', v.discount ? `• Giảm giá: −${money(v.discount)}` : '',
+    `Tổng dịch vụ: ${money(v.total)}`, v.card_paid ? `Trừ thẻ: −${money(v.card_paid)}` : '', `Thanh toán: ${money(paid)}${v.payment_method && paid ? ' (' + v.payment_method + ')' : ''}`,
+    r.card_balance != null ? `Số dư thẻ còn lại: ${money(r.card_balance)}` : '', '', s.footer || ''].filter((x, i, arr) => x !== '' || (arr[i - 1] !== '' && i > 0)).join('\n');
+  openModal('Hóa đơn ' + v.code, html + `<div class="modal-foot"><button class="btn" id="rcPrint">🖨 In</button><button class="btn primary" id="rcCopy">📋 Copy gửi Zalo</button>
+    ${v.customer_phone ? `<a class="btn" href="https://zalo.me/${esc(v.customer_phone)}" target="_blank" rel="noopener">Mở Zalo khách</a>` : ''}</div>`);
+  $('#rcPrint').onclick = () => window.print();
+  $('#rcCopy').onclick = () => copyText(text);
 }
 
 // ---------- Lịch hẹn ----------
@@ -405,6 +483,7 @@ VIEWS.customer = async (main) => {
     body.innerHTML = c.visits.length ? c.visits.map((v) => visitBlock(v, c.photos)).join('') : '<div class="empty">Chưa có lượt làm</div>';
     bindPhotos(body, reload);
     $$('[data-vedit]', body).forEach((b) => (b.onclick = () => visitForm(c.visits.find((v) => v.id === Number(b.dataset.vedit)), reload)));
+    $$('[data-rc-id]', body).forEach((b) => (b.onclick = () => showReceipt(b.dataset.rcId)));
     $$('[data-vphoto]', body).forEach((inp) => (inp.onchange = async () => {
       if (!inp.files.length) return;
       try { await uploadPhotos(c.id, inp.files, inp.dataset.kind, inp.dataset.vphoto); toast('Đã tải ảnh'); reload(); } catch (e) { toast(e.message); }
@@ -426,7 +505,7 @@ function visitBlock(v, photos) {
   const ps = photos.filter((p) => p.visit_id === v.id);
   return `<div class="list-item" style="display:block"><div class="row"><b>${dmy(v.date)}${v.time ? ' ' + esc(v.time) : ''}</b>
     <span>${v.items.map((i) => esc(i.name)).join(' + ')}</span><span class="badge brand">${esc(v.main_staff_name || '')}${v.assistant_name ? ' + ' + esc(v.assistant_name) : ''}</span>
-    <span class="spacer"></span>${v.masked ? '' : `<b>${money(v.total)}</b>`}${v.can_edit ? `<button class="btn sm" data-vedit="${v.id}">Sửa</button>` : ''}</div>
+    <span class="spacer"></span>${v.masked ? '' : `<b>${money(v.total)}</b><button class="btn sm" data-rc-id="${v.id}">Hóa đơn</button>`}${v.can_edit ? `<button class="btn sm" data-vedit="${v.id}">Sửa</button>` : ''}</div>
     ${v.hair_before ? `<div class="small"><span class="muted">Tóc trước:</span> ${esc(v.hair_before)}</div>` : ''}
     ${v.wish ? `<div class="small"><span class="muted">Mong muốn:</span> ${esc(v.wish)}</div>` : ''}
     ${v.formula ? `<div class="small pre"><span class="muted">Công thức:</span> ${esc(v.formula)}</div>` : ''}
@@ -526,6 +605,7 @@ async function visitForm(v = {}, after) {
         if (pa.length) await uploadPhotos(saved.customer_id, pa, 'after', saved.id);
       }
       closeModal(); toast(`Đã lưu lượt ${saved.code}: ${money(saved.total)}`); (after || route)(); refreshReminderBadge();
+      if (!isEdit) showReceipt(saved.id);
     });
   };
   const del = $('#delV');
@@ -548,7 +628,7 @@ VIEWS.visits = async (main) => {
     <tbody>${rows.map((v) => `<tr><td>${dmy(v.date).slice(0, 5)} ${esc(v.time || '')}</td><td><a href="#customer?id=${v.customer_id}">${esc(v.customer_name)}</a></td>
       <td>${v.items.map((i) => esc(i.name)).join(' + ')}</td><td>${esc(v.main_staff_name)}${v.assistant_name ? ' <span class="muted small">+' + esc(v.assistant_name) + '</span>' : ''}</td>
       <td class="num">${money(v.total)}</td><td class="num">${v.card_paid ? money(v.card_paid) : ''}</td><td class="num">${money(v.cash_paid)}</td><td class="small">${esc(v.payment_method || '')}</td><td class="num">${v.tip ? money(v.tip) : ''}</td>
-      <td>${v.can_edit ? `<button class="btn sm" data-ev="${v.id}">Sửa</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="empty">Chưa có lượt nào</td></tr>'}</tbody>
+      <td class="nowrap">${v.masked ? '' : `<button class="btn sm" data-rc-id="${v.id}">Hóa đơn</button>`}${v.can_edit ? `<button class="btn sm" data-ev="${v.id}">Sửa</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="empty">Chưa có lượt nào</td></tr>'}</tbody>
     ${rows.length ? `<tfoot><tr><td colspan="4">${rows.length} lượt${rows.some((r) => r.masked) ? ' <span class="muted small">(chỉ cộng lượt của bạn)</span>' : ''}</td><td class="num">${money(sum.total)}</td><td class="num">${money(sum.card)}</td><td class="num">${money(sum.cash)}</td><td></td><td class="num">${money(sum.tip)}</td><td></td></tr></tfoot>` : ''}
     </table></div></div>`;
   const set = (p) => go('visits', { from, to, ...(staffId ? { staff: staffId } : {}), ...p });
@@ -558,6 +638,7 @@ VIEWS.visits = async (main) => {
   $('#st').onchange = (e) => go('visits', { from, to, ...(e.target.value ? { staff: e.target.value } : {}) });
   $('#nv').onclick = () => visitForm({}, () => VIEWS.visits(main));
   $$('[data-ev]', main).forEach((b) => (b.onclick = () => visitForm(rows.find((r) => r.id === Number(b.dataset.ev)), () => VIEWS.visits(main))));
+  $$('[data-rc-id]', main).forEach((b) => (b.onclick = () => showReceipt(b.dataset.rcId)));
 };
 
 // ---------- Nhắc nhở ----------
@@ -568,11 +649,20 @@ VIEWS.reminders = async (main) => {
       ${x.done ? '<span class="badge ok">Đã liên hệ</span>' : `<button class="btn sm" data-done='${esc(JSON.stringify({ customer_id: x.customer_id || x.id, type: key === 'birthdays' ? 'birthday' : key === 'cards' ? 'card' : key === 'returns' ? 'return' : 'appointment', ref: x.ref }))}'>Đã liên hệ</button>`}</div>`).join('') : '<div class="empty">Không có</div>'}</div>`;
   main.innerHTML = header('Nhắc nhở', 'Gọi / nhắn Zalo cho khách rồi bấm “Đã liên hệ”') + `<div class="grid two">
     ${sec('appointments', '📞 Xác nhận lịch ngày mai', 'Gọi trước để giảm khách không đến.', r.appointments, (a) => `<b>${esc(a.time)} · ${a.customer_id ? `<a href="#customer?id=${a.customer_id}">${esc(a.name)}</a>` : esc(a.name)}</b> <span class="muted small">${esc(a.service || '')} ${a.staff_name ? '· ' + esc(a.staff_name) : ''}</span>`)}
+    <div class="card"><h3>❌ Khách hủy / không đến <span class="badge ${r.counts.cancels ? 'bad' : ''}">${r.counts.cancels}</span></h3><div class="small muted">14 ngày gần đây, khách chưa đặt lịch mới. Nhắn mời đặt lại rồi bấm “Đã mời”.</div>
+      ${r.cancels.length ? r.cancels.map((a) => `<div class="list-item" style="${a.done ? 'opacity:.5' : ''}"><div style="flex:1;min-width:0">
+        <b>${a.customer_id ? `<a href="#customer?id=${a.customer_id}">${esc(a.name)}</a>` : esc(a.name)}</b> <span class="badge ${APPT[a.status][1]}">${APPT[a.status][0]}</span>
+        <div class="small muted">${esc(a.time)} ${dmy(a.date)}${a.staff_name ? ' · ' + esc(a.staff_name) : ''}${a.cancelled_by_name ? ' · ghi bởi ' + esc(a.cancelled_by_name) : ''}</div>
+        <div class="small">Lý do: ${esc(a.cancel_reason || '—')}</div><div class="small">${telLinks(a.phone)}</div></div>
+        <div class="row" style="flex-direction:column;align-items:flex-end"><button class="btn sm" data-inv="${a.id}">📋 Tin mời</button>
+        ${a.done ? '<span class="badge ok">Đã mời</span>' : `<button class="btn sm" data-fu="${a.id}">Đã mời</button>`}</div></div>`).join('') : '<div class="empty">Không có</div>'}</div>
     ${sec('birthdays', '🎂 Sinh nhật sắp tới', 'Gửi lời chúc + ưu đãi sinh nhật.', r.birthdays, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b> <span class="badge warn">${c.date === S.today ? 'HÔM NAY' : dmy(c.date).slice(0, 5)}</span>`)}
     ${sec('cards', '💳 Thẻ trả trước', 'Thẻ sắp hết hạn → nhắc khách dùng; hết tiền → mời nạp thêm.', r.cards, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b> <span class="small">${esc(c.card_name)} · còn ${money(c.balance)}</span> <span class="badge warn">${esc(c.reason)}</span>`)}
     ${sec('returns', '🔁 Khách đến hạn quay lại', 'Đã quá số ngày cài đặt kể từ lần làm gần nhất và chưa có lịch hẹn.', r.returns, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b> <span class="small muted">lần cuối ${dmy(c.last_date)} · ${c.days} ngày · ${c.n} lượt</span>`)}
     </div>`;
   $$('[data-done]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api('/reminders/done', { method: 'POST', body: JSON.parse(b.dataset.done) }); refreshReminderBadge(); VIEWS.reminders(main); })));
+  $$('[data-inv]', main).forEach((b) => (b.onclick = () => { const a = r.cancels.find((x) => x.id === Number(b.dataset.inv)); openModal('Mời đặt lại · ' + a.name, msgBox(msgRebook(a), a.phone)); bindMsgBox(); }));
+  $$('[data-fu]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/appointments/${b.dataset.fu}/followup`, { method: 'POST', body: {} }); refreshReminderBadge(); VIEWS.reminders(main); })));
 };
 
 // ---------- Thẻ trả trước ----------
@@ -691,10 +781,10 @@ VIEWS.sales = async (main) => {
 VIEWS.excel = async (main) => {
   main.innerHTML = header('Nhập / Xuất Excel') + `<div class="grid two">
     <div class="card"><h3>📥 Nhập từ Excel</h3>
-      <div class="small muted">Nhận 3 mẫu: <b>Salon Nếp – Nhật ký</b> (khách, nhật ký dịch vụ, danh mục), <b>CRM Nếp Hair</b> (CRM Khách, lịch hẹn đã đặt) và file <b>xuất từ phần mềm này</b>.
+      <div class="small muted">Nhận các mẫu: <b>Salon Nếp – Nhật ký</b> (khách, nhật ký dịch vụ, danh mục), <b>CRM Nếp Hair</b> (CRM Khách, lịch hẹn đã đặt), <b>Sổ đặt lịch</b> (tab Tháng 10, Tháng 11… + Quản lý Thẻ 1Tr) và file <b>xuất từ phần mềm này</b>.
       Khách trùng được ghép theo mã cũ → SĐT → tên. Nhập lại cùng file không bị nhân đôi.</div>
       <form id="imp"><label>File .xlsx</label><input type="file" name="file" accept=".xlsx" required>
-      <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="include_history"> Nhập cả lượt "Hoàn thành" ở tab Lịch sử (CRM Nếp Hair)</label>
+      <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="include_history"> Nhập cả lịch sử cũ (lượt "Hoàn thành" ở tab Lịch sử của CRM Nếp Hair / lịch các ngày đã qua trong Sổ đặt lịch)</label>
       <div class="small muted">Không nên tick nếu đã nhập file Nhật ký: 2 file ghi cùng các lượt 25/10–6/11 → doanh số bị cộng 2 lần (đã có chặn trùng theo khách + ngày).</div>
       <div class="err"></div><div class="row" style="margin-top:12px"><button class="btn" data-mode="1">Xem trước</button><button class="btn primary" data-mode="0">Nhập vào hệ thống</button></div></form>
       <div id="impRes"></div></div>
@@ -715,6 +805,10 @@ VIEWS.excel = async (main) => {
         <div class="stat-line"><span>Khách mới</span><b>${s.customers_created}</b></div><div class="stat-line"><span>Khách ghép với khách có sẵn</span><b>${s.customers_merged}</b></div>
         <div class="stat-line"><span>Lượt làm thêm mới</span><b>${s.visits_created}</b></div><div class="stat-line"><span>Lượt đã có (bỏ qua)</span><b>${s.visits_skipped_existing}</b></div>
         <div class="stat-line"><span>Lượt trùng khách + ngày (bỏ qua)</span><b>${s.visits_skipped_duplicate}</b></div><div class="stat-line"><span>Lịch hẹn mới</span><b>${s.appointments_created}</b></div>
+        ${s.appointments_linked ? `<div class="stat-line"><span>…trong đó gắn được với khách có sẵn</span><b>${s.appointments_linked}</b></div>` : ''}
+        ${s.appointments_past_skipped ? `<div class="stat-line"><span>Lịch ngày đã qua (bỏ qua)</span><b>${s.appointments_past_skipped}</b></div>` : ''}
+        ${s.appointments_skipped ? `<div class="stat-line"><span>Lịch đã có (bỏ qua)</span><b>${s.appointments_skipped}</b></div>` : ''}
+        ${s.cards_created || s.cards_skipped_existing ? `<div class="stat-line"><span>Thẻ voucher mới / đã có</span><b>${s.cards_created} / ${s.cards_skipped_existing}</b></div>` : ''}
         <div class="stat-line"><span>Dịch vụ mới</span><b>${s.services_added}</b></div>
         ${s.staff_created.length ? `<div class="small">Nhân viên lạ được tạo (không đăng nhập được): ${s.staff_created.map(esc).join(', ')}</div>` : ''}
         ${s.matched_by_name.length ? `<details class="small"><summary>${s.matched_by_name.length} khách ghép theo TÊN — nên kiểm tra</summary>${s.matched_by_name.map(esc).join(', ')}</details>` : ''}
@@ -811,7 +905,8 @@ VIEWS.settings = async (main) => {
   }
   if (tab === 'params') {
     const s = await api('/settings');
-    const F = [['salon_name', 'Tên salon', 'text'], ['return_days', 'Nhắc khách quay lại sau (ngày)', 'number'], ['birthday_days', 'Nhắc sinh nhật trước (ngày)', 'number'],
+    const F = [['salon_name', 'Tên salon', 'text'], ['salon_address', 'Địa chỉ (in trên hóa đơn)', 'text'], ['salon_phone', 'Số điện thoại salon', 'text'],
+      ['bank_info', 'Thông tin chuyển khoản (in trên hóa đơn)', 'text'], ['receipt_footer', 'Lời cảm ơn cuối hóa đơn', 'text'], ['return_days', 'Nhắc khách quay lại sau (ngày)', 'number'], ['birthday_days', 'Nhắc sinh nhật trước (ngày)', 'number'],
       ['card_expiry_days', 'Nhắc thẻ sắp hết hạn trước (ngày)', 'number'], ['card_low_balance', 'Nhắc khi số dư thẻ ≤ (đồng)', 'number'],
       ['assistant_rate', 'Hoa hồng người phụ (tỷ lệ, 0.03 = 3%)', 'number'], ['card_new_rate', 'HH bán thẻ mới (0.05 = 5%)', 'number'],
       ['card_renewal_rate', 'HH khách mua lại thẻ (0.03 = 3%)', 'number'], ['payment_methods', 'Hình thức thanh toán (cách nhau dấu phẩy)', 'text']];

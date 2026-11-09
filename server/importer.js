@@ -82,6 +82,19 @@ function readTable(ws, mustHave, maxScan = 8) {
   return null;
 }
 
+// ---------- Sổ đặt lịch ghi tay: tách SĐT, đoán tên khách ----------
+function extractPhone(text) {
+  const m = String(text).replace(/[.\s](?=\d)/g, '').match(/(?:\+?84|0)\d{9,10}/);
+  if (!m) return null;
+  const p = L.normPhone(m[0]);
+  return /^0\d{9,10}$/.test(p) ? p : null;
+}
+function guessName(text) {
+  let s = String(text).split(/[\n(–-]| \d/)[0];
+  s = s.replace(/(?:\+?84|0)[\d.\s]{8,}/g, '').replace(/\s+/g, ' ').trim();
+  return (s || String(text)).slice(0, 60);
+}
+
 // ---------- Nhân viên ----------
 function staffResolver(summary) {
   const users = db.prepare('SELECT id, full_name, aliases FROM users').all();
@@ -195,7 +208,7 @@ async function importWorkbook(buffer, opts, user) {
   const summary = {
     format: null, customers_created: 0, customers_merged: 0, matched_by_name: [], services_added: 0,
     visits_created: 0, visits_skipped_existing: 0, visits_skipped_duplicate: 0, visits_skipped_invalid: 0,
-    appointments_created: 0, cards_created: 0, staff_created: [], warnings: [],
+    appointments_created: 0, appointments_linked: 0, appointments_skipped: 0, appointments_past_skipped: 0, cards_skipped_existing: 0, cards_created: 0, staff_created: [], warnings: [],
   };
   const importer = { ...user, role: 'owner' }; // bỏ giới hạn ngày của nhân viên khi nhập lịch sử
 
@@ -327,7 +340,121 @@ async function importWorkbook(buffer, opts, user) {
         }
       }
     }
-    if (!recognised) throw L.bad('Không nhận ra mẫu file. Hỗ trợ: "Salon Nếp – Nhật ký", "CRM Nếp Hair", hoặc file Excel xuất từ phần mềm (tab Khách hàng).');
+    // ===== Sổ đặt lịch theo ngày (tab "Tháng 10", "Tháng 11"...: mỗi ngày 1 khối, cột = thợ, dòng = giờ) =====
+    const grids = wb.worksheets.filter((w) => /^tháng\s*\d+/.test(norm(w.name)));
+    for (const g of grids) {
+      const blocks = findDayBlocks(g);
+      if (!blocks.length) continue;
+      recognised = true; summary.format = summary.format || 'Sổ đặt lịch theo ngày';
+      const t = L.today();
+      for (const b of blocks) {
+        if (b.date < t && !opts.includeHistory) { summary.appointments_past_skipped += b.entries.length; continue; }
+        for (const e of b.entries) {
+          const phone = extractPhone(e.text);
+          const name = guessName(e.text);
+          const hit = cust.find('APP', null, phone, name);
+          const status = b.date < t ? 'done' : 'booked';
+          const dup = db.prepare(`SELECT 1 FROM appointments WHERE date=? AND time=? AND IFNULL(staff_id,0)=IFNULL(?,0) AND (note=? OR service=?)`)
+            .get(b.date, e.time, e.staffId, e.text, e.text);
+          if (dup) { summary.appointments_skipped++; continue; }
+          db.prepare('INSERT INTO appointments(customer_id,guest_name,guest_phone,staff_id,date,time,service,status,note,created_by) VALUES (?,?,?,?,?,?,?,?,?,?)')
+            .run(hit ? hit.id : null, hit ? null : name, hit ? null : phone, e.staffId, b.date, e.time, null, status, e.text, user.id);
+          summary.appointments_created++;
+          if (hit) summary.appointments_linked++;
+        }
+      }
+      function findDayBlocks(ws) {
+        const out = [];
+        for (let r = 1; r <= ws.rowCount; r++) {
+          const row = ws.getRow(r);
+          if (norm(asText(row.getCell(1).value)) !== 'giờ') continue;
+          // ngày nằm ở cột B, 1–4 dòng phía trên tiêu đề
+          let date = null;
+          for (let k = 1; k <= 4 && r - k >= 1 && !date; k++) {
+            const v = cellVal(ws.getRow(r - k).getCell(2).value);
+            if (v instanceof Date && v.getUTCFullYear() > 2000) date = asDate(v);
+          }
+          if (!date) continue;
+          const cols = [];
+          for (let c = 2; c <= 12; c++) {
+            const h = asText(row.getCell(c).value);
+            if (!h) break;
+            if (/thu tiền|tip|chi|ghi chú/.test(norm(h))) break;
+            cols.push({ c, staffId: staffOf(h) });
+          }
+          const entries = [];
+          for (let i = r + 1; i <= Math.min(ws.rowCount, r + 40); i++) {
+            const rr = ws.getRow(i);
+            if (norm(asText(rr.getCell(1).value)) === 'giờ') break;
+            if (cols.some((x) => norm(asText(rr.getCell(x.c).value)) === 'tổng ngày')) break;
+            const time = asTime(rr.getCell(1).value);
+            if (!time) continue;
+            for (const x of cols) {
+              const text = asText(rr.getCell(x.c).value);
+              if (text && text.replace(/\s/g, '').length > 1) entries.push({ time, staffId: x.staffId, text: text.replace(/\s+/g, ' ').trim() });
+            }
+          }
+          out.push({ date, entries });
+        }
+        return out;
+      }
+    }
+
+    // ===== Thẻ voucher 1 triệu (tab "Quản lý Thẻ 1Tr") =====
+    const vt = ws('Quản lý Thẻ 1Tr');
+    const vRows = vt && readTable(vt, ['Mã thẻ', 'Tên khách hàng', 'Mệnh giá thẻ'], 10);
+    if (vRows) {
+      recognised = true; summary.format = summary.format || 'Thẻ voucher';
+      for (const r of vRows) {
+        const code = asText(r.get('Mã thẻ'));
+        const name = asText(r.get('Tên khách hàng'));
+        const value = asNum(r.get('Mệnh giá thẻ'));
+        if (!code || !name || !value) continue;
+        if (db.prepare('SELECT 1 FROM cards WHERE code=?').get(code)) { summary.cards_skipped_existing++; continue; }
+        const customerId = cust.upsert('APP', { name, phone: asText(r.get('Số điện thoại')) }, false);
+        if (!customerId) continue;
+        const soldAt = asDate(r.get('Ngày cấp thẻ')) || L.today();
+        const used = asNum(r.get('Đã chi dùng'));
+        const note = [asText(r.get('Ghi chú')), asText(r.get('Trạng thái'))].filter(Boolean).join(' · ') || null;
+        const id = db.prepare(`INSERT INTO cards(code,customer_id,name,price,value,sold_at,expires_at,seller_id,sale_type,commission,status,note,created_by)
+          VALUES (?,?,?,0,?,?,?,?,'gift',0,?,?,?)`).run(code, customerId, 'Voucher 1 triệu', value, soldAt, L.addMonths(soldAt, 12),
+          staffOf(r.get('NV phụ trách')), used >= value ? 'closed' : 'active', note, user.id).lastInsertRowid;
+        if (used) {
+          const svc = asText(r.get('Dịch vụ thực hiện'));
+          const day = asDate(r.get('Ngày sử dụng'));
+          db.prepare('INSERT INTO card_txns(card_id,amount,note,created_by) VALUES (?,?,?,?)')
+            .run(id, -Math.min(used, value), ['Đã dùng (nhập từ Excel)', day, svc].filter(Boolean).join(' · '), user.id);
+        }
+        summary.cards_created++;
+      }
+    }
+
+    // ===== Tab "Lịch hẹn" / "Đặt lịch" (mẫu của phần mềm hoặc bảng tự ghi) =====
+    const lh = ws('Lịch hẹn') || ws('Đặt lịch') || ws('Lich hen');
+    const lhRows = lh && (readTable(lh, ['Ngày', 'Tên khách']) || readTable(lh, ['Ngày', 'SĐT']) || readTable(lh, ['Ngày', 'Mã khách']));
+    if (lhRows) {
+      recognised = true; summary.format = summary.format || 'Lịch hẹn';
+      const ST = { 'đã đặt': 'booked', 'đặt lịch': 'booked', 'đã đến': 'arrived', 'hoàn thành': 'done', 'đã hủy': 'cancelled', 'hủy': 'cancelled', 'không đến': 'noshow' };
+      const t = L.today();
+      for (const r of lhRows) {
+        const date = asDate(r.get('Ngày', 'Ngày hẹn'));
+        const name = asText(r.get('Tên khách', 'Khách hàng', 'Họ tên'));
+        const phone = asText(r.get('SĐT', 'Số điện thoại', 'Điện thoại'));
+        const code = asText(r.get('Mã khách', 'Mã KH'));
+        if (!date || date.length !== 10 || (!name && !phone && !code)) { if (date || name) summary.appointments_skipped++; continue; }
+        const time = asTime(r.get('Giờ', 'Giờ hẹn')) || '09:00';
+        const stText = norm(asText(r.get('Trạng thái')));
+        const status = ST[stText] || (date < t ? 'done' : 'booked');
+        const customerId = cust.upsert('APP', { code, name, phone }, false);
+        if (!customerId) { summary.appointments_skipped++; continue; }
+        if (db.prepare('SELECT 1 FROM appointments WHERE customer_id=? AND date=? AND time=?').get(customerId, date, time)) { summary.appointments_skipped++; continue; }
+        db.prepare('INSERT INTO appointments(customer_id,staff_id,date,time,service,status,note,created_by) VALUES (?,?,?,?,?,?,?,?)')
+          .run(customerId, staffOf(r.get('Thợ', 'Stylist', 'Nhân viên')), date, time, asText(r.get('Dịch vụ')), status, asText(r.get('Ghi chú')), user.id);
+        summary.appointments_created++;
+      }
+    }
+
+    if (!recognised) throw L.bad('Không nhận ra mẫu file. Hỗ trợ: "Salon Nếp – Nhật ký", "CRM Nếp Hair", file Excel xuất từ phần mềm (tab Khách hàng), hoặc file có tab "Lịch hẹn" (cột Ngày, Giờ, Tên khách, SĐT, Dịch vụ, Thợ).');
     if (opts.dryRun) throw ROLLBACK;
   };
 

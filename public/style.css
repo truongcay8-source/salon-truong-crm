@@ -143,3 +143,22 @@ tfoot td { font-weight: 700; }
 .lightbox img { max-width: 96vw; max-height: 92vh; }
 .empty { color: var(--muted); padding: 16px 0; text-align: center; }
 .stat-line { display: flex; justify-content: space-between; padding: 4px 0; }
+
+/* Hóa đơn */
+.nowrap { white-space: nowrap; }
+.nowrap .btn + .btn { margin-left: 4px; }
+.receipt { max-width: 340px; margin: 8px auto; background: #fff; color: #111; padding: 14px 16px; border-radius: 8px; border: 1px dashed #bbb; font-size: 14px; line-height: 1.45; }
+.receipt hr { border: 0; border-top: 1px dashed #999; margin: 8px 0; }
+.rc-c { text-align: center; }
+.rc-name { font-size: 18px; }
+.rc-title { font-weight: 700; letter-spacing: .5px; margin: 8px 0; }
+.rc-row { display: flex; justify-content: space-between; gap: 10px; }
+.rc-row span:last-child { text-align: right; white-space: nowrap; }
+.rc-row.b { font-weight: 700; }
+#msgT { width: 100%; margin-top: 6px; }
+@media print {
+  @page { size: 80mm auto; margin: 3mm; }
+  body * { visibility: hidden !important; }
+  #receipt, #receipt * { visibility: visible !important; }
+  #receipt { position: absolute; left: 0; top: 0; width: 74mm; max-width: none; margin: 0; border: 0; padding: 0; font-size: 12px; }
+}

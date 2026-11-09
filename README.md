@@ -12,10 +12,12 @@ Phần mềm quản lý salon chạy trên trình duyệt (điện thoại + má
 | **Ảnh trước/sau** | Chụp từ điện thoại, tự nén ~1600px, gắn vào từng lượt làm. Chỉ người đã đăng nhập mới xem được. |
 | **Lịch hẹn** | Theo ngày / theo thợ, cảnh báo trùng giờ, trạng thái Đã đặt → Đã đến → Hoàn thành / Hủy / Không đến, bấm "Thu tiền" từ lịch. |
 | **Lượt làm (thu tiền)** | Nhiều dịch vụ/lượt, thợ chính + người phụ, phụ thu, giảm giá (bắt buộc lý do), trừ thẻ trả trước, hình thức thanh toán, tip. |
+| **Hóa đơn** | Lưu lượt xong tự hiện hóa đơn: in máy in nhiệt 80mm, hoặc **Copy gửi Zalo**. Ghi số dư thẻ còn lại. Địa chỉ, SĐT, số tài khoản, lời cảm ơn chỉnh trong Cài đặt › Tham số. |
+| **Hủy lịch / không đến** | Bắt buộc chọn lý do; ghi ai hủy, lúc nào. Hiện ở Nhắc nhở › *Khách hủy / không đến* (14 ngày) kèm tin nhắn mẫu mời đặt lại, bấm "Đã mời" khi xong. |
 | **Doanh số & hoa hồng** | Theo nhân viên × nhóm (Cắt / Gội & chăm sóc / Hóa chất / Bán sản phẩm). HH theo % từng dịch vụ, % người phụ, % bán thẻ mới/mua lại. Tách **doanh số dịch vụ** và **tiền vào thực tế** (tiền bán thẻ tính khi bán, doanh số tính khi dùng — không cộng 2 lần). |
 | **Thẻ trả trước** | Bạc / Vàng / Kim cương / Black (theo file Excel), số dư, trừ dần, hạn dùng, gia hạn, điều chỉnh có lý do, hoàn thẻ thu hồi hoa hồng. |
 | **Nhắc nhở** | Sinh nhật 7 ngày tới, thẻ sắp hết hạn / số dư thấp, khách quá 30 ngày chưa quay lại, gọi xác nhận lịch ngày mai. Nút gọi điện / Zalo, đánh dấu "Đã liên hệ". |
-| **Excel** | Nhập trực tiếp 2 file đang dùng (*Salon Nếp – Nhật ký*, *CRM Nếp Hair*) và file xuất từ phần mềm. Xem trước trước khi nhập; nhập lại không bị nhân đôi. Xuất 5 tab: Khách hàng, Lượt làm, Lịch hẹn, Thẻ, Dịch vụ. |
+| **Excel** | Nhập trực tiếp các file đang dùng (*Salon Nếp – Nhật ký*, *CRM Nếp Hair*, *Sổ đặt lịch* tab Tháng 10/11/12 + Quản lý Thẻ 1Tr) và file xuất từ phần mềm. Xem trước trước khi nhập; nhập lại không bị nhân đôi. Xuất 5 tab: Khách hàng, Lượt làm, Lịch hẹn, Thẻ, Dịch vụ. |
 | **Kiểm soát** | Nhật ký thao tác (ai sửa/xóa lượt thu tiền, chỉnh thẻ, xuất dữ liệu). Sao lưu tự động 6 giờ/lần, giữ 30 bản. |
 
 ## Chạy thử trên máy
