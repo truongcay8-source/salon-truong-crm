@@ -96,6 +96,7 @@ async function logout() { await api('/logout', { method: 'POST' }).catch(() => {
 const PAGES = [
   ['dashboard', 'Tổng quan', '🏠', () => true],
   ['appointments', 'Lịch hẹn', '📅', () => true],
+  ['chat', 'Chat nội bộ', '💬', () => true],
   ['customers', 'Khách hàng', '👤', () => true],
   ['visits', 'Lượt làm', '✂️', () => true],
   ['reminders', 'Nhắc nhở', '🔔', () => true],
@@ -108,7 +109,7 @@ const PAGES = [
   ['excel', 'Nhập / Xuất Excel', '📥', isMgr],
   ['settings', 'Cài đặt', '⚙️', () => true],
 ];
-const MOBILE = ['dashboard', 'appointments', 'customers', 'visits', 'reminders', 'more'];
+const MOBILE = ['dashboard', 'appointments', 'chat', 'customers', 'visits', 'more'];
 let reminderCount = 0;
 
 async function boot() {
@@ -126,21 +127,42 @@ function shell() {
   $('#root').innerHTML = `<div class="app">
     <aside class="side"><div class="brand"><div class="logo">N</div><div><b>${esc(S.settings.salon_name)}</b><div class="small muted">CRM</div></div></div>
       <button class="search-btn" data-search>🔍 Tìm kiếm… <kbd>/</kbd></button>
-      ${pages.map((p) => `<button class="nav-btn" data-page="${p[0]}"><span>${p[2]}</span>${p[1]}${p[0] === 'reminders' ? '<span class="badge count hidden" data-rc></span>' : ''}</button>`).join('')}
+      ${pages.map((p) => `<button class="nav-btn" data-page="${p[0]}"><span>${p[2]}</span>${p[1]}${p[0] === 'reminders' ? '<span class="badge count hidden" data-rc></span>' : ''}${p[0] === 'chat' ? '<span class="badge count hidden" data-cc></span>' : ''}</button>`).join('')}
       <div class="me"><b>${esc(S.me.full_name)}</b> · ${ROLE[S.me.role]}<div class="row" style="margin-top:8px"><button class="btn sm" id="pwBtn">Đổi mật khẩu</button><button class="btn sm" id="outBtn">Đăng xuất</button></div></div>
     </aside>
     <main class="main" id="main"></main>
     <nav class="bottom-nav">${MOBILE.map((k) => {
       if (k === 'more') return '<button data-page="more"><span class="ico">☰</span>Thêm</button>';
       const p = PAGES.find((x) => x[0] === k);
-      const short = { customers: 'Khách', appointments: 'Lịch hẹn' }[k] || p[1];
-      return `<button data-page="${k}"><span class="ico">${p[2]}</span>${short}${k === 'reminders' ? '<span class="badge count hidden" data-rc></span>' : ''}</button>`;
+      const short = { customers: 'Khách', appointments: 'Lịch hẹn', chat: 'Chat' }[k] || p[1];
+      return `<button data-page="${k}"><span class="ico">${p[2]}</span>${short}${k === 'reminders' ? '<span class="badge count hidden" data-rc></span>' : ''}${k === 'chat' ? '<span class="badge count hidden" data-cc></span>' : ''}</button>`;
     }).join('')}</nav><button class="search-fab" data-search aria-label="Tìm kiếm">🔍</button></div>`;
   $$('[data-page]').forEach((b) => (b.onclick = () => go(b.dataset.page)));
   $$('[data-search]').forEach((b) => (b.onclick = searchBox));
   $('#pwBtn').onclick = () => renderChangePw(false);
   $('#outBtn').onclick = logout;
   refreshReminderBadge();
+  startChatPoll();
+}
+// ---------- Chat nội bộ ----------
+let chatTimer = null;
+async function refreshChatBadge() {
+  try { const r = await api('/chat/unread'); $$('[data-cc]').forEach((b) => { b.textContent = r.unread; b.classList.toggle('hidden', !r.unread || S.page === 'chat'); }); } catch { /* bỏ qua */ }
+}
+function startChatPoll() {
+  clearInterval(chatTimer);
+  refreshChatBadge();
+  chatTimer = setInterval(() => { if (document.hidden || !S.me) return; if (S.page === 'chat' && S.chatPull) S.chatPull(); else refreshChatBadge(); }, 15000);
+}
+function chatDraftCard(m) {
+  if (m.appointment_id) return `<div class="chat-card ok">✅ Đã tạo lịch <a href="#appointments?date=${m.appt_date}">${dmy(m.appt_date)} ${esc(m.appt_time || '')}</a>${m.linked_by_name ? ' · ' + esc(m.linked_by_name) : ''}${m.appt_status && m.appt_status !== 'booked' ? ` · ${APPT[m.appt_status] ? APPT[m.appt_status][0] : ''}` : ''}</div>`;
+  const d = m.draft; if (!d) return '';
+  const f = (l, v, warn) => `<span class="cf ${v ? '' : 'miss'}">${l}: <b>${v || 'chưa rõ'}</b>${warn ? ` <span class="badge warn">${warn}</span>` : ''}</span>`;
+  return `<div class="chat-card"><div class="small"><b>📅 Tạo lịch hẹn từ tin này?</b></div><div class="cf-wrap">
+    ${f('Khách', d.name ? esc(d.name) + (d.customer_id ? ' <span class="badge ok">khách cũ</span>' : ' <span class="badge">khách mới</span>') : '')}
+    ${d.phone ? f('SĐT', esc(d.phone)) : ''}${f('Ngày', d.date ? dmy(d.date) : '', d.date_guess ? 'đoán hôm nay' : '')}${f('Giờ', esc(d.time || ''))}
+    ${f('Dịch vụ', esc(d.service || ''))}${f('Thợ', d.staff_id ? esc(staffName(d.staff_id)) : '', d.staff_from_profile ? 'thợ phụ trách' : '')}</div>
+    <div class="row" style="margin-top:6px"><button class="btn sm primary" data-mk="${m.id}" ${d.name || d.customer_id ? '' : 'disabled title="Chưa rõ tên khách, bấm Sửa"'}>✓ Tạo lịch</button><button class="btn sm" data-ed="${m.id}">Sửa rồi tạo</button><button class="btn sm" data-dm="${m.id}">Không phải lịch</button></div></div>`;
 }
 // ---------- Tìm kiếm nhanh ----------
 document.addEventListener('keydown', (e) => {
@@ -536,7 +558,7 @@ const matOptions = (kind, sel) => {
   return groups.map((g) => `<optgroup label="${esc(g)}">${list.filter((m) => (m.grp || 'Khác') === g).map((m) => `<option value="${m.id}" ${m.id === sel ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</optgroup>`).join('');
 };
 const SVC_MIN = { 'Cắt': 45, 'Gội & chăm sóc': 30, 'Hóa chất': 120, 'Bán sản phẩm': 0 }; // thời lượng gợi ý
-function apptForm(a = {}, after) {
+function apptForm(a = {}, after, onSaved) {
   const isEdit = !!a.id;
   openModal(isEdit ? 'Sửa lịch hẹn' : 'Đặt lịch hẹn', `<form id="af"><div class="form-grid">
     <div class="full"><label>Khách hàng có sẵn</label>${customerPicker('customer_id', a.customer_id ? { id: a.customer_id, code: a.customer_code || '', name: a.name } : null)}</div>
@@ -585,7 +607,9 @@ function apptForm(a = {}, after) {
     const body = body0();
     if (pay && body.status === 'done') body.status = 'arrived';
     const send = (force) => api(isEdit ? '/appointments/' + a.id : '/appointments', { method: isEdit ? 'PUT' : 'POST', body: { ...body, force } });
-    try { await send(false); } catch (er) { if (er.data && er.data.clash && confirm(er.message)) await send(true); else throw er; }
+    let saved;
+    try { saved = await send(false); } catch (er) { if (er.data && er.data.clash && confirm(er.message)) saved = await send(true); else throw er; }
+    if (onSaved && saved && saved.id) await onSaved(saved.id);
     closeModal(); refreshReminderBadge();
     if (!pay) { toast('Đã lưu lịch hẹn'); return (after || route)(); }
     const fresh = (await api(`/appointments?from=${body.date}&to=${body.date}`)).find((x) => x.id === a.id) || { ...a, ...body };
@@ -594,6 +618,55 @@ function apptForm(a = {}, after) {
   const pb = $('#afPay');
   if (pb) pb.onclick = () => guard(pb, () => saveAppt(true));
 }
+
+VIEWS.chat = async (main) => {
+  let msgs = await api('/chat');
+  main.innerHTML = header('Chat nội bộ', 'Gõ “chị Lan 0912… mai 9h nhuộm với Dương” → bấm ✓ là có lịch hẹn') +
+    `<div class="card chat-box"><div id="chatList" class="chat-list"></div>
+    <form id="chatF" class="chat-input"><textarea name="body" rows="1" placeholder="Nhập tin nhắn…" maxlength="2000"></textarea><button class="btn primary">Gửi</button></form>
+    <div class="small muted" style="margin-top:6px">🔒 Tin nhắn lưu trên máy chủ riêng của tiệm, tự xóa sau ${esc(String(S.settings.chat_keep_days || 90))} ngày. Không gửi mật khẩu, số tài khoản, lương thưởng vào đây.</div></div>`;
+  const list = $('#chatList');
+  const timeOf = (c) => { const d = c.slice(0, 10); return (d === S.today ? '' : dmy(d).slice(0, 5) + ' ') + c.slice(11, 16); };
+  const draw = (keepPos) => {
+    const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+    list.innerHTML = msgs.length ? msgs.map((m, i) => { const mine = m.user_id === S.me.id; const same = i && msgs[i - 1].user_id === m.user_id;
+      return `<div class="chat-msg ${mine ? 'mine' : ''}">${same ? '' : `<div class="small muted">${mine ? 'Bạn' : `<b>${esc(m.user_name)}</b>`}</div>`}
+        <div class="bubble">${esc(m.body).replace(/\n/g, '<br>')}<span class="t">${timeOf(m.created_at)}${mine || isMgr() ? ` <a href="#" data-del="${m.id}" title="Xóa">✕</a>` : ''}</span></div>${chatDraftCard(m)}</div>`; }).join('')
+      : '<div class="empty">Chưa có tin nhắn. Gõ thử “chị Lan 0912345678 mai 9h nhuộm với Dương”.</div>';
+    if (!keepPos || atBottom) list.scrollTop = list.scrollHeight;
+    bind();
+  };
+  const upd = (m) => { const i = msgs.findIndex((x) => x.id === m.id); if (i >= 0) msgs[i] = m; draw(true); };
+  const link = async (m, id) => upd(await api(`/chat/${m.id}/link`, { method: 'POST', body: { appointment_id: id } }));
+  const bind = () => {
+    $$('[data-mk]', list).forEach((b) => (b.onclick = () => guard(b, async () => {
+      const m = msgs.find((x) => x.id === Number(b.dataset.mk)); const d = m.draft;
+      const body = { customer_id: d.customer_id || '', guest_name: d.customer_id ? '' : d.name, guest_phone: d.customer_id ? '' : d.phone || '', date: d.date, time: d.time, staff_id: d.staff_id || '', service: d.service || '', note: 'Từ chat: ' + m.body.slice(0, 200) };
+      const send = (force) => api('/appointments', { method: 'POST', body: { ...body, force } });
+      let r; try { r = await send(false); } catch (er) { if (er.data && er.data.clash && confirm(er.message)) r = await send(true); else throw er; }
+      await link(m, r.id); toast(`Đã tạo lịch ${dmy(d.date)} ${d.time}`); refreshReminderBadge();
+    })));
+    $$('[data-ed]', list).forEach((b) => (b.onclick = () => {
+      const m = msgs.find((x) => x.id === Number(b.dataset.ed)); const d = m.draft;
+      apptForm({ customer_id: d.customer_id, name: d.name, guest_name: d.name, guest_phone: d.phone, phone: d.phone, date: d.date, time: d.time, staff_id: d.staff_id, service: d.service, note: 'Từ chat: ' + m.body.slice(0, 200) },
+        () => VIEWS.chat(main), async (id) => { await api(`/chat/${m.id}/link`, { method: 'POST', body: { appointment_id: id } }); });
+    }));
+    $$('[data-dm]', list).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/chat/${b.dataset.dm}/dismiss`, { method: 'POST', body: {} }); const m = msgs.find((x) => x.id === Number(b.dataset.dm)); m.draft = null; draw(true); })));
+    $$('[data-del]', list).forEach((a) => (a.onclick = async (e) => { e.preventDefault(); if (!confirm('Xóa hẳn tin nhắn này?')) return; await api('/chat/' + a.dataset.del, { method: 'DELETE' }); msgs = msgs.filter((x) => x.id !== Number(a.dataset.del)); draw(true); }));
+  };
+  S.chatPull = async () => {
+    if (!document.body.contains(list)) { S.chatPull = null; return; }
+    const last = msgs.length ? msgs[msgs.length - 1].id : 0;
+    const fresh = await api('/chat?after=' + last);
+    if (fresh.length) { msgs = msgs.concat(fresh.filter((m) => !msgs.some((x) => x.id === m.id))); draw(true); }
+  };
+  const f = $('#chatF'), ta = f.body;
+  ta.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); f.requestSubmit(); } };
+  ta.oninput = () => { ta.style.height = 'auto'; ta.style.height = Math.min(160, ta.scrollHeight) + 'px'; };
+  f.onsubmit = (e) => { e.preventDefault(); const v = ta.value.trim(); if (!v) return;
+    guard(f.querySelector('button'), async () => { const m = await api('/chat', { method: 'POST', body: { body: v } }); ta.value = ''; ta.style.height = 'auto'; msgs.push(m); draw(); if (m.draft) toast('App nhận ra lịch hẹn, kiểm tra rồi bấm ✓ Tạo lịch'); }); };
+  draw(); refreshChatBadge(); ta.focus();
+};
 
 // ---------- Khách hàng ----------
 VIEWS.customers = async (main) => {

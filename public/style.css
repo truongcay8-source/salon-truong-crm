@@ -209,3 +209,19 @@ tfoot td { font-weight: 700; }
 .formula-cell { max-width: 220px; color: var(--muted); }
 .aud-old { color: var(--bad, #b42318); text-decoration: line-through; opacity: .8; }
 .aud-new { color: var(--ok, #067647); font-weight: 600; }
+/* Chat nội bộ */
+.chat-box { display: flex; flex-direction: column; height: calc(100vh - 170px); min-height: 420px; }
+.chat-list { flex: 1; overflow-y: auto; padding: 4px 2px 10px; display: flex; flex-direction: column; gap: 6px; }
+.chat-msg { max-width: 78%; align-self: flex-start; }
+.chat-msg.mine { align-self: flex-end; text-align: right; }
+.bubble { display: inline-block; text-align: left; background: var(--surface-2); border-radius: 14px 14px 14px 4px; padding: 8px 12px; white-space: pre-wrap; word-break: break-word; }
+.chat-msg.mine .bubble { background: var(--brand-soft); border-radius: 14px 14px 4px 14px; }
+.bubble .t { font-size: 11px; color: var(--muted); margin-left: 8px; white-space: nowrap; }
+.bubble .t a { color: var(--muted); text-decoration: none; }
+.chat-card { text-align: left; margin-top: 4px; border: 1px dashed var(--brand-2); border-radius: 12px; padding: 8px 10px; background: var(--surface); font-size: 14px; }
+.chat-card.ok { border-style: solid; border-color: var(--line); font-size: 13px; }
+.cf-wrap { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; font-size: 13px; }
+.cf.miss b { color: var(--muted); font-weight: 400; font-style: italic; }
+.chat-input { display: flex; gap: 8px; align-items: flex-end; border-top: 1px solid var(--line); padding-top: 10px; }
+.chat-input textarea { flex: 1; resize: none; min-height: 42px; }
+@media (max-width: 760px) { .chat-box { height: calc(100vh - 200px); } .chat-msg { max-width: 92%; } }
