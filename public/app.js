@@ -871,7 +871,7 @@ function visitBlock(v, photos) {
   const ps = photos.filter((p) => p.visit_id === v.id);
   return `<div class="list-item" style="display:block"><div class="row"><b>${dmy(v.date)}${v.time ? ' ' + esc(v.time) : ''}</b>
     <span>${v.items.map((i) => esc(i.name)).join(' + ')}</span><span class="badge brand">${esc(v.main_staff_name || '')}${v.assistant_name ? ' + ' + esc(v.assistant_name) : ''}</span>
-    <span class="spacer"></span>${v.masked ? '' : `<b>${money(v.total)}</b><button class="btn sm" data-rc-id="${v.id}">Hóa đơn</button>`}${v.can_edit ? `<button class="btn sm" data-vedit="${v.id}">Sửa</button>` : ''}</div>
+    <span class="spacer"></span>${v.masked ? '' : `<b>${money(v.total)}</b><button class="btn sm" data-rc-id="${v.id}">Hóa đơn</button>`}${v.can_edit ? `<button class="btn sm" data-vedit="${v.id}">${isMgr() ? 'Sửa' : 'Sửa ghi chú'}</button>` : ''}</div>
     ${v.hair_before ? `<div class="small"><span class="muted">Tóc trước:</span> ${esc(v.hair_before)}</div>` : ''}
     ${v.wish ? `<div class="small"><span class="muted">Mong muốn:</span> ${esc(v.wish)}</div>` : ''}
     ${v.formula ? `<div class="small pre"><span class="muted">Công thức:</span> ${esc(v.formula)}</div>` : ''}
@@ -884,8 +884,23 @@ function visitBlock(v, photos) {
 }
 
 // ---------- Ghi lượt làm (thu tiền) ----------
+// Nhân viên sửa hóa đơn đã hoàn thành: chỉ ghi chú, tiền khóa (quản lý mới sửa được)
+function visitNotesForm(v, after) {
+  openModal('Sửa ghi chú lượt ' + (v.code || ''), `<form id="vn"><div class="small" style="margin-bottom:8px">🔒 Hóa đơn đã hoàn thành: <b>dịch vụ, giá, giảm giá, tip, thanh toán</b> chỉ quản lý sửa được. Cần sửa tiền thì nhắn quản lý.</div>
+    <div class="totals small">${esc((v.items || []).map((i) => i.name).join(' + '))}${v.total != null ? ` · <b>${money(v.total)}</b>` : ''}${v.tip ? ' · tip ' + money(v.tip) : ''}</div>
+    <div class="form-grid" style="margin-top:8px">
+    <div class="full"><label>Tình trạng tóc trước khi làm</label><textarea name="hair_before">${esc(v.hair_before || '')}</textarea></div>
+    <div class="full"><label>Mong muốn của khách</label><input name="wish" value="${esc(v.wish || '')}"></div>
+    <div class="full"><label>Công thức / tỷ lệ pha</label><textarea name="formula">${esc(v.formula || '')}</textarea></div>
+    <div class="full"><label>Kết quả sau làm</label><input name="result" value="${esc(v.result || '')}"></div>
+    <div><label>Hẹn chăm sóc lại</label><input type="date" name="next_visit_date" value="${v.next_visit_date || ''}"></div>
+    <div><label>Ghi chú</label><input name="note" value="${esc(v.note || '')}"></div></div>
+    <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu ghi chú</button></div></form>`);
+  $('#vn').onsubmit = (e) => { e.preventDefault(); guard($('#vn button.primary'), async () => { await api('/visits/' + v.id, { method: 'PUT', body: formData($('#vn')) }); closeModal(); toast('Đã lưu ghi chú'); (after || route)(); }); };
+}
 async function visitForm(v = {}, after) {
   const isEdit = !!v.id;
+  if (isEdit && !isMgr()) return visitNotesForm(v, after);
   const methods = S.settings.payment_methods;
   const svcOpts = (sel) => `<option value="">— Dịch vụ —</option>` + S.groups.map((g) => `<optgroup label="${esc(g)}">${S.services.filter((s) => s.grp === g && (s.active || s.id === sel))
     .map((s) => `<option value="${s.id}" data-price="${s.price}" ${s.id === sel ? 'selected' : ''}>${esc(s.name)}${s.price ? ' · ' + (s.price / 1000) + 'k' : ''}</option>`).join('')}</optgroup>`).join('')
@@ -1108,7 +1123,7 @@ VIEWS.visits = async (main) => {
     <tbody>${rows.map((v) => `<tr><td>${dmy(v.date).slice(0, 5)} ${esc(v.time || '')}</td><td><a href="#customer?id=${v.customer_id}">${esc(v.customer_name)}</a></td>
       <td>${v.items.map((i) => esc(i.name)).join(' + ')}</td><td>${esc(v.main_staff_name)}${v.assistant_name ? ' <span class="muted small">+' + esc(v.assistant_name) + '</span>' : ''}</td>
       <td class="num">${money(v.total)}</td><td class="num">${v.card_paid ? money(v.card_paid) : ''}</td><td class="num">${money(v.cash_paid)}</td><td class="small">${esc(v.payment_method || '')}</td><td class="num">${v.tip ? money(v.tip) : ''}</td>
-      <td class="nowrap">${v.masked ? '' : `<button class="btn sm" data-rc-id="${v.id}">Hóa đơn</button>`}${v.can_edit ? `<button class="btn sm" data-ev="${v.id}">Sửa</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="empty">Chưa có lượt nào</td></tr>'}</tbody>
+      <td class="nowrap">${v.masked ? '' : `<button class="btn sm" data-rc-id="${v.id}">Hóa đơn</button>`}${v.can_edit ? `<button class="btn sm" data-ev="${v.id}">${isMgr() ? 'Sửa' : 'Ghi chú'}</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="empty">Chưa có lượt nào</td></tr>'}</tbody>
     ${rows.length ? `<tfoot><tr><td colspan="4">${rows.length} lượt${rows.some((r) => r.masked) ? ' <span class="muted small">(chỉ cộng lượt của bạn)</span>' : ''}</td><td class="num">${money(sum.total)}</td><td class="num">${money(sum.card)}</td><td class="num">${money(sum.cash)}</td><td></td><td class="num">${money(sum.tip)}</td><td></td></tr></tfoot>` : ''}
     </table></div></div>`;
   const set = (p) => go('visits', { from, to, ...(staffId ? { staff: staffId } : {}), ...p });
@@ -1712,7 +1727,7 @@ VIEWS.settings = async (main) => {
       create_user: 'Tạo tài khoản', update_user: 'Sửa tài khoản', update_settings: 'Sửa tham số', create_service: 'Thêm dịch vụ', update_service: 'Sửa dịch vụ', backup: 'Sao lưu', download_backup: 'Tải bản sao lưu',
       create_off: 'Xin/ghi nghỉ', decide_off: 'Duyệt nghỉ', delete_off: 'Xóa đơn nghỉ', manual_attendance: 'Chấm công tay', delete_attendance: 'Xóa chấm công',
       stock_in: 'Nhập kho', stock_adjust: 'Điều chỉnh kho', stock_count: 'Kiểm kho', stock_ordered: 'Báo đã gọi hàng', stock_unordered: 'Bỏ báo gọi hàng', stock_perm: 'Phân quyền kho',
-      transfer_customers: 'Bàn giao khách', tip_paid: 'Ghi trả tip', expense_create: 'Ghi khoản chi', petty_in: 'Nạp quỹ', expense_approved: 'Duyệt chi', expense_rejected: 'KHÔNG duyệt chi', expense_pending: 'Đưa chi về chờ duyệt', expense_delete: 'XÓA khoản chi', expense_refunded: 'Hoàn quỹ', petty_target: 'Đổi mức quỹ', chat_to_appointment: 'Tạo lịch từ chat', delete_chat: 'Xóa tin chat', set_tip_pool: 'Sửa nhóm chia tip', create_card_type: 'Thêm gói thẻ', update_card_type: 'Sửa gói thẻ' };
+      transfer_customers: 'Bàn giao khách', update_visit_notes: 'Sửa ghi chú lượt', tip_paid: 'Ghi trả tip', expense_create: 'Ghi khoản chi', petty_in: 'Nạp quỹ', expense_approved: 'Duyệt chi', expense_rejected: 'KHÔNG duyệt chi', expense_pending: 'Đưa chi về chờ duyệt', expense_delete: 'XÓA khoản chi', expense_refunded: 'Hoàn quỹ', petty_target: 'Đổi mức quỹ', chat_to_appointment: 'Tạo lịch từ chat', delete_chat: 'Xóa tin chat', set_tip_pool: 'Sửa nhóm chia tip', create_card_type: 'Thêm gói thẻ', update_card_type: 'Sửa gói thẻ' };
     const hot = ['update_visit', 'delete_visit', 'adjust_card', 'delete_customer', 'export_excel', 'update_card', 'stock_adjust', 'delete_attendance', 'expense_delete', 'expense_rejected'];
     const LB = { date: 'Ngày', time: 'Giờ', customer_id: 'Khách', main_staff_id: 'Thợ chính', assistant_id: 'Người phụ', staff_id: 'Thợ', surcharge: 'Phụ thu', discount: 'Giảm giá', discount_reason: 'Lý do giảm',
       total: 'Tổng tiền', card_paid: 'Trừ thẻ', cash_paid: 'Tiền thu', payment_method: 'Hình thức TT', tip: 'Tip', formula: 'Công thức', result: 'Kết quả', note: 'Ghi chú', services: 'Dịch vụ', name: 'Tên', phone: 'SĐT',

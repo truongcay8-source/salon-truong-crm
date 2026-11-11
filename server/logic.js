@@ -76,9 +76,22 @@ function canEditVisit(user, v) {
   return (v.created_by === user.id || v.main_staff_id === user.id) && v.date === today();
 }
 
+// Nhân viên sửa hóa đơn đã hoàn thành: chỉ phần ghi chú (tình trạng tóc, mong muốn, công thức, kết quả, hẹn lại, ghi chú)
+const NOTE_FIELDS = ['hair_before', 'wish', 'formula', 'result', 'note', 'next_visit_date'];
+function updateVisitNotes(input, user, existing) {
+  if (!canEditVisit(user, existing)) throw new HttpError(403, 'Nhân viên chỉ sửa được ghi chú lượt của mình trong ngày. Nhờ quản lý sửa.');
+  const row = {};
+  for (const k of NOTE_FIELDS) row[k] = k === 'next_visit_date' ? (isDate(input[k]) ? input[k] : null) : str(input[k]);
+  db.prepare(`UPDATE visits SET ${NOTE_FIELDS.map((k) => k + '=?').join(',')}, updated_at=? WHERE id=?`).run(...NOTE_FIELDS.map((k) => row[k]), new Date().toISOString(), existing.id);
+  if (row.formula && row.formula !== existing.formula) db.prepare('UPDATE customers SET formula=?, formula_at=?, formula_by=? WHERE id=? AND (formula_at IS NULL OR formula_at<=?)').run(row.formula, existing.date, existing.main_staff_id, existing.customer_id, existing.date);
+  audit(user.id, 'update_visit_notes', 'visit', existing.id, { code: existing.code, changes: require('./db').diffObj(existing, row, NOTE_FIELDS) });
+}
+
 function saveVisit(input, user, existing, opts = {}) {
   const isNew = !existing;
   if (!isNew && !canEditVisit(user, existing)) throw new HttpError(403, 'Nhân viên chỉ sửa được lượt của mình trong ngày. Nhờ quản lý sửa.');
+  // Hóa đơn đã hoàn thành: chỉ quản lý trở lên sửa tiền (dịch vụ, giá, giảm giá, tip, thẻ, hình thức TT)
+  if (!isNew && user.role === 'staff') throw new HttpError(403, 'Hóa đơn đã hoàn thành, chỉ quản lý sửa được tiền. Nhân viên chỉ sửa ghi chú.');
   const date = isDate(input.date) ? input.date : today();
   if (user.role === 'staff' && date !== today()) throw new HttpError(403, 'Nhân viên chỉ ghi lượt làm của ngày hôm nay');
   let customerId = int(input.customer_id) || null;
@@ -410,6 +423,6 @@ function staffCustomerReport(from, to) {
 module.exports = {
   staffCustomerReport,
   HttpError, bad, int, str, today, addDays, addMonths, isDate, normPhone, localDate,
-  cardBalance, cardRow, sellCard, saveVisit, deleteVisit, getVisit, maskVisitMoney, canEditVisit,
+  cardBalance, cardRow, sellCard, saveVisit, updateVisitNotes, deleteVisit, getVisit, maskVisitMoney, canEditVisit,
   salesReport, reminders, nextBirthday,
 };

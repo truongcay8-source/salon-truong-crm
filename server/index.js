@@ -477,7 +477,8 @@ app.post('/api/visits', (req, res) => {
 app.put('/api/visits/:id', (req, res) => {
   const v = db.prepare("SELECT * FROM visits WHERE id=? AND status='done'").get(int(req.params.id));
   if (!v) throw new HttpError(404, 'Không tìm thấy lượt làm');
-  L.saveVisit(req.body, req.user, v);
+  if (req.user.role === 'staff') L.updateVisitNotes(req.body, req.user, v); // nhân viên: chỉ ghi chú, không sửa tiền
+  else L.saveVisit(req.body, req.user, v);
   res.json(L.getVisit(v.id));
 });
 app.delete('/api/visits/:id', MGR, (req, res) => {
