@@ -1315,10 +1315,10 @@ async function suggestRenewal(f, cid) {
   const seller = Number(f.querySelector('[name=seller_id]').value || S.me.id);
   const k = f.querySelector('[name=consultant_id]');
   if (old.length && c.staff_id && c.staff_id !== seller && !k.value) {
-    k.value = c.staff_id; f.querySelector('[name=seller_share]').value = 50;
-    parts.push(`Thợ phụ trách khách là <b>${esc(c.staff_name || staffName(c.staff_id))}</b> → gợi ý làm người tư vấn, chia 50/50 (sửa được).`);
+    k.value = c.staff_id; f.querySelector('[name=seller_share]').value = 0;
+    parts.push(`Thợ phụ trách khách là <b>${esc(c.staff_name || staffName(c.staff_id))}</b> → theo quy định, <b>hoa hồng mua lại tính 100% cho thợ phụ trách</b> (sửa được nếu có người khác cùng tư vấn).`);
   } else if (old.length && c.staff_id === seller) parts.push('Người bán là thợ phụ trách khách → nhận đủ hoa hồng.');
-  if (c.staff_id && c.staff_id !== seller) parts.push(`<button type="button" class="btn sm" id="selfTop">🙋 Khách tự nạp, không ai tư vấn → tính 100% cho ${esc(c.staff_name || staffName(c.staff_id))}</button>`);
+  if (c.staff_id && c.staff_id !== seller && !old.length) parts.push(`<button type="button" class="btn sm" id="selfTop">🙋 Tính 100% cho thợ phụ trách ${esc(c.staff_name || staffName(c.staff_id))}</button>`);
   hint.innerHTML = parts.join('<br>');
   const st = hint.querySelector('#selfTop');
   if (st) st.onclick = () => { k.value = c.staff_id; f.querySelector('[name=seller_share]').value = 0; f._spShow && f._spShow(); };
