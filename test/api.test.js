@@ -113,6 +113,12 @@ test('luồng chính và phân quyền', async () => {
   r = await thu.get('/visits/' + ids.visit);
   assert.equal(r.data.total, null); assert.equal(r.data.masked, true); assert.equal(r.data.formula, '5.14 60ml + oxi 30');
   assert.equal((await thu.put('/visits/' + ids.visit, { customer_id: ids.lan, main_staff_id: staff['Chị Thu'], items: [{ service_id: nhuom.id }] })).status, 403);
+  // Hóa đơn đã hoàn thành: thợ chỉ sửa ghi chú, không đổi được tiền/tip/giá
+  const beforeV = (await mgr.get('/visits/' + ids.visit)).data;
+  r = await duong.put('/visits/' + ids.visit, { ...beforeV, tip: 999000, discount: 500000, discount_reason: 'x', items: [{ service_id: nhuom.id, price: 1 }], formula: beforeV.formula, note: 'khách hài lòng' });
+  assert.equal(r.status, 200);
+  const afterV = (await mgr.get('/visits/' + ids.visit)).data;
+  assert.equal(afterV.tip, beforeV.tip); assert.equal(afterV.total, beforeV.total); assert.equal(afterV.discount, beforeV.discount); assert.equal(afterV.note, 'khách hài lòng');
   assert.equal((await thu.del('/visits/' + ids.visit, { reason: 'x' })).status, 403);
 
   // Doanh số: nhân viên chỉ thấy dòng của mình, không có tổng tiệm
