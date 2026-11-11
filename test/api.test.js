@@ -243,6 +243,25 @@ test('luồng chính và phân quyền', async () => {
   await mgr.del('/visits/' + vid, { reason: 'test' });
   assert.equal((await mgr.get('/materials')).data.find((m) => m.id === color).stock, 20);
 
+  // Quyền kho: Thu + Dương xem tồn (không giá), Dương kiểm kho, Thu được báo hàng hết; người khác không xem được
+  assert.equal((await thu.get('/me')).data.user.stock_view, true); assert.equal((await thu.get('/me')).data.user.stock_count, false);
+  assert.equal((await duong.get('/me')).data.user.stock_count, true);
+  assert.equal((await nv6.get('/stock/levels')).status, 403);
+  let lv = (await thu.get('/stock/levels')).data;
+  assert.equal(lv.find((m) => m.id === color).stock, 20); assert.ok(lv.every((m) => m.avg_cost === undefined && m.unit_cost === undefined));
+  assert.equal((await thu.post('/stock/count', { lines: [{ material_id: color, counted: 18 }] })).status, 403, 'Thu không kiểm kho');
+  r = await duong.post('/stock/count', { lines: [{ material_id: color, counted: 18 }, { material_id: oxy, counted: '' }], note: 'test' });
+  assert.equal(r.status, 200); assert.equal(r.data.counted, 1); assert.equal(r.data.diffs[0].diff, -2);
+  assert.equal((await mgr.get('/materials')).data.find((m) => m.id === color).stock, 18);
+  await thu.put(`/stock/${color}/min`, { min_qty: 18 });
+  let rem = (await thu.get('/reminders')).data;
+  assert.ok(rem.stock.some((m) => m.id === color && m.status === 'low')); assert.ok(rem.counts.stock >= 1);
+  assert.equal((await nv6.get('/reminders')).data.stock, undefined, 'người không có quyền kho không nhận nhắc hàng');
+  await thu.post(`/stock/${color}/ordered`, {});
+  rem = (await thu.get('/reminders')).data;
+  assert.ok(rem.stock.find((m) => m.id === color).ordered_at);
+  await mgr.put(`/stock/${color}/min`, { min_qty: '' });
+
   // Thợ phụ trách + công thức khách: lượt có công thức → lưu vào hồ sơ; lọc "khách của tôi"; nhân viên không đổi được thợ phụ trách
   r = await mgr.post('/visits', { customer_id: huong, date: d3, time: '16:00', main_staff_id: staff['Chị Thu'], payment_method: 'Tiền mặt', items: [{ service_id: dye.id }], formula: 'Milbon 7NB 30g + oxy 6% 1:1,5' });
   assert.equal(r.status, 200);
@@ -256,6 +275,24 @@ test('luồng chính và phân quyền', async () => {
   await mgr.put('/customers/' + huong, { name: 'C Hương', phone: '0983059659', staff_id: staff['Trường'] });
   br = (await thu.get(`/customers/${huong}/brief`)).data;
   assert.equal(br.staff_id, staff['Trường']); assert.equal(br.formula, 'Milbon 7NB 40g', 'không gửi công thức → giữ nguyên');
+
+  // Chia tip: tip ngày chia đều cho nhóm; ai nghỉ cả ngày (off đã duyệt) không được chia ngày đó
+  const tipDay = '2026-03-10', tipDay2 = '2026-03-11';
+  const pool = [staff['Chị Thu'], staff['Trường'], staff['Thoại'], staff['Dương']];
+  assert.equal((await thu.put('/tips/pool', { user_ids: pool })).status, 403);
+  assert.equal((await mgr.put('/tips/pool', { user_ids: pool })).status, 200);
+  await mgr.post('/visits', { customer_id: huong, date: tipDay, time: '10:00', main_staff_id: staff['Trường'], payment_method: 'Tiền mặt', items: [{ service_id: cutM.id }], tip: 200000 });
+  await mgr.post('/visits', { customer_id: huong, date: tipDay2, time: '10:00', main_staff_id: staff['Trường'], payment_method: 'Tiền mặt', items: [{ service_id: cutM.id }], tip: 90000 });
+  await mgr.post('/offs', { user_id: staff['Thoại'], date: tipDay2, reason: 'Nghỉ' });
+  await mgr.post('/offs', { user_id: staff['Dương'], date: tipDay2, from_time: '09:00', to_time: '11:00' });
+  let tp = (await thu.get('/tips?month=2026-03')).data;
+  assert.equal(tp.total_tip, 290000); assert.equal(tp.pay_date, '2026-04-05');
+  const sh = (n) => tp.shares.find((x) => x.user_id === staff[n]).amount;
+  assert.equal(sh('Thoại'), 50000, 'nghỉ ngày 11 → chỉ nhận 200k/4');
+  assert.equal(sh('Trường'), 80000); assert.equal(sh('Dương'), 80000, 'nghỉ vài giờ vẫn chia');
+  assert.equal((await mgr.post('/tips/paid', { month: '2026-03', user_id: staff['Thoại'] })).status, 200);
+  tp = (await thu.get('/tips?month=2026-03')).data;
+  assert.equal(tp.shares.find((x) => x.user_id === staff['Thoại']).paid_amount, 50000);
 
   // Báo cáo khách phụ trách theo thợ: quản lý thấy tiền, nhân viên chỉ thấy dòng của mình, không có tiền
   let sc = (await mgr.get(`/reports/staff-customers?from=${d3}&to=${d3}`)).data;
@@ -275,6 +312,14 @@ test('luồng chính và phân quyền', async () => {
   r = await mgr.post('/customers/transfer', { from_staff_id: staff['Dương'], to_staff_id: staff['Trường'], customer_ids: [huong] });
   assert.equal(r.data.count, 1, 'chuyển từng khách được chọn');
   assert.equal((await thu.get(`/customers/${huong}/brief`)).data.staff_id, staff['Trường']);
+
+  // Lịch sử chỉnh sửa: chỉ chủ xem; ghi rõ ô nào đổi, cũ → mới
+  assert.equal((await mgr.get('/audit')).status, 403);
+  const au = (await owner.get(`/audit?only=edit&user_id=${staff['Chị Thu']}`)).data;
+  const ed = au.find((x) => x.action === 'update_customer' && x.entity_id === huong);
+  assert.ok(ed && ed.entity_label === 'C Hương');
+  assert.deepEqual(JSON.parse(ed.detail).changes.formula, ['Milbon 7NB 30g + oxy 6% 1:1,5', 'Milbon 7NB 40g']);
+  assert.ok(au.every((x) => x.user_id === staff['Chị Thu'] && x.action !== 'login'));
 
   // Tìm kiếm nhanh: theo tên, SĐT, mã thẻ
   r = await thu.get('/search?q=Hương');

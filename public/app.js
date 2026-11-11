@@ -101,9 +101,10 @@ const PAGES = [
   ['reminders', 'Nhắc nhở', '🔔', () => true],
   ['cards', 'Thẻ trả trước', '💳', () => true],
   ['sales', 'Doanh số', '📊', () => true],
+  ['tips', 'Chia tip', '💵', () => true],
   ['attendance', 'Chấm công', '🕘', () => true],
   ['offs', 'Lịch off', '🌴', () => true],
-  ['stock', 'Kho & giá cốt', '🧪', isMgr],
+  ['stock', 'Kho hàng', '🧪', () => isMgr() || S.me.stock_view],
   ['excel', 'Nhập / Xuất Excel', '📥', isMgr],
   ['settings', 'Cài đặt', '⚙️', () => true],
 ];
@@ -996,7 +997,7 @@ VIEWS.reminders = async (main) => {
   const keep = (x, appt) => want === undefined || (want === null ? !owner(x) : owner(x) === want || (appt && x.staff_id === want));
   for (const k of ['birthdays', 'cards', 'returns']) r[k] = r[k].filter((x) => keep(x));
   for (const k of ['appointments', 'cancels']) r[k] = r[k].filter((x) => keep(x, true));
-  for (const k of Object.keys(r.counts)) r.counts[k] = r[k].filter((x) => !x.done).length;
+  for (const k of ['birthdays', 'cards', 'returns', 'appointments', 'cancels']) r.counts[k] = r[k].filter((x) => !x.done).length;
   const who = (x) => { const id = owner(x); return id ? ` <span class="badge">${esc(staffName(id))}</span>` : ''; };
   const sec = (key, title, help, rows, line) => `<div class="card"><h3>${title} <span class="badge ${r.counts[key] ? 'bad' : ''}">${r.counts[key]}</span></h3><div class="small muted">${help}</div>
     ${rows.length ? rows.map((x) => `<div class="list-item" style="${x.done ? 'opacity:.5' : ''}"><div style="flex:1;min-width:0">${line(x)}<div class="small">${telLinks(x.phone)}</div></div>
@@ -1018,8 +1019,14 @@ VIEWS.reminders = async (main) => {
         ${a.done ? '<span class="badge ok">Đã mời</span>' : `<button class="btn sm" data-fu="${a.id}">Đã mời</button>`}</div></div>`).join('') : '<div class="empty">Không có</div>'}</div>
     ${sec('birthdays', '🎂 Sinh nhật sắp tới', 'Gửi lời chúc + ưu đãi sinh nhật.', r.birthdays, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b>${who(c)} <span class="badge warn">${c.date === S.today ? 'HÔM NAY' : dmy(c.date).slice(0, 5)}</span>`)}
     ${sec('cards', '💳 Thẻ trả trước', 'Thẻ sắp hết hạn → nhắc khách dùng; hết tiền → mời nạp thêm.', r.cards, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b>${who(c)} <span class="small">${esc(c.card_name)} · còn ${money(c.balance)}</span> <span class="badge warn">${esc(c.reason)}</span>`)}
+    ${r.stock ? `<div class="card"><h3>📦 Hàng hết / sắp hết <span class="badge ${r.counts.stock ? 'bad' : ''}">${r.counts.stock}</span></h3><div class="small muted">Gọi NCC đặt thêm rồi bấm “Đã gọi hàng”. Hàng về nhập kho là tự hết nhắc.</div>
+      ${r.stock.length ? r.stock.map((m) => `<div class="list-item" style="${m.ordered_at ? 'opacity:.55' : ''}"><div style="flex:1;min-width:0"><b>${esc(m.name)}</b> <span class="badge ${STK[m.status][1]}">${STK[m.status][0]}</span>
+        <div class="small muted">Còn ${qtyFmt(m.stock)} ${esc(m.unit || '')}${m.min_qty != null ? ' · mức báo ' + qtyFmt(m.min_qty) : ''}${m.ordered_at ? ' · đã gọi ' + dmy(m.ordered_at.slice(0, 10)) + (m.ordered_by_name ? ' (' + esc(m.ordered_by_name) + ')' : '') : ''}</div></div>
+        ${m.ordered_at ? '<span class="badge ok">Đã gọi</span>' : `<button class="btn sm" data-ord="${m.id}">📞 Đã gọi hàng</button>`}</div>`).join('') : '<div class="empty">Không có</div>'}
+      <div style="margin-top:6px"><a href="#stock?tab=levels&st=need">Xem tồn kho →</a></div></div>` : ''}
     ${sec('returns', '🔁 Khách đến hạn quay lại', 'Đã quá số ngày cài đặt kể từ lần làm gần nhất và chưa có lịch hẹn.', r.returns, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b>${who(c)} <span class="small muted">lần cuối ${dmy(c.last_date)} · ${c.days} ngày · ${c.n} lượt</span>`)}
     </div>`;
+  $$('[data-ord]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/stock/${b.dataset.ord}/ordered`, { method: 'POST', body: {} }); refreshReminderBadge(); VIEWS.reminders(main); })));
   $('#rsf').onchange = (e) => go('reminders', { staff: e.target.value });
   $$('[data-done]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api('/reminders/done', { method: 'POST', body: JSON.parse(b.dataset.done) }); refreshReminderBadge(); VIEWS.reminders(main); })));
   $$('[data-inv]', main).forEach((b) => (b.onclick = () => { const a = r.cancels.find((x) => x.id === Number(b.dataset.inv)); openModal('Mời đặt lại · ' + a.name, msgBox(msgRebook(a), a.phone)); bindMsgBox(); }));
@@ -1120,17 +1127,95 @@ VIEWS.cards = async (main) => {
 };
 
 // ---------- Kho & giá cốt (chỉ Lãnh đạo / Quản lý) ----------
+// Tồn kho cho người kiểm / gọi hàng (không có giá nhập)
+const STK = { out: ['Hết hàng', 'bad'], low: ['Sắp hết', 'warn'], ok: ['Đủ', 'ok'] };
+const qtyFmt = (q) => (Math.round(q * 100) / 100).toLocaleString('vi-VN');
+async function stockLevelsView(main, reload) {
+  const rows = await api('/stock/levels');
+  const kind = S.params.kind || 'all', st = S.params.st || '';
+  const list = rows.filter((m) => (kind === 'all' || m.kind === kind) && (!st || (st === 'need' ? m.status !== 'ok' : m.status === st)));
+  const need = rows.filter((m) => m.status !== 'ok');
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<div class="grid kpis"><div class="kpi"><div class="l">Hết hàng</div><div class="v">${rows.filter((m) => m.status === 'out').length}</div><div class="s">mặt hàng</div></div>
+      <div class="kpi"><div class="l">Sắp hết</div><div class="v">${rows.filter((m) => m.status === 'low').length}</div><div class="s">dưới mức báo</div></div>
+      <div class="kpi"><div class="l">Cần gọi thêm</div><div class="v">${need.filter((m) => !m.ordered_at).length}</div><div class="s">chưa báo NCC</div></div></div>
+    <div class="card"><div class="row">
+      ${[['all', 'Tất cả'], ['service', 'Hóa chất'], ['retail', 'Sản phẩm bán']].map(([k, l]) => `<button class="btn sm ${k === kind ? 'primary' : ''}" data-sk="${k}">${l}</button>`).join('')}
+      <select id="stf" style="width:auto"><option value="">Mọi trạng thái</option><option value="need" ${st === 'need' ? 'selected' : ''}>Hết + sắp hết</option><option value="out" ${st === 'out' ? 'selected' : ''}>Hết hàng</option><option value="low" ${st === 'low' ? 'selected' : ''}>Sắp hết</option></select>
+      <span class="spacer"></span>${S.me.stock_count || isMgr() ? '<button class="btn primary sm" id="cnt">🧮 Kiểm kho / đếm hàng</button>' : ''}${isMgr() ? '<button class="btn sm" id="sperm">Phân quyền kho</button>' : ''}</div></div>
+    <div class="card"><div class="table-wrap"><table><thead><tr><th>Tên</th><th>Nhóm</th><th>ĐVT</th><th class="num">Tồn</th><th class="num">Mức báo hết</th><th>Trạng thái</th><th>Kiểm gần nhất</th><th></th></tr></thead>
+      <tbody>${list.map((m) => `<tr><td><b>${esc(m.name)}</b>${m.size ? ` <span class="small muted">${m.size}${m.size_unit}</span>` : ''}</td><td class="small">${esc(m.grp || '')}</td><td>${esc(m.unit || '')}</td>
+        <td class="num"><b>${qtyFmt(m.stock)}</b></td><td class="num">${m.min_qty != null ? qtyFmt(m.min_qty) : '<span class="muted small">—</span>'} <button class="btn sm" data-min="${m.id}">Sửa</button></td>
+        <td><span class="badge ${STK[m.status][1]}">${STK[m.status][0]}</span>${m.ordered_at ? ` <span class="badge">Đã gọi ${dmy(m.ordered_at.slice(0, 10))}${m.ordered_by_name ? ' · ' + esc(m.ordered_by_name) : ''}</span>` : ''}</td>
+        <td class="small">${m.last_count ? dmy(m.last_count) + (m.last_count_by ? ' · ' + esc(m.last_count_by) : '') : '<span class="muted">chưa kiểm</span>'}</td>
+        <td>${m.status !== 'ok' ? (m.ordered_at ? `<button class="btn sm" data-unord="${m.id}">Bỏ đánh dấu</button>` : `<button class="btn sm" data-ord="${m.id}">📞 Đã gọi hàng</button>`) : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="empty">Không có</td></tr>'}</tbody></table></div>
+      <div class="small muted" style="margin-top:8px">Tồn = nhập − dùng cho dịch vụ − bán − điều chỉnh kiểm kho. Đặt “Mức báo hết” để được nhắc trước khi hết hẳn. Khi hàng mới về (nhập kho), dấu “Đã gọi” tự xóa.</div></div>`;
+  main.appendChild(wrap);
+  const setP = (o) => go('stock', { ...S.params, ...o });
+  $$('[data-sk]', wrap).forEach((b) => (b.onclick = () => setP({ kind: b.dataset.sk })));
+  $('#stf').onchange = (e) => setP({ st: e.target.value });
+  $$('[data-min]', wrap).forEach((b) => (b.onclick = () => {
+    const m = rows.find((x) => x.id === Number(b.dataset.min));
+    const v = prompt(`Mức báo sắp hết cho "${m.name}" (số ${m.unit || 'đơn vị'}; để trống = chỉ báo khi hết hẳn)`, m.min_qty ?? '');
+    if (v === null) return;
+    guard(b, async () => { await api(`/stock/${m.id}/min`, { method: 'PUT', body: { min_qty: v.trim() === '' ? '' : Number(v.replace(',', '.')) } }); reload(); });
+  }));
+  $$('[data-ord]', wrap).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/stock/${b.dataset.ord}/ordered`, { method: 'POST', body: {} }); toast('Đã đánh dấu gọi hàng'); refreshReminderBadge(); reload(); })));
+  $$('[data-unord]', wrap).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/stock/${b.dataset.unord}/ordered`, { method: 'POST', body: { ordered: false } }); refreshReminderBadge(); reload(); })));
+  const cnt = $('#cnt');
+  if (cnt) cnt.onclick = () => {
+    const items = rows.filter((m) => kind === 'all' || m.kind === kind);
+    openModal('Kiểm kho / đếm hàng', `<form id="cf2"><div class="small muted">Đếm thực tế rồi điền số vào ô. Ô để trống = không kiểm món đó. Lệch so với máy sẽ tự ghi điều chỉnh.</div>
+      <input id="cq" type="search" placeholder="🔍 Lọc tên…" style="margin:8px 0">
+      <div style="max-height:52vh;overflow:auto">${items.map((m) => `<div class="row cnt-row" data-n="${esc(m.name.toLowerCase())}" style="padding:4px 0;border-bottom:1px solid var(--line)"><div style="flex:1;min-width:0" class="small"><b>${esc(m.name)}</b> <span class="muted">· máy: ${qtyFmt(m.stock)} ${esc(m.unit || '')}</span></div>
+        <input type="number" step="0.01" min="0" inputmode="decimal" data-cm="${m.id}" style="width:90px"></div>`).join('')}</div>
+      <label style="margin-top:8px">Ghi chú</label><input name="note" placeholder="VD: kiểm cuối tháng 11">
+      <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu kết quả kiểm</button></div></form>`);
+    $('#cq').oninput = (e) => { const q = e.target.value.toLowerCase(); $$('.cnt-row').forEach((r) => (r.style.display = r.dataset.n.includes(q) ? '' : 'none')); };
+    $('#cf2').onsubmit = (e) => {
+      e.preventDefault();
+      guard($('#cf2 button.primary'), async () => {
+        const lines = $$('[data-cm]').filter((i) => i.value !== '').map((i) => ({ material_id: Number(i.dataset.cm), counted: Number(i.value) }));
+        if (!lines.length) throw new Error('Chưa nhập số đếm nào');
+        const r = await api('/stock/count', { method: 'POST', body: { lines, note: $('#cf2 [name=note]').value } });
+        closeModal();
+        if (r.diffs.length) openModal('Kết quả kiểm kho', `<div>Đã kiểm <b>${r.counted}</b> món, <b>${r.diffs.length}</b> món lệch:</div><table style="margin-top:8px"><thead><tr><th>Món</th><th class="num">Máy</th><th class="num">Đếm</th><th class="num">Lệch</th></tr></thead>
+          <tbody>${r.diffs.map((d) => `<tr><td>${esc(d.name)}</td><td class="num">${qtyFmt(d.before)}</td><td class="num">${qtyFmt(d.counted)}</td><td class="num"><b>${d.diff > 0 ? '+' : ''}${qtyFmt(d.diff)}</b></td></tr>`).join('')}</tbody></table>
+          <div class="small muted" style="margin-top:8px">Lệch nhiều thường do quên ghi hóa chất ở phiếu thu hoặc định mức chưa đúng.</div>`);
+        else toast(`Đã kiểm ${r.counted} món, khớp hết`);
+        refreshReminderBadge(); reload();
+      });
+    };
+  };
+  const sp = $('#sperm');
+  if (sp) sp.onclick = async () => {
+    const p = await api('/stock/perm');
+    const staffOnly = activeStaff().filter((u) => u.role === 'staff');
+    openModal('Phân quyền kho cho nhân viên', `<form id="spf"><div class="small muted">Lãnh đạo / Quản lý luôn có đủ quyền. Nhân viên KHÔNG thấy giá nhập, giá cốt.</div>
+      <table style="margin-top:8px"><thead><tr><th>Nhân viên</th><th>Xem tồn + báo hết hàng</th><th>Kiểm kho, đếm hàng</th></tr></thead><tbody>
+      ${staffOnly.map((u) => `<tr><td>${esc(u.full_name)}</td><td><input type="checkbox" data-pv="${u.id}" ${p.viewers.includes(u.id) ? 'checked' : ''} style="width:auto"></td><td><input type="checkbox" data-pc="${u.id}" ${p.counters.includes(u.id) ? 'checked' : ''} style="width:auto"></td></tr>`).join('')}</tbody></table>
+      <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu</button></div></form>`);
+    $('#spf').onsubmit = (e) => { e.preventDefault(); guard($('#spf button'), async () => {
+      await api('/stock/perm', { method: 'PUT', body: { viewers: $$('[data-pv]:checked').map((x) => Number(x.dataset.pv)), counters: $$('[data-pc]:checked').map((x) => Number(x.dataset.pc)) } });
+      closeModal(); toast('Đã lưu quyền kho. Nhân viên đăng nhập lại để thấy thay đổi.'); }); };
+  };
+}
 const perUnit = (m) => (m.size ? `${money(Math.round(m.avg_cost / m.size))}/${m.size_unit}` : '');
 VIEWS.stock = async (main) => {
-  if (!isMgr()) { main.innerHTML = '<div class="empty">Chỉ quản lý xem được trang này</div>'; return; }
+  if (!isMgr()) {
+    if (!S.me.stock_view) { main.innerHTML = '<div class="empty">Bạn chưa được giao quyền xem kho</div>'; return; }
+    main.innerHTML = header('Kho hàng', S.me.stock_count ? 'Xem tồn, kiểm kho đếm hàng, báo hàng cần gọi thêm' : 'Xem tồn kho, báo hàng hết cần gọi thêm');
+    return stockLevelsView(main, () => VIEWS.stock(main));
+  }
   const tab = S.params.tab || 'report';
   const reload = () => VIEWS.stock(main);
-  const tabs = [['report', 'Giá cốt & lãi gộp'], ['items', 'Hóa chất & sản phẩm'], ['recipes', 'Định mức dịch vụ']];
+  const tabs = [['report', 'Giá cốt & lãi gộp'], ['levels', 'Tồn kho & kiểm kho'], ['items', 'Hóa chất & sản phẩm'], ['recipes', 'Định mức dịch vụ']];
   const top = header('Kho & giá cốt', 'Chỉ Lãnh đạo / Quản lý thấy giá nhập, giá cốt, lãi gộp') +
     `<div class="card"><div class="row">${tabs.map(([k, l]) => `<button class="btn sm ${k === tab ? 'primary' : ''}" data-tab="${k}">${l}</button>`).join('')}
     <span class="spacer"></span><button class="btn sm" data-goto="excel">📥 Tải file sổ nhập hàng</button></div></div>`;
-  S.materials = await api('/materials?all=1');
   const bindTop = () => { $$('[data-tab]', main).forEach((b) => (b.onclick = () => go('stock', { tab: b.dataset.tab }))); $$('[data-goto]', main).forEach((b) => (b.onclick = () => go(b.dataset.goto))); };
+  if (tab === 'levels') { main.innerHTML = top; bindTop(); return stockLevelsView(main, reload); }
+  S.materials = await api('/materials?all=1');
 
   if (tab === 'report') {
     const from = S.params.from || S.today.slice(0, 8) + '01', to = S.params.to || S.today;
@@ -1266,7 +1351,7 @@ VIEWS.sales = async (main) => {
       <tbody>${r.rows.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td class="num">${x.main_count}</td><td class="num">${x.assist_count}</td>${G.map((g) => `<td class="num">${money(x.by_group[g])}</td>`).join('')}
       <td class="num"><b>${money(x.sales)}</b></td><td class="num">${money(x.main_commission)}</td><td class="num">${money(x.assistant_commission)}</td><td class="num">${x.cards_count} · ${money(x.cards_amount)}</td>
       <td class="num">${money(x.card_commission)}</td><td class="num"><b>${money(x.total_commission)}</b></td><td class="num">${money(x.tip)}</td></tr>`).join('')}</tbody></table></div>
-      <div class="small muted" style="margin-top:8px">Hoa hồng tạm tính theo % từng dịch vụ (Cài đặt › Dịch vụ) và % người phụ, bán thẻ (Cài đặt › Tham số). Chưa gồm lương cứng, thưởng mốc doanh số và chia tip.</div></div>
+      <div class="small muted" style="margin-top:8px">Hoa hồng tạm tính theo % từng dịch vụ (Cài đặt › Dịch vụ) và % người phụ, bán thẻ (Cài đặt › Tham số). Chưa gồm lương cứng, thưởng mốc doanh số. Tip được chia chung ở trang <a href="#tips">Chia tip</a>.</div></div>
     ${staffCustomerCard(sc)}`;
   const set = (a, b) => go('sales', { from: a, to: b });
   $('#f').onchange = (e) => set(e.target.value, to); $('#t').onchange = (e) => set(from, e.target.value);
@@ -1277,6 +1362,51 @@ VIEWS.sales = async (main) => {
     if (b.dataset.p === 'all') set('2026-10-25', t);
     if (b.dataset.p === 'last') { const f = addDays(t.slice(0, 8) + '01', -1); set(f.slice(0, 8) + '01', f); }
   }));
+};
+
+// ---------- Chia tip chung theo tháng ----------
+VIEWS.tips = async (main) => {
+  const month = S.params.month || S.today.slice(0, 7);
+  const r = await api('/tips?month=' + month);
+  const nm = (id) => esc((r.members.find((m) => m.id === id) || {}).name || staffName(id));
+  const shift = (n) => { const [y, m] = month.split('-').map(Number); const d = new Date(Date.UTC(y, m - 1 + n, 1)); return d.toISOString().slice(0, 7); };
+  const isPast = r.pay_date <= S.today;
+  main.innerHTML = header('Chia tip', `Tip cả tháng chia đều cho nhóm · ai nghỉ ngày nào không được chia tip ngày đó · trả ngày <b>${dmy(r.pay_date)}</b>`) +
+    `<div class="card"><div class="row"><button class="btn sm" id="pm">‹</button><input type="month" id="mo" value="${month}" style="width:auto"><button class="btn sm" id="nm">›</button>
+      <span class="small muted">Nhóm chia: ${r.members.map((m) => esc(m.name)).join(', ') || '—'}</span>${isMgr() ? '<button class="btn sm" id="pool">Sửa nhóm</button>' : ''}</div></div>
+    <div class="grid kpis"><div class="kpi"><div class="l">Tổng tip tháng</div><div class="v">${money(r.total_tip)}</div><div class="s">${r.days.length} ngày có tip</div></div>
+      <div class="kpi"><div class="l">Ngày trả</div><div class="v">${dmy(r.pay_date)}</div><div class="s">${isPast ? 'đã đến hạn trả' : 'mồng 5 tháng sau'}</div></div>
+      ${r.unallocated ? `<div class="kpi"><div class="l">Chưa chia được</div><div class="v">${money(r.unallocated)}</div><div class="s">ngày cả nhóm đều nghỉ</div></div>` : ''}</div>
+    <div class="card"><h3>Mỗi người nhận</h3><div class="table-wrap"><table><thead><tr><th>Nhân viên</th><th class="num">Ngày được chia</th><th class="num">Ngày nghỉ có tip</th><th class="num">Tiền tip</th><th>Trạng thái</th></tr></thead>
+      <tbody>${r.shares.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td class="num">${x.days_shared}/${r.days.length}</td><td class="num">${x.days_off || ''}</td><td class="num"><b>${money(x.amount)}</b></td>
+        <td>${x.paid_at ? `<span class="badge ok">Đã trả ${money(x.paid_amount)}</span> <span class="small muted">${dmy(x.paid_at.slice(0, 10))}${x.paid_by_name ? ' · ' + esc(x.paid_by_name) : ''}</span>${x.paid_amount !== x.amount ? ' <span class="badge warn">số đã đổi</span>' : ''}${isMgr() ? ` <button class="btn sm" data-unpay="${x.user_id}">Hủy</button>` : ''}`
+          : isMgr() ? `<button class="btn sm" data-pay="${x.user_id}" ${x.amount ? '' : 'disabled'}>Đánh dấu đã trả</button>` : '<span class="muted small">Chưa trả</span>'}</td></tr>`).join('')}</tbody>
+      <tfoot><tr><td>Tổng</td><td></td><td></td><td class="num"><b>${money(r.shares.reduce((a, x) => a + x.amount, 0))}</b></td><td></td></tr></tfoot></table></div>
+      <div class="small muted" style="margin-top:8px">Tip lấy từ ô “Tip” ở phiếu thu. Nghỉ = đơn off <b>cả ngày</b> đã duyệt ở trang Lịch off; nghỉ vài giờ vẫn được chia. Làm tròn đến đồng nên tổng có thể lệch vài đồng.</div></div>
+    <div class="card"><h3>Chi tiết từng ngày</h3>${r.days.length ? `<div class="table-wrap"><table><thead><tr><th>Ngày</th><th class="num">Tip</th><th class="num">Số người chia</th><th class="num">Mỗi người</th><th>Nghỉ (không chia)</th><th>Ghi chú</th></tr></thead>
+      <tbody>${r.days.map((d) => `<tr><td>${dmy(d.date)}</td><td class="num">${money(d.tip)}</td><td class="num">${d.present.length}</td><td class="num">${money(d.share)}</td>
+        <td>${d.absent.map((id) => `<span class="badge bad">${nm(id)}</span>`).join(' ')}</td>
+        <td class="small">${d.partial.length ? 'Nghỉ vài giờ (vẫn chia): ' + d.partial.map(nm).join(', ') + '. ' : ''}${d.no_checkin.length ? '<span class="badge warn">Không chấm công</span> ' + d.no_checkin.map(nm).join(', ') + ' — nếu thực tế nghỉ, thêm đơn off cả ngày.' : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Tháng này chưa có tip</div>'}</div>`;
+  const go2 = (m) => go('tips', { month: m });
+  $('#pm').onclick = () => go2(shift(-1)); $('#nm').onclick = () => go2(shift(1));
+  $('#mo').onchange = (e) => e.target.value && go2(e.target.value);
+  const pool = $('#pool');
+  if (pool) pool.onclick = () => {
+    openModal('Nhóm chia tip', `<form id="tp"><div class="small muted">Tip chia đều cho những người được chọn.</div>
+      ${activeStaff().map((u) => `<label style="display:block;font-weight:normal"><input type="checkbox" value="${u.id}" ${r.members.some((m) => m.id === u.id) ? 'checked' : ''} style="width:auto"> ${esc(u.full_name)}</label>`).join('')}
+      <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu</button></div></form>`);
+    $('#tp').onsubmit = (e) => { e.preventDefault(); guard($('#tp button'), async () => {
+      await api('/tips/pool', { method: 'PUT', body: { user_ids: $$('#tp input:checked').map((x) => Number(x.value)) } }); closeModal(); toast('Đã lưu nhóm chia tip'); VIEWS.tips(main); }); };
+  };
+  $$('[data-pay]', main).forEach((b) => (b.onclick = () => guard(b, async () => {
+    const x = r.shares.find((s) => s.user_id === Number(b.dataset.pay));
+    if (!isPast && !confirm(`Chưa đến ngày trả (${dmy(r.pay_date)}). Vẫn ghi đã trả ${money(x.amount)} cho ${x.name}?`)) return;
+    await api('/tips/paid', { method: 'POST', body: { month, user_id: x.user_id } }); toast('Đã ghi trả tip'); VIEWS.tips(main);
+  })));
+  $$('[data-unpay]', main).forEach((b) => (b.onclick = () => guard(b, async () => {
+    if (!confirm('Hủy ghi nhận đã trả?')) return;
+    await api('/tips/paid', { method: 'POST', body: { month, user_id: Number(b.dataset.unpay), paid: false } }); VIEWS.tips(main);
+  })));
 };
 
 // Khách phụ trách theo thợ: giữ khách, khách quay lại, chi tiêu TB (dùng cho KPI/3P)
@@ -1352,7 +1482,7 @@ VIEWS.excel = async (main) => {
 // ---------- Cài đặt ----------
 VIEWS.settings = async (main) => {
   const tabs = [['me', 'Tài khoản của tôi', true], ['services', 'Dịch vụ & giá', isMgr()], ['cardtypes', 'Gói thẻ', isMgr()], ['users', 'Nhân viên & mật khẩu', isOwner()],
-    ['params', 'Tham số', isOwner()], ['audit', 'Nhật ký thao tác', isOwner()], ['backup', 'Sao lưu', isOwner()]].filter((t) => t[2]);
+    ['params', 'Tham số', isOwner()], ['audit', 'Lịch sử chỉnh sửa', isOwner()], ['backup', 'Sao lưu', isOwner()]].filter((t) => t[2]);
   const tab = S.params.tab || tabs[0][0];
   main.innerHTML = header('Cài đặt') + `<div class="card"><div class="tabs">${tabs.map(([k, l]) => `<button data-st="${k}" class="${k === tab ? 'active' : ''}">${l}</button>`).join('')}</div><div id="sb"></div></div>`;
   $$('[data-st]').forEach((b) => (b.onclick = () => go('settings', { tab: b.dataset.st })));
@@ -1437,15 +1567,48 @@ VIEWS.settings = async (main) => {
     $('#pf').onsubmit = (e) => { e.preventDefault(); guard($('#pf button'), async () => { await api('/settings', { method: 'PUT', body: formData($('#pf')) }); toast('Đã lưu'); boot(); }); };
   }
   if (tab === 'audit') {
-    const rows = await api('/audit?limit=500');
-    const A = { login: 'Đăng nhập', create_visit: 'Ghi lượt', update_visit: 'SỬA lượt', delete_visit: 'XÓA lượt', create_customer: 'Thêm khách', update_customer: 'Sửa khách', delete_customer: 'Xóa khách',
+    const P = S.params;
+    const from = P.from || addDays(S.today, -30), to = P.to || S.today, uid = P.u || '', only = P.only ?? 'edit';
+    const rows = await api(`/audit?limit=1000&from=${from}&to=${to}${uid ? '&user_id=' + uid : ''}${only ? '&only=edit' : ''}`);
+    const A = { login: 'Đăng nhập', create_visit: 'Ghi lượt', update_visit: 'SỬA lượt', delete_visit: 'XÓA lượt', create_customer: 'Thêm khách', update_customer: 'Sửa khách', delete_customer: 'XÓA khách',
       sell_card: 'Bán thẻ', update_card: 'Sửa thẻ', adjust_card: 'Điều chỉnh số dư thẻ', import_excel: 'Nhập Excel', export_excel: 'Xuất Excel', upload_photo: 'Tải ảnh', delete_photo: 'Xóa ảnh',
-      create_appointment: 'Đặt lịch', update_appointment: 'Sửa lịch', appointment_status: 'Đổi trạng thái lịch', change_password: 'Đổi mật khẩu', reset_password: 'Đặt lại MK',
-      create_user: 'Tạo tài khoản', update_user: 'Sửa tài khoản', update_settings: 'Sửa tham số', create_service: 'Thêm dịch vụ', update_service: 'Sửa dịch vụ', backup: 'Sao lưu', download_backup: 'Tải bản sao lưu' };
-    const hot = ['update_visit', 'delete_visit', 'adjust_card', 'delete_customer', 'export_excel', 'update_card'];
-    sb.innerHTML = `<div class="small muted" style="margin-bottom:8px">Các thao tác nhạy cảm (sửa/xóa lượt thu tiền, chỉnh thẻ, xuất dữ liệu) được tô đỏ.</div><div class="table-wrap"><table><thead><tr><th>Thời gian</th><th>Người</th><th>Thao tác</th><th>Chi tiết</th></tr></thead><tbody>
-      ${rows.map((r) => `<tr><td class="small">${esc(r.created_at)}</td><td>${esc(r.user_name || '')}</td><td>${hot.includes(r.action) ? `<span class="badge bad">${esc(A[r.action] || r.action)}</span>` : esc(A[r.action] || r.action)}${r.entity_id ? ` <span class="muted small">#${r.entity_id}</span>` : ''}</td>
-      <td class="small" style="max-width:420px;word-break:break-word">${esc(r.detail || '')}</td></tr>`).join('')}</tbody></table></div>`;
+      create_appointment: 'Đặt lịch', update_appointment: 'Sửa lịch hẹn', appointment_status: 'Đổi trạng thái lịch', change_password: 'Đổi mật khẩu', reset_password: 'Đặt lại MK',
+      create_user: 'Tạo tài khoản', update_user: 'Sửa tài khoản', update_settings: 'Sửa tham số', create_service: 'Thêm dịch vụ', update_service: 'Sửa dịch vụ', backup: 'Sao lưu', download_backup: 'Tải bản sao lưu',
+      create_off: 'Xin/ghi nghỉ', decide_off: 'Duyệt nghỉ', delete_off: 'Xóa đơn nghỉ', manual_attendance: 'Chấm công tay', delete_attendance: 'Xóa chấm công',
+      stock_in: 'Nhập kho', stock_adjust: 'Điều chỉnh kho', stock_count: 'Kiểm kho', stock_ordered: 'Báo đã gọi hàng', stock_unordered: 'Bỏ báo gọi hàng', stock_perm: 'Phân quyền kho',
+      transfer_customers: 'Bàn giao khách', tip_paid: 'Ghi trả tip', set_tip_pool: 'Sửa nhóm chia tip', create_card_type: 'Thêm gói thẻ', update_card_type: 'Sửa gói thẻ' };
+    const hot = ['update_visit', 'delete_visit', 'adjust_card', 'delete_customer', 'export_excel', 'update_card', 'stock_adjust', 'delete_attendance'];
+    const LB = { date: 'Ngày', time: 'Giờ', customer_id: 'Khách', main_staff_id: 'Thợ chính', assistant_id: 'Người phụ', staff_id: 'Thợ', surcharge: 'Phụ thu', discount: 'Giảm giá', discount_reason: 'Lý do giảm',
+      total: 'Tổng tiền', card_paid: 'Trừ thẻ', cash_paid: 'Tiền thu', payment_method: 'Hình thức TT', tip: 'Tip', formula: 'Công thức', result: 'Kết quả', note: 'Ghi chú', services: 'Dịch vụ', name: 'Tên', phone: 'SĐT',
+      gender: 'Giới tính', birthday: 'Sinh nhật', source: 'Nguồn', hair_notes: 'Lưu ý tóc', notes: 'Ghi chú', status: 'Trạng thái', service: 'Dịch vụ', duration: 'Thời lượng (phút)', guest_name: 'Tên khách',
+      guest_phone: 'SĐT khách', amount: 'Số tiền', reason: 'Lý do', qty: 'Số lượng', expires_at: 'Hạn thẻ', price: 'Giá', value: 'Giá trị', role: 'Quyền', active: 'Đang làm', count: 'Số khách', to: 'Sang thợ', month: 'Tháng' };
+    const MONEY = ['surcharge', 'discount', 'total', 'card_paid', 'cash_paid', 'tip', 'amount', 'price', 'value', 'unit_cost'];
+    const STAFFK = ['main_staff_id', 'assistant_id', 'staff_id', 'to', 'user_id'];
+    const fv = (k, v) => v == null || v === '' ? '<span class="muted">(trống)</span>' : MONEY.includes(k) ? money(v) : STAFFK.includes(k) ? esc(staffName(v) || '#' + v)
+      : k === 'status' && APPT[v] ? APPT[v][0] : esc(typeof v === 'object' ? JSON.stringify(v) : String(v));
+    const detail = (r) => {
+      let d; try { d = r.detail ? JSON.parse(r.detail) : null; } catch { return esc(r.detail); }
+      if (!d) return '';
+      const ch = d.changes || (Object.values(d).length && Object.values(d).every((x) => Array.isArray(x) && x.length === 2) ? d : null);
+      if (ch) {
+        const ks = Object.keys(ch);
+        return ks.length ? ks.map((k) => `<div><b>${esc(LB[k] || k)}:</b> <span class="aud-old">${fv(k, ch[k][0])}</span> → <span class="aud-new">${fv(k, ch[k][1])}</span></div>`).join('') : '<span class="muted">Lưu lại, không đổi gì</span>';
+      }
+      if (d.before && d.after) return Object.keys(d.after).map((k) => `<div><b>${esc(LB[k] || k)}:</b> ${fv(k, d.before[k])} → ${fv(k, d.after[k])}</div>`).join('');
+      return Object.entries(d).filter(([k]) => k !== 'code').map(([k, v]) => `<span style="margin-right:10px"><b>${esc(LB[k] || k)}:</b> ${fv(k, v)}</span>`).join('');
+    };
+    const link = (r) => r.entity === 'visit' ? `#visits` : r.entity === 'customer' ? `#customer?id=${r.entity_id}` : r.entity === 'appointment' ? '#appointments' : r.entity === 'card' ? '#cards' : '';
+    sb.innerHTML = `<div class="row" style="margin-bottom:10px"><select id="au" style="width:auto"><option value="">Mọi người</option>${S.staff.map((u) => `<option value="${u.id}" ${String(u.id) === uid ? 'selected' : ''}>${esc(u.full_name)}</option>`).join('')}</select>
+      <input type="date" id="af" value="${from}" style="width:auto"> → <input type="date" id="at" value="${to}" style="width:auto">
+      <label class="small" style="font-weight:normal"><input type="checkbox" id="ao" ${only ? 'checked' : ''} style="width:auto"> Chỉ sửa / xóa / điều chỉnh</label></div>
+      <div class="small muted" style="margin-bottom:8px">Mỗi lần sửa ghi rõ <b>ô nào đổi, giá trị cũ → mới</b>. Thao tác nhạy cảm (sửa/xóa lượt thu tiền, chỉnh thẻ, chỉnh kho, xuất dữ liệu) tô đỏ. ${rows.length} dòng.</div>
+      <div class="table-wrap"><table><thead><tr><th>Thời gian</th><th>Người</th><th>Thao tác</th><th>Đối tượng</th><th>Nội dung thay đổi</th></tr></thead><tbody>
+      ${rows.map((r) => `<tr><td class="small" style="white-space:nowrap">${esc(r.created_at.slice(11, 16))} ${dmy(r.created_at.slice(0, 10))}</td><td><b>${esc(r.user_name || '')}</b></td>
+        <td>${hot.includes(r.action) ? `<span class="badge bad">${esc(A[r.action] || r.action)}</span>` : esc(A[r.action] || r.action)}</td>
+        <td class="small">${r.entity_label ? (link(r) ? `<a href="${link(r)}">${esc(r.entity_label)}</a>` : esc(r.entity_label)) : r.entity_id ? '#' + r.entity_id : ''}</td>
+        <td class="small" style="max-width:520px;word-break:break-word">${detail(r)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">Không có thao tác nào</td></tr>'}</tbody></table></div>`;
+    const setA = () => go('settings', { tab: 'audit', u: $('#au').value, from: $('#af').value, to: $('#at').value, only: $('#ao').checked ? 'edit' : '' });
+    ['#au', '#af', '#at', '#ao'].forEach((k) => ($(k).onchange = setA));
   }
   if (tab === 'backup') {
     const files = await api('/backups');

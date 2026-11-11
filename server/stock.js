@@ -1,7 +1,7 @@
 'use strict';
 // Kho vật tư: hóa chất làm dịch vụ (tính giá cốt) + sản phẩm bán lẻ (trừ kho, lãi gộp).
 // Giá vốn = bình quân gia quyền các lần nhập. Nhân viên KHÔNG xem được giá nhập / giá cốt / lãi.
-const { db, audit, nextCode } = require('./db');
+const { db, audit, nextCode, getSettings } = require('./db');
 const L = require('./logic');
 const { HttpError, bad, int, str, today, isDate } = L;
 
@@ -50,7 +50,41 @@ for (const c of ['material_id INTEGER', 'qty REAL']) {
   if (!db.prepare('PRAGMA table_info(visit_items)').all().some((x) => x.name === c.split(' ')[0])) db.exec('ALTER TABLE visit_items ADD COLUMN ' + c);
 }
 
+for (const c of ['min_qty REAL', 'ordered_at TEXT', 'ordered_by INTEGER']) {
+  if (!db.prepare('PRAGMA table_info(materials)').all().some((x) => x.name === c.split(' ')[0])) db.exec('ALTER TABLE materials ADD COLUMN ' + c);
+}
+
 const isMgr = (u) => u.role !== 'staff';
+// Quyền kho cho nhân viên: xem tồn + báo hàng hết (mặc định Chị Thu, Dương), kiểm kho đếm hàng (mặc định Dương)
+function idsSetting(key, names) {
+  const s = getSettings()[key];
+  if (s != null) return s.split(',').map(Number).filter(Boolean);
+  return db.prepare('SELECT id, full_name FROM users WHERE active=1').all().filter((u) => names.includes(u.full_name)).map((u) => u.id);
+}
+function perm(user) {
+  if (isMgr(user)) return { stock_view: true, stock_count: true };
+  const counters = idsSetting('stock_counters', ['Dương']);
+  const viewers = idsSetting('stock_viewers', ['Chị Thu', 'Thu', 'Dương']);
+  return { stock_view: viewers.includes(user.id) || counters.includes(user.id), stock_count: counters.includes(user.id) };
+}
+const need = (k) => (req, res, next) => (perm(req.user)[k] ? next() : next(new HttpError(403, 'Bạn chưa được giao quyền kho')));
+
+// Tồn kho cho người kiểm/đặt hàng: KHÔNG có giá nhập
+function stockLevels() {
+  const lastIn = db.prepare("SELECT MAX(created_at) t FROM stock_moves WHERE material_id=? AND kind='in'");
+  const lastCount = db.prepare("SELECT s.date, s.created_at, u.full_name by_name FROM stock_moves s LEFT JOIN users u ON u.id=s.created_by WHERE s.material_id=? AND s.kind='adjust' AND s.note LIKE 'Kiểm kho%' ORDER BY s.id DESC LIMIT 1");
+  return db.prepare(`SELECT m.*, u.full_name ordered_by_name FROM materials m LEFT JOIN users u ON u.id=m.ordered_by WHERE m.active=1 ORDER BY m.kind, m.grp, m.name`).all().map((m) => {
+    const stock = r2(stockOf(m.id));
+    const status = stock <= 0 ? 'out' : m.min_qty != null && stock <= m.min_qty ? 'low' : 'ok';
+    const li = lastIn.get(m.id).t;
+    const ordered = m.ordered_at && !(li && li > m.ordered_at) ? m.ordered_at : null;
+    const lc = lastCount.get(m.id);
+    return { id: m.id, code: m.code, name: m.name, kind: m.kind, grp: m.grp, unit: m.unit, size: m.size, size_unit: m.size_unit,
+      stock, min_qty: m.min_qty, status, ordered_at: ordered, ordered_by_name: ordered ? m.ordered_by_name : null,
+      last_count: lc ? lc.date : null, last_count_by: lc ? lc.by_name : null };
+  });
+}
+function stockAlerts() { return stockLevels().filter((m) => m.status !== 'ok'); }
 const r2 = (x) => Math.round(x * 1000) / 1000;
 
 // Giá vốn bình quân 1 đơn vị (tuýp/chai/hộp)
@@ -156,6 +190,50 @@ function importPurchases(rows, helpers, summary, user) {
 }
 
 function mount(app, { MGR }) {
+  app.get('/api/stock/levels', need('stock_view'), (req, res) => res.json(stockLevels()));
+  // Kiểm kho: nhập số đếm thực tế → ghi điều chỉnh chênh lệch (giá vốn bình quân), lưu ngày kiểm
+  app.post('/api/stock/count', need('stock_count'), (req, res) => {
+    const lines = (Array.isArray(req.body.lines) ? req.body.lines : []).filter((l) => l.counted !== '' && l.counted != null && Number(l.counted) >= 0);
+    if (!lines.length) throw bad('Chưa nhập số đếm nào');
+    const date = today();
+    const note = 'Kiểm kho' + (str(req.body.note) ? ': ' + str(req.body.note) : '');
+    const ins = db.prepare("INSERT INTO stock_moves(material_id,date,kind,qty,unit_cost,note,created_by) VALUES (?,?,'adjust',?,?,?,?)");
+    const diffs = [];
+    db.transaction(() => {
+      for (const l of lines) {
+        const mid = int(l.material_id);
+        const m = db.prepare('SELECT id, name FROM materials WHERE id=?').get(mid);
+        if (!m) continue;
+        const before = r2(stockOf(mid)); const counted = r2(Number(l.counted));
+        const d = r2(counted - before);
+        ins.run(mid, date, d, avgCost(mid), note, req.user.id);
+        if (d) diffs.push({ material_id: mid, name: m.name, before, counted, diff: d });
+      }
+    })();
+    audit(req.user.id, 'stock_count', 'material', null, { changes: Object.fromEntries(diffs.map((d) => [d.name, [d.before, d.counted]])) });
+    res.json({ ok: true, counted: lines.length, diffs });
+  });
+  // Mức báo sắp hết + đánh dấu đã gọi hàng (người xem kho làm được)
+  app.put('/api/stock/:id/min', need('stock_view'), (req, res) => {
+    const v = req.body.min_qty === '' || req.body.min_qty == null ? null : Math.max(0, Number(req.body.min_qty));
+    db.prepare('UPDATE materials SET min_qty=? WHERE id=?').run(Number.isFinite(v) ? v : null, int(req.params.id));
+    res.json({ ok: true });
+  });
+  app.post('/api/stock/:id/ordered', need('stock_view'), (req, res) => {
+    const on = req.body.ordered !== false;
+    if (on) db.prepare("UPDATE materials SET ordered_at=datetime('now','localtime'), ordered_by=? WHERE id=?").run(req.user.id, int(req.params.id));
+    else db.prepare('UPDATE materials SET ordered_at=NULL, ordered_by=NULL WHERE id=?').run(int(req.params.id));
+    audit(req.user.id, on ? 'stock_ordered' : 'stock_unordered', 'material', int(req.params.id), {});
+    res.json({ ok: true });
+  });
+  app.get('/api/stock/perm', MGR, (req, res) => res.json({ viewers: idsSetting('stock_viewers', ['Chị Thu', 'Thu', 'Dương']), counters: idsSetting('stock_counters', ['Dương']) }));
+  app.put('/api/stock/perm', MGR, (req, res) => {
+    const ids = (a) => (Array.isArray(a) ? a : []).map(int).filter(Boolean).join(',');
+    db.prepare("INSERT OR REPLACE INTO settings(key,value) VALUES ('stock_viewers',?)").run(ids(req.body.viewers));
+    db.prepare("INSERT OR REPLACE INTO settings(key,value) VALUES ('stock_counters',?)").run(ids(req.body.counters));
+    audit(req.user.id, 'stock_perm', 'settings', null, req.body);
+    res.json({ ok: true });
+  });
   app.get('/api/materials', (req, res) => res.json(materialRows(req.user, { all: req.query.all === '1' && isMgr(req.user) })));
   const matInput = (b) => {
     const name = str(b.name); if (!name) throw bad('Nhập tên vật tư');
@@ -243,4 +321,5 @@ function mount(app, { MGR }) {
   });
 }
 
-module.exports = { mount, applyVisit, clearVisit, visitMaterials, importPurchases, avgCost, parseSize };
+module.exports = {
+  perm, stockAlerts, mount, applyVisit, clearVisit, visitMaterials, importPurchases, avgCost, parseSize };
