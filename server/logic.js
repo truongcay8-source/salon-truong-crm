@@ -165,7 +165,7 @@ function saveVisit(input, user, existing, opts = {}) {
   const pm = str(input.payment_method);
   if (!opts.imported) {
     // Lượt nhập từ Excel cũ không ghi hình thức TT → cho sửa (tip, giá…) mà không bắt chọn lại
-    if (cashPaid > 0 && !pm && (isNew || existing.payment_method)) throw bad('Chọn hình thức thanh toán');
+    if (cashPaid > 0 && !pm && (isNew || existing.payment_method || !existing.import_ref)) throw bad('Chọn hình thức thanh toán');
     if (pm && !methods.includes(pm)) throw bad('Hình thức thanh toán không hợp lệ');
   }
 
@@ -185,7 +185,8 @@ function saveVisit(input, user, existing, opts = {}) {
     customer_id: customerId, date, time: str(input.time), main_staff_id: mainStaff, assistant_id: assistant,
     subtotal, surcharge, discount, discount_reason: str(input.discount_reason), total,
     card_id: cardId, card_paid: cardPaid, cash_paid: cashPaid, payment_method: cashPaid > 0 ? pm : null,
-    tip: Math.max(0, int(input.tip)), main_commission: mainCommission, assistant_commission: assistantCommission,
+    tip: Math.max(0, int(input.tip)), tip_private: Math.max(0, int(input.tip_private)),
+    tip_private_to: int(input.tip_private) > 0 ? int(input.tip_private_to) || mainStaff : null, main_commission: mainCommission, assistant_commission: assistantCommission,
     hair_before: str(input.hair_before), wish: str(input.wish), formula: str(input.formula), result: str(input.result),
     note: str(input.note), next_visit_date: isDate(input.next_visit_date) ? input.next_visit_date : null,
   };
@@ -225,7 +226,7 @@ function saveVisit(input, user, existing, opts = {}) {
       .run(row.formula, date, mainStaff, customerId, date);
     audit(user.id, isNew ? 'create_visit' : 'update_visit', 'visit', id,
       isNew ? { total, cash_paid: cashPaid, card_paid: cardPaid } : { code: existing.code, changes: {
-        ...diffObj(existing, row, ['date', 'time', 'customer_id', 'main_staff_id', 'assistant_id', 'surcharge', 'discount', 'discount_reason', 'total', 'card_paid', 'cash_paid', 'payment_method', 'tip', 'formula', 'result', 'note']),
+        ...diffObj(existing, row, ['date', 'time', 'customer_id', 'main_staff_id', 'assistant_id', 'surcharge', 'discount', 'discount_reason', 'total', 'card_paid', 'cash_paid', 'payment_method', 'tip', 'tip_private', 'tip_private_to', 'formula', 'result', 'note']),
         ...diffObj({ services: oldServices }, { services: cleanItems.map((i) => i.name).join(' + ') }) } });
     return id;
   });
@@ -263,7 +264,7 @@ function maskVisitMoney(v, user) {
   v = { ...v, cost: null, materials: v.materials ? v.materials.map((m) => ({ ...m, unit_cost: null })) : v.materials };
   if (v.main_staff_id === user.id || v.assistant_id === user.id) return v;
   const out = { ...v };
-  for (const k of ['subtotal', 'surcharge', 'discount', 'total', 'card_paid', 'cash_paid', 'tip', 'main_commission', 'assistant_commission']) out[k] = null;
+  for (const k of ['subtotal', 'surcharge', 'discount', 'total', 'card_paid', 'cash_paid', 'tip', 'tip_private', 'main_commission', 'assistant_commission']) out[k] = null;
   if (out.items) out.items = out.items.map((i) => ({ ...i, price: null }));
   out.masked = true;
   return out;
@@ -285,6 +286,8 @@ function salesReport(from, to, user) {
   for (const v of visits) {
     const m = per.get(v.main_staff_id);
     if (m) { m.main_count++; m.sales += v.total; m.main_commission += v.main_commission; m.tip += v.tip; }
+    const tp = v.tip_private ? per.get(v.tip_private_to) : null;
+    if (tp) tp.tip += v.tip_private;
     const a = per.get(v.assistant_id);
     if (a) { a.assist_count++; a.assist_sales += v.total; a.assistant_commission += v.assistant_commission; }
   }

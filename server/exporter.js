@@ -40,7 +40,7 @@ async function exportWorkbook({ from, to, full }) {
     ['SĐT', 'phone', 13], ['Dịch vụ', 'services', 34], ['Thợ chính', 'main_name', 12], ['Người phụ', 'assist_name', 12],
     ['Tạm tính', 'subtotal', 12, M], ['Phụ thu', 'surcharge', 10, M], ['Giảm giá', 'discount', 10, M], ['Lý do giảm', 'discount_reason', 16],
     ['Doanh số', 'total', 12, M], ['Trừ thẻ', 'card_paid', 11, M], ['Mã thẻ', 'card_code', 9], ['Thực thu', 'cash_paid', 12, M],
-    ['Hình thức TT', 'payment_method', 13], ['Tip', 'tip', 9, M], ['HH thợ chính', 'main_commission', 12, M], ['HH người phụ', 'assistant_commission', 12, M],
+    ['Hình thức TT', 'payment_method', 13], ['Tip chung', 'tip', 9, M], ['Tip riêng', 'tip_private', 9, M], ['HH thợ chính', 'main_commission', 12, M], ['HH người phụ', 'assistant_commission', 12, M],
     ['Tình trạng tóc trước', 'hair_before', 30], ['Mong muốn', 'wish', 24], ['Công thức', 'formula', 40], ['Kết quả', 'result', 24], ['Ghi chú', 'note', 24],
   ], visits);
 
