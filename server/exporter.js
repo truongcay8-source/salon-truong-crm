@@ -53,14 +53,14 @@ async function exportWorkbook({ from, to }) {
     ['Dịch vụ', 'service', 24], ['Thợ', 'staff_name', 12], ['Trạng thái', 'status_vi', 12], ['Ghi chú', 'note', 30],
   ], appts.map((a) => ({ ...a, status_vi: ST[a.status] })));
 
-  const cards = db.prepare(`SELECT cd.*, c.code customer_code, c.name customer_name, c.phone, u.full_name seller_name FROM cards cd
-    JOIN customers c ON c.id=cd.customer_id LEFT JOIN users u ON u.id=cd.seller_id ORDER BY cd.id`).all();
+  const cards = db.prepare(`SELECT cd.*, c.code customer_code, c.name customer_name, c.phone, u.full_name seller_name, k.full_name consultant_name FROM cards cd
+    JOIN customers c ON c.id=cd.customer_id LEFT JOIN users u ON u.id=cd.seller_id LEFT JOIN users k ON k.id=cd.consultant_id ORDER BY cd.id`).all();
   const CS = { active: 'Đang dùng', closed: 'Đã đóng', refunded: 'Đã hoàn' };
   const SALE = { new: 'Mới', renewal: 'Mua lại', gift: 'Tặng' };
   sheet(wb, 'Thẻ trả trước', [
     ['Mã thẻ', 'code', 9], ['Gói', 'name', 16], ['Mã khách', 'customer_code', 9], ['Tên khách', 'customer_name', 24], ['SĐT', 'phone', 13],
     ['Ngày bán', 'sold_at', 11], ['Hạn dùng', 'expires_at', 11], ['Giá bán', 'price', 12, M], ['Giá trị', 'value', 12, M], ['Số dư', 'balance', 12, M],
-    ['Loại', 'sale_vi', 9], ['NV bán', 'seller_name', 12], ['HH bán thẻ', 'commission', 11, M], ['Trạng thái', 'status_vi', 11],
+    ['Loại', 'sale_vi', 9], ['NV chốt bán', 'seller_name', 12], ['HH người chốt', 'commission', 11, M], ['Người tư vấn', 'consultant_name', 12], ['HH người tư vấn', 'consultant_commission', 11, M], ['Trạng thái', 'status_vi', 11],
   ], cards.map((c) => ({ ...c, balance: cardBalance(c.id), status_vi: CS[c.status], sale_vi: SALE[c.sale_type] })));
 
   sheet(wb, 'Dịch vụ', [['Dịch vụ', 'name', 28], ['Giá niêm yết', 'price', 13, M], ['Nhóm doanh số', 'grp', 16], ['% hoa hồng', 'rate', 11], ['Đang dùng', 'active_vi', 10]],
