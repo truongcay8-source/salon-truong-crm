@@ -271,7 +271,9 @@ function apptList(rows, showDate) {
   if (!rows.length) return '<div class="empty">Không có lịch hẹn</div>';
   return rows.map((a) => `<div class="list-item"><div class="time-pill">${esc(a.time)}${showDate ? `<div class="small muted">${dmy(a.date).slice(0, 5)}</div>` : ''}</div>
     <div style="flex:1;min-width:0"><div class="t">${a.customer_id ? `<a href="#customer?id=${a.customer_id}">${esc(a.name)}</a>` : esc(a.name) + ' <span class="badge">khách mới</span>'}</div>
-      <div class="small muted">${esc(a.service || '')}${a.staff_name ? ' · ' + esc(a.staff_name) : ''} · ${telLinks(a.phone)}</div>
+      <div class="small muted">${a.visit_services ? esc(a.visit_services) : svcWithPrice(a.service)}${a.staff_name ? ' · ' + esc(a.staff_name) : ''} · ${telLinks(a.phone)}</div>
+      ${a.visit_id && a.visit_total != null ? `<div class="small"><b style="color:var(--ok)">✓ Đã thu ${money(a.visit_total)}</b> · <a href="#" data-rcpt="${a.visit_id}">Hóa đơn</a></div>`
+        : a.service && estTotal(a.service) && !['cancelled', 'noshow'].includes(a.status) ? `<div class="small">Dự kiến: <b>${money(estTotal(a.service))}</b></div>` : ''}
       ${a.note ? `<div class="small">${esc(a.note)}</div>` : ''}
       ${a.cancel_reason && ['cancelled', 'noshow'].includes(a.status) ? `<div class="small" style="color:var(--bad)">Lý do: ${esc(a.cancel_reason)}</div>` : ''}</div>
     <div style="text-align:right"><span class="badge ${APPT[a.status][1]}">${APPT[a.status][0]}</span>
@@ -280,14 +282,22 @@ function apptList(rows, showDate) {
       ${['booked', 'arrived'].includes(a.status) ? `<button class="btn sm primary" data-avisit="${a.id}">Thu tiền</button><button class="btn sm" data-aedit="${a.id}">Sửa</button><button class="btn sm" data-acancel="${a.id}">Hủy / không đến</button>` : ''}
       </div></div></div>`).join('');
 }
+// Thu tiền từ lịch hẹn: mở phiếu có sẵn dịch vụ + giá → lưu là vào doanh số. Khách vãng lai tự tạo hồ sơ.
+async function checkout(a, after) {
+  let c = { id: a.customer_id, code: a.customer_code || '', name: a.name };
+  if (!a.customer_id) {
+    c = await api(`/appointments/${a.id}/customer`, { method: 'POST' });
+    toast(c.created ? `Đã tạo hồ sơ khách ${c.code} – ${c.name}` : `Nhận khách cũ ${c.code} – ${c.name} (trùng SĐT)`);
+  }
+  visitForm({ customer_id: c.id, customer: c, main_staff_id: a.staff_id, appointment_id: a.id, service: a.service, date: a.date, time: a.time }, after);
+}
 function bindApptList(root, reload, rows) {
   $$('[data-ast]', root).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/appointments/${b.dataset.id}/status`, { method: 'POST', body: { status: b.dataset.ast } }); reload(); })));
   const find = async (id) => (rows || (await api(`/appointments?from=${S.today}&to=${addDays(S.today, 60)}`))).find((a) => a.id === Number(id));
   $$('[data-avisit]', root).forEach((b) => (b.onclick = async () => {
-    const a = await find(b.dataset.avisit);
-    if (!a.customer_id) { toast('Khách mới: tạo hồ sơ khách trước, rồi sửa lịch hẹn chọn khách đó'); return apptForm(a, reload); }
-    visitForm({ customer_id: a.customer_id, customer: { id: a.customer_id, code: a.customer_code || '', name: a.name }, main_staff_id: a.staff_id, appointment_id: a.id, service: a.service }, reload);
+    guard(b, async () => checkout(await find(b.dataset.avisit), reload));
   }));
+  $$('[data-rcpt]', root).forEach((b) => (b.onclick = (e) => { e.preventDefault(); showReceipt(Number(b.dataset.rcpt)); }));
   $$('[data-aedit]', root).forEach((b) => (b.onclick = async () => apptForm(await find(b.dataset.aedit), reload)));
   $$('[data-acancel]', root).forEach((b) => (b.onclick = async () => cancelForm(await find(b.dataset.acancel), reload)));
 }
@@ -308,7 +318,7 @@ async function copyText(t) {
   catch { prompt('Copy đoạn này để gửi khách:', t); }
 }
 function msgBox(text, phone) {
-  return `<div class="totals"><div class="small muted">Tin nhắn gửi khách (sửa được):</div><textarea id="msgT" rows="4">${esc(text)}</textarea>
+  return `<div class="totals"><div class="small muted">Tin nhắn gửi khách (sửa được):</div><textarea id="msgT" rows="7">${esc(text)}</textarea>
     <div class="row" style="margin-top:8px"><button class="btn sm primary" id="msgCopy" type="button">📋 Copy tin nhắn</button>
     ${phone ? `<a class="btn sm" href="https://zalo.me/${esc(phone)}" target="_blank" rel="noopener">Mở Zalo khách</a><a class="btn sm" href="sms:${esc(phone)}">SMS</a>` : '<span class="small muted">Khách chưa có SĐT</span>'}</div></div>`;
 }
@@ -392,11 +402,11 @@ VIEWS.appointments = async (main) => {
     const sc = mine ? null : await api('/schedule?date=' + date);
     body = `<div class="card"><h3>${mine ? `Lịch của ${esc(S.me.full_name)} · 7 ngày từ ${dmy(date)}` : dmy(date)} · ${rows.filter((r) => !['cancelled', 'noshow'].includes(r.status)).length} lịch</h3>${apptList(rows, mine)}</div>
       ${sc && sc.visits.length ? `<div class="card"><h3>✓ Khách đã làm (không qua lịch hẹn) · ${sc.visits.length}</h3>${sc.visits.map(visitChipLine).join('')}</div>` : ''}`;
-    main.innerHTML = top + body;
+    main.innerHTML = top + (sc ? daySum(rows, sc.visits) : '') + body;
     bindApptList(main, reload, rows);
   } else {
     const sc = await api('/schedule?date=' + date);
-    main.innerHTML = top + `<div class="card grid-card">${scheduleGrid(sc)}</div>
+    main.innerHTML = top + daySum(sc.appointments, sc.visits) + `<div class="card grid-card">${scheduleGrid(sc)}</div>
       <div class="small muted" style="margin:0 4px 12px">Bấm ô trống để đặt lịch · bấm lịch để Thu tiền / Sửa / Hủy. <span class="chip-k brand">Đã đặt</span> <span class="chip-k warn">Đã đến</span> <span class="chip-k ok">Đã làm</span> <span class="chip-k off">Nghỉ</span></div>`;
     $$('[data-slot]', main).forEach((td) => (td.onclick = (e) => {
       if (e.target.closest('[data-ap],[data-vv]')) return;
@@ -418,7 +428,18 @@ VIEWS.appointments = async (main) => {
 };
 function visitChipLine(v) {
   return `<div class="list-item"><div class="time-pill">${esc(v.time || '')}</div><div style="flex:1"><a href="#customer?id=${v.customer_id}"><b>${esc(v.customer_name)}</b></a>
-    <div class="small muted">${esc(v.services || '')} · ${esc(staffName(v.main_staff_id))}${v.assistant_id ? ' + ' + esc(staffName(v.assistant_id)) : ''}</div></div><span class="badge ok">Đã làm</span></div>`;
+    <div class="small muted">${esc(v.services || '')} · ${esc(staffName(v.main_staff_id))}${v.assistant_id ? ' + ' + esc(staffName(v.assistant_id)) : ''}</div></div>
+    <div style="text-align:right">${v.total != null ? `<b>${money(v.total)}</b><br>` : ''}<span class="badge ok">Đã làm</span></div></div>`;
+}
+const evMoney = (a) => a.visit_id && a.visit_total != null ? `<div class="small"><b>✓ ${money(a.visit_total)}</b></div>`
+  : !['cancelled', 'noshow'].includes(a.status) && estTotal(a.service) ? `<div class="small">~${money(estTotal(a.service))}</div>` : '';
+// Tổng tiền trong ngày: đã thu (lượt đã lưu) + còn dự kiến (lịch chưa thu)
+function daySum(appts, visits) {
+  const est = appts.filter((a) => ['booked', 'arrived'].includes(a.status) && !a.visit_id).reduce((t, a) => t + estTotal(a.service), 0);
+  const got = appts.reduce((t, a) => t + (a.visit_id ? Number(a.visit_total || 0) : 0), 0) + visits.reduce((t, v) => t + Number(v.total || 0), 0);
+  const n = appts.filter((a) => a.visit_id).length + visits.length;
+  return `<div class="card daysum"><div><span class="muted small">Đã thu (${n} lượt)</span><b>${money(got)}</b></div><div><span class="muted small">Còn dự kiến (lịch chưa thu)</span><b>${money(est)}</b></div>
+    <div><span class="muted small">Cả ngày nếu thu đủ</span><b>${money(got + est)}</b></div></div>`;
 }
 function scheduleGrid(sc) {
   const live = (a) => !['cancelled', 'noshow'].includes(a.status);
@@ -439,21 +460,33 @@ function scheduleGrid(sc) {
   const noTime = sc.visits.filter((v) => toMin(v.time) == null);
   if (noTime.length) {
     html += `<tr><td class="tcol small">Không ghi giờ</td>` + cols.map((c) => `<td>${noTime.filter((v) => v.main_staff_id === c.id)
-      .map((v) => `<div class="ev done" data-vv="${v.customer_id}"><b>✓</b> ${esc(v.customer_name)}<div class="small">${esc(v.services || '')}</div></div>`).join('')}</td>`).join('') + '</tr>';
+      .map((v) => `<div class="ev done" data-vv="${v.customer_id}"><b>✓</b> ${esc(v.customer_name)}<div class="small">${esc(v.services || '')}</div>${v.total != null ? `<div class="small"><b>${money(v.total)}</b></div>` : ''}</div>`).join('')}</td>`).join('') + '</tr>';
   }
   for (let t = start; t <= end; t += 30) {
     html += `<tr><td class="tcol">${fromMin(t)}</td>` + cols.map((c) => {
       const ap = sc.appointments.filter((a) => (a.staff_id || 0) === c.id && slot(toMin(a.time)) === t);
       const vs = sc.visits.filter((v) => v.main_staff_id === c.id && slot(toMin(v.time)) === t);
       const off = c.id && offOf(c.id, t);
-      const inner = ap.map((a) => `<div class="ev ${a.status}" data-ap="${a.id}"><b>${esc(a.time)}</b> ${esc(a.name)}${a.service ? `<div class="small">${esc(a.service)}</div>` : ''}</div>`).join('')
-        + vs.map((v) => `<div class="ev done" data-vv="${v.customer_id}"><b>✓ ${esc(v.time || '')}</b> ${esc(v.customer_name)}<div class="small">${esc(v.services || '')}</div></div>`).join('');
+      const inner = ap.map((a) => `<div class="ev ${a.status}" data-ap="${a.id}"><b>${esc(a.time)}</b> ${esc(a.name)}${a.visit_services || a.service ? `<div class="small">${a.visit_services ? esc(a.visit_services) : svcWithPrice(a.service)}</div>` : ''}${evMoney(a)}</div>`).join('')
+        + vs.map((v) => `<div class="ev done" data-vv="${v.customer_id}"><b>✓ ${esc(v.time || '')}</b> ${esc(v.customer_name)}<div class="small">${esc(v.services || '')}</div>${v.total != null ? `<div class="small"><b>${money(v.total)}</b></div>` : ''}</div>`).join('');
       return `<td class="${off ? 'offc' : ''} ${c.id === S.me.id ? 'me' : ''}" data-slot="${fromMin(t)}|${c.id}">${inner || (off ? '<span class="small">Nghỉ</span>' : '')}</td>`;
     }).join('') + '</tr>';
   }
   return html + '</tbody></table></div>';
 }
 const splitSvc = (t) => String(t || '').split(/\s*\+\s*|\s*,\s*/).map((x) => x.trim()).filter(Boolean);
+// Tìm dịch vụ trong bảng giá theo tên (không phân biệt hoa thường, chấp nhận tên gần đúng)
+const norm = (t) => String(t || '').toLowerCase().normalize('NFC').replace(/\s+/g, ' ').trim();
+function findSvc(n) {
+  const k = norm(n); if (!k) return null;
+  const act = S.services.filter((x) => x.active);
+  return act.find((x) => norm(x.name) === k) || act.find((x) => norm(x.name).startsWith(k)) || act.find((x) => k.startsWith(norm(x.name))) || null;
+}
+const svcPrice = (n) => { const x = findSvc(n); return x ? x.price : 0; };
+const estTotal = (text) => splitSvc(text).reduce((t, n) => t + svcPrice(n), 0);
+const kMoney = (v) => (v >= 1000 ? (v / 1000).toLocaleString('vi-VN') + 'k' : money(v));
+// Dòng dịch vụ kèm giá: "Cắt nữ 150k + Gội 50k"
+const svcWithPrice = (text) => splitSvc(text).map((n) => { const p = svcPrice(n); return esc(n) + (p ? ` <span class="price">${kMoney(p)}</span>` : ''); }).join(' + ');
 const SVC_MIN = { 'Cắt': 45, 'Gội & chăm sóc': 30, 'Hóa chất': 120, 'Bán sản phẩm': 0 }; // thời lượng gợi ý
 function apptForm(a = {}, after) {
   const isEdit = !!a.id;
@@ -470,13 +503,15 @@ function apptForm(a = {}, after) {
       <input type="hidden" name="service" value="${esc(a.service || '')}"></div>
     ${isEdit ? `<div class="full"><label>Trạng thái</label><select name="status">${Object.entries(APPT).map(([k, v]) => `<option value="${k}" ${a.status === k ? 'selected' : ''}>${v[0]}</option>`).join('')}</select></div>` : ''}
     <div class="full"><label>Ghi chú</label><textarea name="note">${esc(a.note || '')}</textarea></div></div>
-    <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu lịch hẹn</button></div></form>`);
+    ${isEdit && !a.visit_id ? '<div class="full small muted">💡 Chọn trạng thái <b>Hoàn thành</b> rồi Lưu (hoặc bấm <b>💰 Thu tiền</b>) → phiếu thu mở sẵn dịch vụ + giá, lưu là tự vào doanh số.</div>' : ''}
+    <div class="err"></div><div class="modal-foot">${isEdit && !a.visit_id && !['cancelled', 'noshow'].includes(a.status) ? '<button type="button" class="btn" id="afPay">💰 Thu tiền</button><span class="spacer"></span>' : ''}<button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu lịch hẹn</button></div></form>`);
   bindPicker($('#af'));
   const svcIn = $('#af [name=service]');
   let chosen = splitSvc(svcIn.value);
   const drawChips = () => {
     svcIn.value = chosen.join(' + ');
-    $('#svcChips').innerHTML = chosen.map((n, i) => `<span class="chip">${esc(n)}<button type="button" data-rm="${i}" aria-label="Bỏ">×</button></span>`).join('') || '<span class="small muted">Chưa chọn dịch vụ</span>';
+    $('#svcChips').innerHTML = (chosen.map((n, i) => `<span class="chip">${esc(n)}${svcPrice(n) ? ` <span class="price">${kMoney(svcPrice(n))}</span>` : ''}<button type="button" data-rm="${i}" aria-label="Bỏ">×</button></span>`).join('') || '<span class="small muted">Chưa chọn dịch vụ</span>')
+      + (chosen.length ? `<span class="chip-total">Dự kiến: <b>${money(estTotal(chosen.join(' + ')))}</b></span>` : '');
     $$('[data-rm]', $('#svcChips')).forEach((b) => (b.onclick = () => { chosen.splice(Number(b.dataset.rm), 1); drawChips(); }));
     const mins = chosen.reduce((t, n) => t + (SVC_MIN[(S.services.find((x) => x.name === n) || {}).grp] || 0), 0);
     if (mins && !a.id) $('#af [name=duration]').value = Math.max(30, mins);
@@ -487,12 +522,23 @@ function apptForm(a = {}, after) {
     e.preventDefault();
     const btn = $('#af button.primary');
     guard(btn, async () => {
-      const body = formData($('#af'));
-      const send = (force) => api(isEdit ? '/appointments/' + a.id : '/appointments', { method: isEdit ? 'PUT' : 'POST', body: { ...body, force } });
-      try { await send(false); } catch (er) { if (er.data && er.data.clash && confirm(er.message)) await send(true); else throw er; }
-      closeModal(); toast('Đã lưu lịch hẹn'); (after || route)(); refreshReminderBadge();
+      await saveAppt(body0().status === 'done' && !a.visit_id);
     });
   };
+  const body0 = () => formData($('#af'));
+  // pay=true: lưu lịch (giữ "Đã đến"), rồi mở phiếu thu có sẵn dịch vụ + giá để ghi doanh số
+  const saveAppt = async (pay) => {
+    const body = body0();
+    if (pay && body.status === 'done') body.status = 'arrived';
+    const send = (force) => api(isEdit ? '/appointments/' + a.id : '/appointments', { method: isEdit ? 'PUT' : 'POST', body: { ...body, force } });
+    try { await send(false); } catch (er) { if (er.data && er.data.clash && confirm(er.message)) await send(true); else throw er; }
+    closeModal(); refreshReminderBadge();
+    if (!pay) { toast('Đã lưu lịch hẹn'); return (after || route)(); }
+    const fresh = (await api(`/appointments?from=${body.date}&to=${body.date}`)).find((x) => x.id === a.id) || { ...a, ...body };
+    await checkout(fresh, after || route);
+  };
+  const pb = $('#afPay');
+  if (pb) pb.onclick = () => guard(pb, () => saveAppt(true));
 }
 
 // ---------- Khách hàng ----------
@@ -613,7 +659,7 @@ async function visitForm(v = {}, after) {
     .map((s) => `<option value="${s.id}" data-price="${s.price}" ${s.id === sel ? 'selected' : ''}>${esc(s.name)}${s.price ? ' · ' + (s.price / 1000) + 'k' : ''}</option>`).join('')}</optgroup>`).join('');
   let items = v.items ? v.items.map((i) => ({ service_id: i.service_id, name: i.name, price: i.price })) : [];
   if (!items.length) {
-    items = splitSvc(v.service).map((n) => S.services.find((s) => s.name === n)).filter(Boolean).map((g) => ({ service_id: g.id, price: g.price }));
+    items = splitSvc(v.service).map((n) => { const g = findSvc(n); return g ? { service_id: g.id, price: g.price } : { service_id: '', name: n, price: '' }; });
     if (!items.length) items = [{ service_id: '', price: '' }];
   }
   const custSel = v.customer || (v.customer_id ? { id: v.customer_id, code: v.customer_code || '', name: v.customer_name || '' } : null);
@@ -779,6 +825,20 @@ function cardTable(cards, showCustomer = true) {
     <td class="num"><b>${money(c.balance)}</b></td><td>${esc(c.seller_name || staffName(c.seller_id))}</td><td><span class="badge ${ST[c.status][1]}">${ST[c.status][0]}</span></td>
     <td><button class="btn sm" data-card="${c.id}">Chi tiết</button></td></tr>`).join('')}</tbody></table></div>`;
 }
+// Tin nhắn báo số dư thẻ cho khách (gửi Zalo/SMS sau khi bán thẻ hoặc khi khách hỏi)
+function cardMsg(c, hist, sold) {
+  const uses = (hist || []).filter((h) => h.visit_id && h.amount < 0);
+  const last = uses[0];
+  return [`${S.settings.salon_name} xin chào ${c.customer_name || ''}.`,
+    sold ? `Salon xác nhận mình đã ${c.price ? 'mua' : 'được tặng'} thẻ ${c.code} (${c.name}).` : `Salon gửi mình thông tin thẻ ${c.code} (${c.name}):`,
+    c.price ? `• Số tiền đã thanh toán: ${money(c.price)}` : '',
+    `• Giá trị thẻ: ${money(c.value)}`,
+    !sold ? `• Đã dùng: ${money(Math.max(0, c.value - c.balance))} (${uses.length} lần)` : '',
+    last ? `• Lần gần nhất ${dmy((last.visit_date || last.created_at).slice(0, 10))}: trừ ${money(-last.amount)}` : '',
+    `• SỐ DƯ CÒN LẠI: ${money(c.balance)}`,
+    `• Hạn dùng: ${dmy(c.expires_at)}`,
+    'Mỗi lần làm dịch vụ salon trừ dần vào thẻ, dịch vụ cao hơn số dư thì mình trả thêm phần chênh. Cảm ơn mình!'].filter(Boolean).join('\n');
+}
 function bindCardTable(root, cards, reload) {
   $$('[data-card]', root).forEach((b) => (b.onclick = async () => {
     const c = cards.find((x) => x.id === Number(b.dataset.card));
@@ -787,12 +847,14 @@ function bindCardTable(root, cards, reload) {
       <div class="stat-line"><span class="muted">Số dư</span><b>${money(c.balance)}</b></div>
       <div class="stat-line"><span class="muted">Hạn dùng</span><b>${dmy(c.expires_at)}</b></div>
       ${c.commission != null ? `<div class="stat-line"><span class="muted">Hoa hồng bán thẻ</span><b>${money(c.commission)}</b></div>` : ''}
+      ${msgBox(cardMsg(c, hist), c.phone)}
       <h3 style="margin-top:14px">Lịch sử dùng thẻ</h3>${hist.length ? `<table><tbody>${hist.map((h) => `<tr><td>${esc(h.created_at.slice(0, 10).split('-').reverse().join('/'))}</td><td>${esc(h.visit_code || h.note || '')}</td><td class="num">${money(h.amount)}</td><td class="small muted">${esc(h.by_name || '')}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Chưa dùng</div>'}
       ${isMgr() ? `<form id="cardEdit"><h3 style="margin-top:14px">Quản lý thẻ</h3><div class="form-grid">
         <div><label>Gia hạn đến</label><input type="date" name="expires_at" value="${c.expires_at || ''}"></div>
         <div><label>Trạng thái</label><select name="status"><option value="active" ${c.status === 'active' ? 'selected' : ''}>Đang dùng</option><option value="closed" ${c.status === 'closed' ? 'selected' : ''}>Đóng thẻ</option><option value="refunded" ${c.status === 'refunded' ? 'selected' : ''}>Hoàn tiền (thu hồi HH)</option></select></div>
         <div><label>Điều chỉnh số dư (+/−)</label><input type="number" name="amount" step="1000"></div><div><label>Lý do điều chỉnh</label><input name="note"></div></div>
         <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu</button></div></form>` : ''}`);
+    bindMsgBox();
     const f = $('#cardEdit');
     if (f) f.onsubmit = (e) => {
       e.preventDefault();
@@ -826,6 +888,11 @@ function cardForm(customer, after) {
       if (!d.customer_id) throw new Error('Chọn khách hàng');
       const c = await api('/cards', { method: 'POST', body: d });
       closeModal(); toast(`Đã bán thẻ ${c.code}`); after && after();
+      const full = (await api('/cards?customer_id=' + c.customer_id)).find((x) => x.id === c.id) || c;
+      openModal(`Đã bán thẻ ${c.code}`, `<div class="stat-line"><span class="muted">Khách</span><b>${esc(full.customer_name || '')}</b></div>
+        <div class="stat-line"><span class="muted">Thu tiền</span><b>${money(full.price)}</b></div><div class="stat-line"><span class="muted">Số dư dùng dần</span><b>${money(full.balance)}</b></div>
+        ${msgBox(cardMsg(full, [], true), full.phone)}`);
+      bindMsgBox();
     });
   };
 }

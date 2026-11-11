@@ -186,3 +186,10 @@ tfoot td { font-weight: 700; }
 .off-day.today > b { color: var(--brand); }
 .big-btn { font-size: 17px; padding: 14px 22px; flex: 1; }
 .big-btn:disabled { opacity: .4; }
+/* Giá dịch vụ + tổng tiền ngày */
+.price { color: var(--brand); font-weight: 600; white-space: nowrap; }
+.ev .price { color: inherit; opacity: .85; }
+.chip-total { align-self: center; font-size: 13px; margin-left: 4px; }
+.daysum { display: flex; flex-wrap: wrap; gap: 8px 28px; }
+.daysum > div { display: flex; flex-direction: column; }
+.daysum b { font-size: 18px; }

@@ -192,6 +192,22 @@ test('luồng chính và phân quyền', async () => {
   assert.ok(r.data.summary.every((p) => p.user_id === staff['Chị Thu']), 'nhân viên chỉ thấy công của mình');
   assert.equal(r.data.summary[0].days, 1);
 
+  // Khách vãng lai đặt lịch → Thu tiền tự tạo hồ sơ; lịch hiện số tiền đã thu, nhân viên khác không thấy tiền
+  const d3 = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+  r = await thu.post('/appointments', { guest_name: 'C Hương', guest_phone: '0983059659', staff_id: staff['Chị Thu'], date: d3, time: '09:30', service: 'Cắt tóc nữ – Director' });
+  const apId = r.data.id;
+  r = await thu.post(`/appointments/${apId}/customer`);
+  assert.equal(r.data.created, true); assert.equal(r.data.name, 'C Hương');
+  const huong = r.data.id;
+  assert.equal((await thu.post(`/appointments/${apId}/customer`)).data.id, huong, 'gọi lại không tạo trùng');
+  const cutM = (await thu.get('/services')).data.find((x) => x.name === 'Cắt tóc nữ – Director');
+  r = await mgr.post('/visits', { customer_id: huong, date: d3, time: '09:30', main_staff_id: staff['Chị Thu'], appointment_id: apId, items: [{ service_id: cutM.id }], payment_method: 'Tiền mặt' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  r = await thu.get(`/appointments?from=${d3}&to=${d3}`);
+  const ap = r.data.find((x) => x.id === apId);
+  assert.equal(ap.status, 'done'); assert.equal(ap.visit_total, cutM.price); assert.equal(ap.visit_services, 'Cắt tóc nữ – Director');
+  assert.equal((await nv6.get(`/appointments?from=${d3}&to=${d3}`)).data.find((x) => x.id === apId).visit_total, null, 'thợ khác không thấy tiền');
+
   // Khóa tài khoản nghỉ việc → mất phiên ngay
   assert.equal((await owner.put('/users/' + staff['Dương'], { active: false })).status, 200);
   assert.equal((await duong.get('/me')).status, 401);

@@ -235,11 +235,17 @@ function mount(app, { MGR, OWNER }) {
     const appts = db.prepare(`SELECT a.*, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, c.code customer_code, u.full_name staff_name
       FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id WHERE a.date=? ORDER BY a.time`).all(date);
     const linked = new Set(appts.map((a) => a.visit_id).filter(Boolean));
-    const visits = db.prepare(`SELECT v.id, v.code, v.time, v.main_staff_id, v.assistant_id, v.customer_id, c.name customer_name,
+    const u = req.user;
+    const canMoney = (v) => u.role !== 'staff' || v.main_staff_id === u.id || v.assistant_id === u.id;
+    const visits = db.prepare(`SELECT v.id, v.code, v.time, v.main_staff_id, v.assistant_id, v.customer_id, v.total, c.name customer_name,
         (SELECT GROUP_CONCAT(name, ' + ') FROM visit_items WHERE visit_id=v.id) services
       FROM visits v JOIN customers c ON c.id=v.customer_id WHERE v.date=? AND v.status='done' ORDER BY v.time`).all(date)
-      .filter((v) => !linked.has(v.id));
-    res.json({ date, appointments: appts, visits, offs: offRows(date, date, req.user) });
+      .map((v) => (canMoney(v) ? v : { ...v, total: null }));
+    // Lịch đã thu tiền: gắn tổng tiền lượt làm để hiện trên lịch
+    const byId = new Map(visits.map((v) => [v.id, v]));
+    for (const a of appts) if (a.visit_id && byId.has(a.visit_id)) { a.visit_total = byId.get(a.visit_id).total; a.visit_services = byId.get(a.visit_id).services; }
+    const free = visits.filter((v) => !linked.has(v.id));
+    res.json({ date, appointments: appts, visits: free, offs: offRows(date, date, req.user) });
   });
 }
 
