@@ -309,7 +309,7 @@ function reminders() {
   const out = { birthdays: [], cards: [], returns: [], appointments: [], cancels: [] };
 
   const bdEnd = addDays(t, Number(s.birthday_days || 7));
-  for (const c of db.prepare('SELECT id,code,name,phone,birthday FROM customers WHERE deleted=0 AND birthday IS NOT NULL').all()) {
+  for (const c of db.prepare('SELECT id,code,name,phone,birthday,staff_id FROM customers WHERE deleted=0 AND birthday IS NOT NULL').all()) {
     const nb = nextBirthday(c.birthday, t);
     if (nb && nb <= bdEnd) out.birthdays.push({ ...c, date: nb, ref: nb.slice(0, 4), done: isDone(c.id, 'birthday', nb.slice(0, 4)) });
   }
@@ -317,7 +317,7 @@ function reminders() {
 
   const expEnd = addDays(t, Number(s.card_expiry_days || 30));
   const low = Number(s.card_low_balance || 0);
-  for (const c of db.prepare(`SELECT cd.*, c.name customer_name, c.phone, c.code customer_code FROM cards cd JOIN customers c ON c.id=cd.customer_id
+  for (const c of db.prepare(`SELECT cd.*, c.name customer_name, c.phone, c.code customer_code, c.staff_id cust_staff_id FROM cards cd JOIN customers c ON c.id=cd.customer_id
       WHERE cd.status='active' AND c.deleted=0`).all()) {
     const bal = cardBalance(c.id);
     const reasons = [];
@@ -327,14 +327,14 @@ function reminders() {
     if (reasons.length) {
       const ref = `${c.id}:${reasons.join('/')}`;
       out.cards.push({ id: c.customer_id, card_id: c.id, card_code: c.code, card_name: c.name, name: c.customer_name, phone: c.phone,
-        code: c.customer_code, balance: bal, expires_at: c.expires_at, reason: reasons.join(' · '), ref, done: isDone(c.customer_id, 'card', ref) });
+        code: c.customer_code, staff_id: c.cust_staff_id, balance: bal, expires_at: c.expires_at, reason: reasons.join(' · '), ref, done: isDone(c.customer_id, 'card', ref) });
     }
   }
 
   const rd = Number(s.return_days || 30);
   const dueBefore = addDays(t, -rd);
   const oldest = addDays(t, -(rd + 120));
-  const rows = db.prepare(`SELECT c.id,c.code,c.name,c.phone, MAX(v.date) last_date, COUNT(v.id) n
+  const rows = db.prepare(`SELECT c.id,c.code,c.name,c.phone,c.staff_id, MAX(v.date) last_date, COUNT(v.id) n
       FROM customers c JOIN visits v ON v.customer_id=c.id AND v.status='done'
       WHERE c.deleted=0 GROUP BY c.id HAVING last_date <= ? AND last_date >= ?`).all(dueBefore, oldest);
   const futureAppt = db.prepare("SELECT 1 FROM appointments WHERE customer_id=? AND date>=? AND status IN ('booked','arrived')");
@@ -345,14 +345,14 @@ function reminders() {
   out.returns.sort((a, b) => b.days - a.days);
 
   const tomorrow = addDays(t, 1);
-  for (const a of db.prepare(`SELECT a.*, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, u.full_name staff_name
+  for (const a of db.prepare(`SELECT a.*, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, u.full_name staff_name, c.staff_id cust_staff_id
       FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id
       WHERE a.date=? AND a.status='booked' ORDER BY a.time`).all(tomorrow)) {
     out.appointments.push({ ...a, ref: String(a.id), done: a.customer_id ? isDone(a.customer_id, 'appointment', String(a.id)) : false });
   }
   // Khách hủy / không đến trong 14 ngày qua, chưa có lịch mới → mời đặt lại
   const hasNew = db.prepare("SELECT 1 FROM appointments WHERE customer_id=? AND id<>? AND date>=? AND status IN ('booked','arrived')");
-  for (const a of db.prepare(`SELECT a.*, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, u.full_name staff_name, cb.full_name cancelled_by_name
+  for (const a of db.prepare(`SELECT a.*, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, u.full_name staff_name, cb.full_name cancelled_by_name, c.staff_id cust_staff_id
       FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id LEFT JOIN users cb ON cb.id=a.cancelled_by
       WHERE a.status IN ('cancelled','noshow') AND a.date>=? ORDER BY a.date DESC, a.time DESC`).all(addDays(t, -14))) {
     if (a.customer_id && hasNew.get(a.customer_id, a.id, t)) continue;
@@ -368,7 +368,44 @@ function reminders() {
   return out;
 }
 
+// Báo cáo khách phụ trách theo thợ (KPI giữ khách)
+function staffCustomerReport(from, to) {
+  const rd = Number(getSettings().return_days || 30);
+  const t = today();
+  const users = db.prepare("SELECT id, full_name, active FROM users WHERE role<>'owner' OR id IN (SELECT DISTINCT staff_id FROM customers WHERE staff_id IS NOT NULL) ORDER BY id").all();
+  // Mỗi khách: số lượt, lần đầu, lần cuối (tính đến 'to'); lượt + chi tiêu trong kỳ
+  const rows = db.prepare(`SELECT c.id, c.staff_id,
+      COUNT(v.id) n, MIN(v.date) first_date, MAX(v.date) last_date,
+      SUM(CASE WHEN v.date BETWEEN ? AND ? THEN 1 ELSE 0 END) n_period,
+      SUM(CASE WHEN v.date BETWEEN ? AND ? THEN v.total ELSE 0 END) spend_period,
+      SUM(CASE WHEN v.date BETWEEN ? AND ? AND v.main_staff_id=c.staff_id THEN 1 ELSE 0 END) own_period
+    FROM customers c LEFT JOIN visits v ON v.customer_id=c.id AND v.status='done' AND v.date<=?
+    WHERE c.deleted=0 GROUP BY c.id`).all(from, to, from, to, from, to, to);
+  const per = new Map();
+  const blank = (id, name, active) => ({ staff_id: id, name, active, customers: 0, visited: 0, returned: 0, active_period: 0, new_period: 0,
+    visits_period: 0, own_visits_period: 0, spend_period: 0, overdue: 0 });
+  for (const u of users) per.set(u.id, blank(u.id, u.full_name, u.active));
+  const none = blank(null, 'Chưa giao thợ', 1);
+  const due = addDays(t, -rd);
+  for (const r of rows) {
+    const p = (r.staff_id && per.get(r.staff_id)) || none;
+    p.customers++;
+    if (r.n >= 1) p.visited++;
+    if (r.n >= 2) p.returned++;
+    if (r.n_period > 0) { p.active_period++; p.visits_period += r.n_period; p.own_visits_period += r.own_period; p.spend_period += r.spend_period || 0; }
+    if (r.first_date && r.first_date >= from && r.first_date <= to) p.new_period++;
+    if (r.last_date && r.last_date <= due) p.overdue++;
+  }
+  const out = [...per.values(), none].filter((p) => p.customers > 0 || (p.active && p.staff_id));
+  for (const p of out) {
+    p.return_rate = p.visited ? p.returned / p.visited : null;
+    p.avg_spend = p.active_period ? Math.round(p.spend_period / p.active_period) : 0;
+  }
+  return { from, to, return_days: rd, rows: out };
+}
+
 module.exports = {
+  staffCustomerReport,
   HttpError, bad, int, str, today, addDays, addMonths, isDate, normPhone, localDate,
   cardBalance, cardRow, sellCard, saveVisit, deleteVisit, getVisit, maskVisitMoney, canEditVisit,
   salesReport, reminders, nextBirthday,
