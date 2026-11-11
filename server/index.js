@@ -586,6 +586,7 @@ app.get('/api/reports/sales', (req, res) => {
 app.get('/api/reminders', (req, res) => {
   const r = L.reminders();
   if (stockMod.perm(req.user).stock_view) { r.stock = stockMod.stockAlerts(); r.counts.stock = r.stock.filter((m) => !m.ordered_at).length; }
+  if (req.user.role !== 'staff') { const f = require('./expenses').fundState(); r.counts.expenses = f.pending_count; r.expenses = f; }
   res.json(r);
 });
 // Khách phụ trách theo thợ: nhân viên chỉ xem dòng của mình, không có số tiền
@@ -639,6 +640,8 @@ app.get('/api/dashboard', (req, res) => {
 staffMod.mount(app, { MGR, OWNER });
 require('./tips').mount(app, { MGR, OWNER });
 require('./chat').mount(app, { MGR, OWNER });
+const expMod = require('./expenses');
+expMod.mount(app, { MGR, upload, sniffImage, PHOTO_DIR });
 stockMod.mount(app, { MGR, OWNER });
 
 // ---------- Nhập / xuất Excel ----------

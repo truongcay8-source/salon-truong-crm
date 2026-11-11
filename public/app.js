@@ -99,6 +99,7 @@ const PAGES = [
   ['chat', 'Chat nội bộ', '💬', () => true],
   ['customers', 'Khách hàng', '👤', () => true],
   ['visits', 'Lượt làm', '✂️', () => true],
+  ['expenses', 'Chi & quỹ tiền mặt', '💸', () => true],
   ['reminders', 'Nhắc nhở', '🔔', () => true],
   ['cards', 'Thẻ trả trước', '💳', () => true],
   ['sales', 'Doanh số', '📊', () => true],
@@ -668,6 +669,67 @@ VIEWS.chat = async (main) => {
   draw(); refreshChatBadge(); ta.focus();
 };
 
+// ---------- Chi trong ngày + quỹ tiền mặt ----------
+const EXP_ST = { pending: ['Chờ duyệt', 'warn'], approved: ['Đã duyệt', 'ok'], rejected: ['Không duyệt', 'bad'] };
+VIEWS.expenses = async (main) => {
+  const from = S.params.from || S.today, to = S.params.to || from;
+  const r = await api(`/expenses?from=${from}&to=${to}`);
+  const reload = () => VIEWS.expenses(main);
+  const pct = Math.max(0, Math.min(100, Math.round((r.balance / r.target) * 100)));
+  const row = (e) => `<div class="list-item exp-row ${e.status === 'rejected' ? 'rej' : ''}"><div style="flex:1;min-width:0">
+      <div>${e.kind === 'in' ? '<b class="ok-text">+ Nạp quỹ</b>' : `<b>${esc(e.note || '')}</b>`} <span class="badge">${esc(e.category || '')}</span>${e.kind === 'out' ? ` <span class="badge ${EXP_ST[e.status][1]}">${EXP_ST[e.status][0]}</span>` : ''}${e.status === 'rejected' && !e.refunded ? ' <span class="badge bad">chưa hoàn quỹ</span>' : ''}</div>
+      <div class="small muted">${dmy(e.date)} ${esc(e.created_at.slice(11, 16))} · ${esc(e.by_name || '')}${e.kind === 'in' && e.note ? ' · ' + esc(e.note) : ''}${e.decided_by_name && e.kind === 'out' && e.status !== 'pending' ? ` · ${e.status === 'approved' ? 'duyệt' : 'từ chối'} bởi ${esc(e.decided_by_name)}` : ''}${e.reason ? ' · Lý do: ' + esc(e.reason) : ''}</div>
+      ${e.photo ? `<a href="/api/expenses/${e.id}/photo" target="_blank" class="small">🧾 Xem hóa đơn</a>` : ''}</div>
+    <div style="text-align:right"><div class="${e.kind === 'in' ? 'ok-text' : ''}"><b>${e.kind === 'in' ? '+' : '−'}${money(e.amount)}</b></div>
+      <div class="row" style="justify-content:flex-end;margin-top:4px">${r.can_decide && e.kind === 'out' && e.status !== 'approved' ? `<button class="btn sm primary" data-ok="${e.id}">✓ Duyệt</button>` : ''}
+      ${r.can_decide && e.kind === 'out' && e.status !== 'rejected' ? `<button class="btn sm" data-no="${e.id}">✕ Không duyệt</button>` : ''}
+      ${r.can_decide && e.status === 'rejected' && !e.refunded ? `<button class="btn sm" data-rf="${e.id}">Đã hoàn quỹ</button>` : ''}
+      ${(r.can_decide || (e.created_by === S.me.id && e.status === 'pending')) ? `<button class="btn sm" data-del="${e.id}" title="Xóa">🗑</button>` : ''}</div></div></div>`;
+  main.innerHTML = header('Chi & quỹ tiền mặt', `Quỹ để ở tiệm ${money(r.target)} · ai mua gì thì ghi lại, quản lý trở lên duyệt`,
+    `<button class="btn primary" id="addE">+ Ghi khoản chi</button>${r.can_decide ? '<button class="btn" id="topE">+ Nạp quỹ</button>' : ''}`) +
+    `<div class="grid kpis">
+      <div class="kpi"><div class="l">Quỹ còn (sổ sách)</div><div class="v ${r.balance < r.target * 0.3 ? 'bad-text' : ''}">${money(r.balance)}</div><div class="fund-bar"><span style="width:${pct}%"></span></div><div class="s">${r.need_topup ? `cần nạp thêm <b>${money(r.need_topup)}</b> để đủ ${money(r.target)}` : 'đủ quỹ'}</div></div>
+      <div class="kpi"><div class="l">Chi ${from === to ? (from === S.today ? 'hôm nay' : dmy(from)) : 'trong kỳ'}</div><div class="v">${money(r.total_out)}</div><div class="s">${r.rows.filter((x) => x.kind === 'out').length} khoản (không tính khoản bị từ chối)</div></div>
+      <div class="kpi"><div class="l">Chờ duyệt</div><div class="v">${r.pending_count}</div><div class="s">${money(r.pending_amount)}</div></div>
+      ${r.refund_due.length ? `<div class="kpi"><div class="l">Phải hoàn lại quỹ</div><div class="v bad-text">${money(r.refund_due.reduce((a, x) => a + x.amount, 0))}</div><div class="s">${r.refund_due.map((x) => esc(x.name) + ' ' + money(x.amount)).join(', ')}</div></div>` : ''}</div>
+    <div class="card"><div class="row"><input type="date" id="ef" value="${from}" style="width:auto"> → <input type="date" id="et" value="${to}" style="width:auto">
+      <button class="btn sm" data-p="today">Hôm nay</button><button class="btn sm" data-p="yest">Hôm qua</button><button class="btn sm" data-p="month">Tháng này</button>
+      ${r.can_decide ? '<span class="spacer"></span><button class="btn sm" id="tgE">Đổi mức quỹ</button>' : ''}</div></div>
+    ${r.older_pending.length ? `<div class="card"><h3>⏳ Khoản chờ duyệt từ ngày khác (${r.older_pending.length})</h3>${r.older_pending.map(row).join('')}</div>` : ''}
+    <div class="grid two"><div class="card"><h3>Các khoản</h3>${r.rows.map(row).join('') || '<div class="empty">Chưa có khoản chi nào</div>'}</div>
+      <div class="card"><h3>Theo loại</h3>${Object.entries(r.by_category).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="stat-line"><span>${esc(k)}</span><b>${money(v)}</b></div>`).join('') || '<div class="empty">—</div>'}
+        <div class="small muted" style="margin-top:10px">• Khoản <b>không duyệt</b> không tính vào chi phí tiệm, người chi phải hoàn tiền lại vào quỹ.<br>• Cuối ngày đếm tiền mặt trong hộp quỹ, so với “Quỹ còn”; lệch thì báo quản lý.<br>• Ảnh hóa đơn giúp duyệt nhanh, nên chụp mọi khoản trên 100.000đ.</div></div></div>`;
+  const set = (a, b) => go('expenses', { from: a, to: b });
+  $('#ef').onchange = (e) => set(e.target.value, to < e.target.value ? e.target.value : to); $('#et').onchange = (e) => set(from, e.target.value);
+  $$('[data-p]', main).forEach((b) => (b.onclick = () => { const t = S.today; if (b.dataset.p === 'today') set(t, t); if (b.dataset.p === 'yest') { const y = addDays(t, -1); set(y, y); } if (b.dataset.p === 'month') set(t.slice(0, 8) + '01', t); }));
+  const form = (kind) => {
+    openModal(kind === 'in' ? 'Nạp tiền vào quỹ' : 'Ghi khoản chi', `<form id="xf"><div class="form-grid">
+      ${kind === 'out' ? `<div class="full"><label>Mua gì / chi việc gì *</label><input name="note" required placeholder="VD: 2 thùng nước suối, gửi xe…"></div>
+      <div><label>Loại</label><select name="category">${r.categories.map((c) => `<option>${esc(c)}</option>`).join('')}</select></div>` : '<div class="full"><label>Ghi chú</label><input name="note" placeholder="VD: nạp đủ quỹ đầu tuần"></div>'}
+      <div><label>Số tiền *</label><input name="amount" inputmode="numeric" required placeholder="${kind === 'in' ? r.need_topup || 1000000 : '50000'}" value="${kind === 'in' && r.need_topup ? r.need_topup : ''}"><div class="small muted" id="amtTxt"></div></div>
+      ${isMgr() ? `<div><label>Ngày</label><input type="date" name="date" value="${S.today}"></div>` : ''}
+      ${kind === 'out' ? '<div class="full"><label>📷 Ảnh hóa đơn (nếu có)</label><input type="file" name="photo" accept="image/*" capture="environment"></div>' : ''}</div>
+      ${kind === 'out' && !isMgr() ? '<div class="small muted">Khoản chi sẽ chờ quản lý duyệt.</div>' : ''}
+      <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu</button></div></form>`);
+    const amt = $('#xf [name=amount]');
+    const show = () => { const v = Number(amt.value.replace(/\D/g, '')); $('#amtTxt').textContent = v ? money(v) : ''; };
+    amt.oninput = show; show();
+    $('#xf').onsubmit = (e) => { e.preventDefault(); guard($('#xf button.primary'), async () => {
+      const fd = new FormData($('#xf')); fd.append('kind', kind); fd.set('amount', amt.value.replace(/\D/g, ''));
+      const ph = $('#xf [name=photo]'); if (ph && !ph.files.length) fd.delete('photo');
+      const res = await api('/expenses', { method: 'POST', body: fd }); closeModal();
+      toast(kind === 'in' ? 'Đã nạp quỹ' : `Đã ghi chi · quỹ còn ${money(res.balance)}`); refreshReminderBadge(); reload(); }); };
+  };
+  $('#addE').onclick = () => form('out');
+  if ($('#topE')) $('#topE').onclick = () => form('in');
+  if ($('#tgE')) $('#tgE').onclick = () => { const v = prompt('Mức quỹ tiền mặt để ở tiệm (đồng):', r.target); if (v) api('/expenses/target', { method: 'PUT', body: { target: Number(v.replace(/\D/g, '')) } }).then(reload).catch((e) => toast(e.message)); };
+  $$('[data-ok]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/expenses/${b.dataset.ok}/decide`, { method: 'POST', body: { status: 'approved' } }); refreshReminderBadge(); reload(); })));
+  $$('[data-no]', main).forEach((b) => (b.onclick = () => { const why = prompt('Lý do không duyệt (người chi phải hoàn tiền lại quỹ):'); if (!why) return;
+    guard(b, async () => { await api(`/expenses/${b.dataset.no}/decide`, { method: 'POST', body: { status: 'rejected', reason: why } }); refreshReminderBadge(); reload(); }); }));
+  $$('[data-rf]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/expenses/${b.dataset.rf}/refunded`, { method: 'POST', body: {} }); reload(); })));
+  $$('[data-del]', main).forEach((b) => (b.onclick = () => { if (!confirm('Xóa khoản này?')) return; guard(b, async () => { await api('/expenses/' + b.dataset.del, { method: 'DELETE' }); refreshReminderBadge(); reload(); }); }));
+};
+
 // ---------- Khách hàng ----------
 VIEWS.customers = async (main) => {
   const q = S.params.q || '';
@@ -1070,7 +1132,7 @@ VIEWS.reminders = async (main) => {
   const keep = (x, appt) => want === undefined || (want === null ? !owner(x) : owner(x) === want || (appt && x.staff_id === want));
   for (const k of ['birthdays', 'cards', 'returns']) r[k] = r[k].filter((x) => keep(x));
   for (const k of ['appointments', 'cancels']) r[k] = r[k].filter((x) => keep(x, true));
-  for (const k of ['birthdays', 'cards', 'returns', 'appointments', 'cancels']) r.counts[k] = r[k].filter((x) => !x.done).length;
+  for (const k of ['birthdays', 'cards', 'returns', 'appointments', 'cancels']) r.counts[k] = r[k].filter((x) => !x.done).length; // stock/expenses giữ số từ máy chủ
   const who = (x) => { const id = owner(x); return id ? ` <span class="badge">${esc(staffName(id))}</span>` : ''; };
   const sec = (key, title, help, rows, line) => `<div class="card"><h3>${title} <span class="badge ${r.counts[key] ? 'bad' : ''}">${r.counts[key]}</span></h3><div class="small muted">${help}</div>
     ${rows.length ? rows.map((x) => `<div class="list-item" style="${x.done ? 'opacity:.5' : ''}"><div style="flex:1;min-width:0">${line(x)}<div class="small">${telLinks(x.phone)}</div></div>
@@ -1097,6 +1159,7 @@ VIEWS.reminders = async (main) => {
         <div class="small muted">Còn ${qtyFmt(m.stock)} ${esc(m.unit || '')}${m.min_qty != null ? ' · mức báo ' + qtyFmt(m.min_qty) : ''}${m.ordered_at ? ' · đã gọi ' + dmy(m.ordered_at.slice(0, 10)) + (m.ordered_by_name ? ' (' + esc(m.ordered_by_name) + ')' : '') : ''}</div></div>
         ${m.ordered_at ? '<span class="badge ok">Đã gọi</span>' : `<button class="btn sm" data-ord="${m.id}">📞 Đã gọi hàng</button>`}</div>`).join('') : '<div class="empty">Không có</div>'}
       <div style="margin-top:6px"><a href="#stock?tab=levels&st=need">Xem tồn kho →</a></div></div>` : ''}
+    ${r.expenses && r.expenses.pending_count ? `<div class="card"><h3>💸 Khoản chi chờ duyệt <span class="badge bad">${r.expenses.pending_count}</span></h3><div class="small muted">Tổng ${money(r.expenses.pending_amount)} · quỹ còn ${money(r.expenses.balance)}</div><div style="margin-top:8px"><a class="btn sm primary" href="#expenses">Mở để duyệt →</a></div></div>` : ''}
     ${sec('returns', '🔁 Khách đến hạn quay lại', 'Đã quá số ngày cài đặt kể từ lần làm gần nhất và chưa có lịch hẹn.', r.returns, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b>${who(c)} <span class="small muted">lần cuối ${dmy(c.last_date)} · ${c.days} ngày · ${c.n} lượt</span>`)}
     </div>`;
   $$('[data-ord]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/stock/${b.dataset.ord}/ordered`, { method: 'POST', body: {} }); refreshReminderBadge(); VIEWS.reminders(main); })));
@@ -1649,8 +1712,8 @@ VIEWS.settings = async (main) => {
       create_user: 'Tạo tài khoản', update_user: 'Sửa tài khoản', update_settings: 'Sửa tham số', create_service: 'Thêm dịch vụ', update_service: 'Sửa dịch vụ', backup: 'Sao lưu', download_backup: 'Tải bản sao lưu',
       create_off: 'Xin/ghi nghỉ', decide_off: 'Duyệt nghỉ', delete_off: 'Xóa đơn nghỉ', manual_attendance: 'Chấm công tay', delete_attendance: 'Xóa chấm công',
       stock_in: 'Nhập kho', stock_adjust: 'Điều chỉnh kho', stock_count: 'Kiểm kho', stock_ordered: 'Báo đã gọi hàng', stock_unordered: 'Bỏ báo gọi hàng', stock_perm: 'Phân quyền kho',
-      transfer_customers: 'Bàn giao khách', tip_paid: 'Ghi trả tip', set_tip_pool: 'Sửa nhóm chia tip', create_card_type: 'Thêm gói thẻ', update_card_type: 'Sửa gói thẻ' };
-    const hot = ['update_visit', 'delete_visit', 'adjust_card', 'delete_customer', 'export_excel', 'update_card', 'stock_adjust', 'delete_attendance'];
+      transfer_customers: 'Bàn giao khách', tip_paid: 'Ghi trả tip', expense_create: 'Ghi khoản chi', petty_in: 'Nạp quỹ', expense_approved: 'Duyệt chi', expense_rejected: 'KHÔNG duyệt chi', expense_pending: 'Đưa chi về chờ duyệt', expense_delete: 'XÓA khoản chi', expense_refunded: 'Hoàn quỹ', petty_target: 'Đổi mức quỹ', chat_to_appointment: 'Tạo lịch từ chat', delete_chat: 'Xóa tin chat', set_tip_pool: 'Sửa nhóm chia tip', create_card_type: 'Thêm gói thẻ', update_card_type: 'Sửa gói thẻ' };
+    const hot = ['update_visit', 'delete_visit', 'adjust_card', 'delete_customer', 'export_excel', 'update_card', 'stock_adjust', 'delete_attendance', 'expense_delete', 'expense_rejected'];
     const LB = { date: 'Ngày', time: 'Giờ', customer_id: 'Khách', main_staff_id: 'Thợ chính', assistant_id: 'Người phụ', staff_id: 'Thợ', surcharge: 'Phụ thu', discount: 'Giảm giá', discount_reason: 'Lý do giảm',
       total: 'Tổng tiền', card_paid: 'Trừ thẻ', cash_paid: 'Tiền thu', payment_method: 'Hình thức TT', tip: 'Tip', formula: 'Công thức', result: 'Kết quả', note: 'Ghi chú', services: 'Dịch vụ', name: 'Tên', phone: 'SĐT',
       gender: 'Giới tính', birthday: 'Sinh nhật', source: 'Nguồn', hair_notes: 'Lưu ý tóc', notes: 'Ghi chú', status: 'Trạng thái', service: 'Dịch vụ', duration: 'Thời lượng (phút)', guest_name: 'Tên khách',
@@ -1658,7 +1721,7 @@ VIEWS.settings = async (main) => {
     const MONEY = ['surcharge', 'discount', 'total', 'card_paid', 'cash_paid', 'tip', 'amount', 'price', 'value', 'unit_cost'];
     const STAFFK = ['main_staff_id', 'assistant_id', 'staff_id', 'to', 'user_id'];
     const fv = (k, v) => v == null || v === '' ? '<span class="muted">(trống)</span>' : MONEY.includes(k) ? money(v) : STAFFK.includes(k) ? esc(staffName(v) || '#' + v)
-      : k === 'status' && APPT[v] ? APPT[v][0] : esc(typeof v === 'object' ? JSON.stringify(v) : String(v));
+      : k === 'status' && APPT[v] ? APPT[v][0] : k === 'status' && EXP_ST[v] ? EXP_ST[v][0] : esc(typeof v === 'object' ? JSON.stringify(v) : String(v));
     const detail = (r) => {
       let d; try { d = r.detail ? JSON.parse(r.detail) : null; } catch { return esc(r.detail); }
       if (!d) return '';

@@ -328,6 +328,23 @@ test('luồng chính và phân quyền', async () => {
   assert.equal(db.prepare('SELECT COUNT(*) n FROM chat_messages WHERE id=?').get(plain.id).n, 0, 'xóa hẳn');
   assert.equal((await duong.get('/chat')).data.length, 1);
 
+  // Chi & quỹ: quản lý nạp 1tr; nhân viên ghi chi → chờ duyệt; không duyệt thì không trừ quỹ, phải hoàn
+  assert.equal((await thu.post('/expenses', { kind: 'in', amount: 1000000 })).status, 403, 'nhân viên không nạp quỹ');
+  await mgr.post('/expenses', { kind: 'in', amount: 1000000, note: 'Quỹ đầu' });
+  assert.equal((await thu.post('/expenses', { amount: 50000 })).status, 400, 'phải ghi mua gì');
+  const e1 = (await thu.post('/expenses', { amount: '120.000', note: 'Nước suối', category: 'Nước uống, tiếp khách' })).data;
+  const e2 = (await duong.post('/expenses', { amount: 300000, note: 'Ăn trưa' })).data;
+  let fx = (await thu.get('/expenses')).data;
+  assert.equal(fx.balance, 1000000 - 420000); assert.equal(fx.pending_count, 2); assert.equal(fx.can_decide, false);
+  assert.equal((await thu.post(`/expenses/${e1.id}/decide`, { status: 'approved' })).status, 403, 'nhân viên không tự duyệt');
+  await mgr.post(`/expenses/${e1.id}/decide`, { status: 'approved' });
+  assert.equal((await mgr.post(`/expenses/${e2.id}/decide`, { status: 'rejected' })).status, 400, 'không duyệt phải có lý do');
+  await mgr.post(`/expenses/${e2.id}/decide`, { status: 'rejected', reason: 'Không phải chi của tiệm' });
+  fx = (await mgr.get('/expenses')).data;
+  assert.equal(fx.balance, 880000); assert.equal(fx.need_topup, 120000); assert.equal(fx.pending_count, 0);
+  assert.equal(fx.refund_due[0].amount, 300000); assert.equal(fx.total_out, 120000);
+  assert.equal((await thu.del('/expenses/' + e1.id)).status, 403, 'khoản đã duyệt nhân viên không xóa được');
+
   // Lịch sử chỉnh sửa: chỉ chủ xem; ghi rõ ô nào đổi, cũ → mới
   assert.equal((await mgr.get('/audit')).status, 403);
   const au = (await owner.get(`/audit?only=edit&user_id=${staff['Chị Thu']}`)).data;
