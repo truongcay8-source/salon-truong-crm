@@ -485,6 +485,14 @@ async function importWorkbook(buffer, opts, user) {
       }
     }
 
+    // ===== Sổ nhập mỹ phẩm / hóa chất (file theo dõi chi phí cửa hàng) =====
+    for (const w of wb.worksheets) {
+      const rows = readTable(w, ['Mã NH', 'Tên sản phẩm', 'SL nhập'], 40);
+      if (!rows) continue;
+      recognised = true; summary.format = summary.format ? summary.format + ' + Sổ nhập hóa chất/sản phẩm' : 'Sổ nhập hóa chất/sản phẩm (' + w.name + ')';
+      require('./stock').importPurchases(rows, { asText, asNum, asDate, norm }, summary, user);
+    }
+
     if (!recognised) throw L.bad('Không nhận ra mẫu file. Hỗ trợ: "Salon Nếp – Nhật ký", "CRM Nếp Hair", file Excel xuất từ phần mềm (tab Khách hàng), hoặc file có tab "Lịch hẹn" (cột Ngày, Giờ, Tên khách, SĐT, Dịch vụ, Thợ).');
     if (opts.dryRun) throw ROLLBACK;
   };

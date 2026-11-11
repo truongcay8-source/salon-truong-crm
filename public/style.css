@@ -120,7 +120,10 @@ tfoot td { font-weight: 700; }
 .photo .tag { position: absolute; left: 6px; top: 6px; }
 .ba { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
-.item-row { display: grid; grid-template-columns: 1fr 120px 32px; gap: 6px; margin-bottom: 6px; }
+.item-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.item-row > select { flex: 1; min-width: 0; }
+.item-row > .iprice { width: 120px; flex: none; }
+.item-row > .icon-btn { flex: none; width: 32px; }
 .totals { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; margin-top: 12px; }
 .totals .row { justify-content: space-between; }
 .totals .big { font-size: 18px; font-weight: 700; }

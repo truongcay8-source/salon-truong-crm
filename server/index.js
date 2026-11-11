@@ -11,6 +11,7 @@ const { importWorkbook } = require('./importer');
 const { exportWorkbook } = require('./exporter');
 const { startBackups, backupNow } = require('./backup');
 const staffMod = require('./staff');
+const stockMod = require('./stock');
 
 const { HttpError, bad, int, str, today } = L;
 const app = express();
@@ -586,9 +587,10 @@ app.get('/api/dashboard', (req, res) => {
 });
 
 staffMod.mount(app, { MGR, OWNER });
+stockMod.mount(app, { MGR, OWNER });
 
 // ---------- Nhập / xuất Excel ----------
-const xlsxUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+const xlsxUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 60 * 1024 * 1024 } }); // sổ chi phí có ảnh hóa đơn ~20MB+
 app.post('/api/import', MGR, xlsxUpload.single('file'), async (req, res) => {
   if (!req.file) throw bad('Chưa chọn file Excel');
   const opts = { dryRun: req.body.dry_run !== '0', includeHistory: req.body.include_history === '1' };
