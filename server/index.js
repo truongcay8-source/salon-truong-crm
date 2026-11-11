@@ -287,6 +287,31 @@ app.delete('/api/customers/:id', OWNER, (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Tìm kiếm nhanh: khách, thẻ, lịch hẹn, lượt làm ----------
+app.get('/api/search', (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return res.json({ customers: [], cards: [], appointments: [], visits: [] });
+  const like = `%${q}%`;
+  const digits = q.replace(/\D/g, '');
+  const ph = digits.length >= 3 ? `%${digits}%` : '%%NOPE%%';
+  const customers = db.prepare(`SELECT id, code, name, phone,
+      (SELECT MAX(date) FROM visits v WHERE v.customer_id=c.id AND v.status='done') last_visit
+    FROM customers c WHERE deleted=0 AND (name LIKE ? OR code LIKE ? OR phone LIKE ?) ORDER BY name LIMIT 10`).all(like, like, ph);
+  const cards = db.prepare(`SELECT cd.id, cd.code, cd.name, cd.status, cd.expires_at, cd.customer_id, c.name customer_name, c.phone
+    FROM cards cd JOIN customers c ON c.id=cd.customer_id WHERE cd.code LIKE ? OR c.name LIKE ? OR c.phone LIKE ? ORDER BY cd.id DESC LIMIT 10`).all(like, like, ph)
+    .map((c) => ({ ...c, balance: L.cardBalance(c.id) }));
+  const appointments = db.prepare(`SELECT a.id, a.date, a.time, a.status, a.service, a.customer_id, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, u.full_name staff_name
+    FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id
+    WHERE a.date >= ? AND (COALESCE(c.name,a.guest_name) LIKE ? OR COALESCE(c.phone,a.guest_phone) LIKE ? OR a.service LIKE ? OR a.note LIKE ?)
+    ORDER BY a.date, a.time LIMIT 10`).all(L.addDays(today(), -30), like, ph, like, like);
+  const visits = db.prepare(`SELECT v.id, v.code, v.date, v.customer_id, c.name customer_name,
+      (SELECT GROUP_CONCAT(name, ' + ') FROM visit_items WHERE visit_id=v.id) services
+    FROM visits v JOIN customers c ON c.id=v.customer_id WHERE v.status='done' AND (v.code LIKE ? OR v.formula LIKE ? OR v.note LIKE ?
+      OR EXISTS (SELECT 1 FROM visit_items i WHERE i.visit_id=v.id AND i.name LIKE ?))
+    ORDER BY v.date DESC, v.id DESC LIMIT 10`).all(like, like, like, like);
+  res.json({ customers, cards, appointments, visits });
+});
+
 // ---------- Lịch hẹn ----------
 app.get('/api/appointments', (req, res) => {
   const from = L.isDate(req.query.from) ? req.query.from : today();
