@@ -415,6 +415,9 @@ test('bán thẻ 2 người: người tư vấn + chia hoa hồng, quản lý s�
   // Nhân viên khác chỉ thấy HH của mình
   const list = (await thu.get('/cards?customer_id=' + ids.lan)).data.find((x) => x.id === id);
   assert.equal(list.commission, 175000); assert.equal(list.consultant_commission, null);
+  // Khách tự nạp: tính 100% cho thợ phụ trách (người chốt 0%)
+  r = await thu.post('/cards', { customer_id: ids.lan, card_type_id: vang.id, sale_type: 'renewal', consultant_id: staff['Trường'], seller_share: 0, payment_method: 'Tiền mặt' });
+  assert.equal(r.data.commission, 0); assert.equal(r.data.consultant_commission, 150000);
 });
 
 test('lượt nhập từ Excel không có hình thức TT: chủ vẫn sửa được tip', async () => {

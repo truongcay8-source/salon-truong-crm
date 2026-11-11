@@ -1240,13 +1240,16 @@ function bindCardTable(root, cards, reload) {
   }));
 }
 // Người chốt bán + người tư vấn + cách chia hoa hồng (gợi ý 50/50 khi cùng làm, 70/30 khi 1 người chỉ giới thiệu)
-const SPLITS = [[50, '50/50 · hai người cùng tư vấn và chốt'], [70, '70/30 · người chốt 70%, người giới thiệu 30%'], [60, '60/40'], [30, '30/70 · người tư vấn làm chính']];
+const SPLITS = [[50, '50/50'], [70, '70/30'], [60, '60/40'], [30, '30/70']];
 function sellerFields(c = {}) {
   const share = c.consultant_id ? c.seller_share : 50;
   return `<div><label>Nhân viên chốt bán</label><select name="seller_id" ${!isMgr() ? 'disabled' : ''}>${staffOptions(c.seller_id || S.me.id, '')}</select></div>
     <div><label>Người tư vấn / giới thiệu (nếu có)</label><select name="consultant_id">${staffOptions(c.consultant_id || null, '— Không có —')}</select></div>
-    <div class="full sp-wrap" ${c.consultant_id ? '' : 'hidden'}><label>Chia hoa hồng (người chốt / người tư vấn)</label><select name="seller_share">${SPLITS.map(([v, t]) => `<option value="${v}" ${v === share ? 'selected' : ''}>${t}</option>`).join('')}${SPLITS.some(([v]) => v === share) ? '' : `<option value="${share}" selected>${share}/${100 - share}</option>`}</select>
-      <div class="small muted sp-txt"></div></div>`;
+    <div class="full sp-wrap" ${c.consultant_id ? '' : 'hidden'}><label>Người chốt được bao nhiêu % hoa hồng (gõ số bất kỳ, phần còn lại cho người tư vấn)</label>
+      <div class="row"><input type="number" name="seller_share" min="0" max="100" step="5" value="${share}" style="width:90px"> %
+        ${SPLITS.map(([v, t]) => `<button type="button" class="btn sm" data-sp="${v}">${t}</button>`).join('')}</div>
+      <div class="small muted sp-txt"></div></div>
+    <div class="full small muted sp-hint"></div>`;
 }
 function bindSellerFields(f, c = {}) {
   const sel = f.querySelector('[name=consultant_id]'), wrap = f.querySelector('.sp-wrap'), sh = f.querySelector('[name=seller_share]'), txt = f.querySelector('.sp-txt');
@@ -1265,8 +1268,34 @@ function bindSellerFields(f, c = {}) {
       txt.innerHTML = tot ? `Tổng HH ${money(tot)} → người chốt <b>${money(a)}</b>, người tư vấn <b>${money(tot - a)}</b>` : 'Thẻ này không có hoa hồng.';
     }
   };
-  f.querySelectorAll('select,input').forEach((x) => x.addEventListener('change', show));
+  f.querySelectorAll('select,input').forEach((x) => { x.addEventListener('change', show); if (x === sh) x.addEventListener('input', show); });
+  f.querySelectorAll('[data-sp]').forEach((b) => (b.onclick = () => { sh.value = b.dataset.sp; show(); }));
+  f._spShow = show;
   show();
+}
+// Khách đã từng mua thẻ → tự chọn "Mua lại / nạp thêm"; thợ phụ trách khách (nếu khác người bán) gợi ý làm người tư vấn 50/50
+async function suggestRenewal(f, cid) {
+  const hint = f.querySelector('.sp-hint');
+  if (!cid) { hint.textContent = ''; return; }
+  const [cards, cu] = await Promise.all([api('/cards?customer_id=' + cid), api('/customers/' + cid)]);
+  const old = cards.filter((x) => x.sale_type !== 'gift' && x.status !== 'refunded');
+  const parts = [];
+  if (old.length) {
+    f.querySelector('[name=sale_type]').value = 'renewal';
+    parts.push(`Khách đã mua ${old.length} thẻ (gần nhất ${esc(old[0].code)} · ${dmy(old[0].sold_at)}) → đã chọn <b>Mua lại / nạp thêm</b>.`);
+  }
+  const c = cu.customer || cu;
+  const seller = Number(f.querySelector('[name=seller_id]').value || S.me.id);
+  const k = f.querySelector('[name=consultant_id]');
+  if (old.length && c.staff_id && c.staff_id !== seller && !k.value) {
+    k.value = c.staff_id; f.querySelector('[name=seller_share]').value = 50;
+    parts.push(`Thợ phụ trách khách là <b>${esc(c.staff_name || staffName(c.staff_id))}</b> → gợi ý làm người tư vấn, chia 50/50 (sửa được).`);
+  } else if (old.length && c.staff_id === seller) parts.push('Người bán là thợ phụ trách khách → nhận đủ hoa hồng.');
+  if (c.staff_id && c.staff_id !== seller) parts.push(`<button type="button" class="btn sm" id="selfTop">🙋 Khách tự nạp, không ai tư vấn → tính 100% cho ${esc(c.staff_name || staffName(c.staff_id))}</button>`);
+  hint.innerHTML = parts.join('<br>');
+  const st = hint.querySelector('#selfTop');
+  if (st) st.onclick = () => { k.value = c.staff_id; f.querySelector('[name=seller_share]').value = 0; f._spShow && f._spShow(); };
+  f._spShow && f._spShow();
 }
 function cardForm(customer, after) {
   openModal('Bán thẻ trả trước', `<form id="sf"><div class="form-grid">
@@ -1281,8 +1310,9 @@ function cardForm(customer, after) {
     <div class="full"><label>Ghi chú</label><input name="note"></div></div>
     <div class="small muted">Tiền bán thẻ tính vào <b>tiền vào</b>, không tính vào doanh số dịch vụ (doanh số tính khi khách dùng thẻ) — tránh cộng 2 lần.</div>
     <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Bán thẻ</button></div></form>`);
-  bindPicker($('#sf'));
+  bindPicker($('#sf'), (cid) => suggestRenewal($('#sf'), cid));
   bindSellerFields($('#sf'));
+  if (customer && customer.id) suggestRenewal($('#sf'), customer.id);
   $('#sf').onsubmit = (e) => {
     e.preventDefault();
     guard($('#sf button.primary'), async () => {
