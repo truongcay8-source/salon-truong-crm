@@ -68,7 +68,7 @@ cat > /etc/caddy/Caddyfile <<CADDY
 $DOMAIN {
   encode gzip
   request_body {
-    max_size 25MB
+    max_size 64MB
   }
   reverse_proxy localhost:$PORT
 }

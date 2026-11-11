@@ -208,6 +208,41 @@ test('luồng chính và phân quyền', async () => {
   assert.equal(ap.status, 'done'); assert.equal(ap.visit_total, cutM.price); assert.equal(ap.visit_services, 'Cắt tóc nữ – Director');
   assert.equal((await nv6.get(`/appointments?from=${d3}&to=${d3}`)).data.find((x) => x.id === apId).visit_total, null, 'thợ khác không thấy tiền');
 
+  // Kho & giá cốt: nhập hóa chất, định mức, ghi hóa chất ở phiếu thu, bán sản phẩm tên thật; nhân viên không thấy giá vốn
+  assert.equal((await thu.post('/materials', { name: 'Màu X 100ml', kind: 'service' })).status, 403);
+  const color = (await mgr.post('/materials', { name: 'Màu X', kind: 'service', unit: 'Tuýp', size: 100, size_unit: 'ml' })).data.id;
+  const oxy = (await mgr.post('/materials', { name: 'Oxy 6%', kind: 'service', unit: 'Chai', size: 1000, size_unit: 'ml' })).data.id;
+  const shampoo = (await mgr.post('/materials', { name: 'Dầu gội Y 250ml', kind: 'retail', unit: 'Chai', sell_price: 450000 })).data.id;
+  await mgr.post(`/materials/${color}/move`, { kind: 'in', qty: 10, unit_cost: 200000 });
+  await mgr.post(`/materials/${color}/move`, { kind: 'in', qty: 10, unit_cost: 100000 });
+  await mgr.post(`/materials/${oxy}/move`, { kind: 'in', qty: 2, unit_cost: 300000 });
+  await mgr.post(`/materials/${shampoo}/move`, { kind: 'in', qty: 6, unit_cost: 250000 });
+  const dye = (await mgr.get('/services')).data.find((x) => x.name === 'Nhuộm');
+  assert.equal((await mgr.put('/recipes/' + dye.id, { lines: [{ material_id: color, qty: 0.6 }, { material_id: oxy, qty: 0.09 }] })).status, 200);
+  assert.equal((await mgr.get('/recipes')).data.find((x) => x.material_id === color).cost, 90000, 'giá vốn bình quân 150k × 0,6 tuýp');
+  assert.equal((await thu.get('/recipes')).data[0].cost, undefined, 'nhân viên không thấy giá cốt định mức');
+  r = await mgr.post('/visits', { customer_id: huong, date: d3, time: '15:00', main_staff_id: staff['Trường'], assistant_id: staff['Chị Thu'], payment_method: 'Tiền mặt',
+    items: [{ service_id: dye.id }, { material_id: shampoo, qty: 2 }], materials: [{ material_id: color, qty: 0.6 }, { material_id: oxy, qty: 0.09 }] });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const vid = r.data.id;
+  assert.equal(r.data.cost, 90000 + 27000 + 500000, 'hóa chất 117k + 2 chai × 250k');
+  assert.equal(r.data.total, dye.price + 900000);
+  assert.ok(r.data.items.some((i) => i.name === 'Dầu gội Y 250ml ×2' && i.grp === 'Bán sản phẩm'));
+  let mats = (await mgr.get('/materials')).data;
+  assert.equal(mats.find((m) => m.id === color).stock, 19.4); assert.equal(mats.find((m) => m.id === shampoo).stock, 4);
+  const tv = (await thu.get('/visits/' + vid)).data;
+  assert.equal(tv.cost, null, 'thợ phụ không thấy giá cốt'); assert.equal(tv.materials[0].unit_cost, null); assert.equal(tv.materials.length, 2);
+  assert.equal((await thu.get('/materials')).data.find((m) => m.id === color).avg_cost, undefined, 'nhân viên không thấy giá vốn');
+  assert.equal((await thu.get('/reports/cost')).status, 403);
+  r = await mgr.get(`/reports/cost?from=${d3}&to=${d3}`);
+  assert.equal(r.data.summary.use_cost, 117000); assert.equal(r.data.summary.product_cost, 500000); assert.equal(r.data.summary.product_revenue, 900000);
+  // Sửa lượt không gửi hóa chất → giữ nguyên; xóa lượt → trả lại kho
+  await mgr.put('/visits/' + vid, { customer_id: huong, date: d3, time: '15:00', main_staff_id: staff['Trường'], payment_method: 'Tiền mặt', items: [{ service_id: dye.id }] });
+  mats = (await mgr.get('/materials')).data;
+  assert.equal(mats.find((m) => m.id === color).stock, 19.4); assert.equal(mats.find((m) => m.id === shampoo).stock, 6);
+  await mgr.del('/visits/' + vid, { reason: 'test' });
+  assert.equal((await mgr.get('/materials')).data.find((m) => m.id === color).stock, 20);
+
   // Tìm kiếm nhanh: theo tên, SĐT, mã thẻ
   r = await thu.get('/search?q=Hương');
   assert.ok(r.data.customers.some((c) => c.id === huong)); assert.ok(r.data.appointments.some((x) => x.id === apId));

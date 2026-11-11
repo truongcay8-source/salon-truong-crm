@@ -1,7 +1,7 @@
 'use strict';
 /* CRM Salon Nếp — giao diện một trang, không cần build. */
 
-const S = { me: null, settings: null, groups: [], today: null, staff: [], services: [], cardTypes: [], page: 'dashboard', params: {} };
+const S = { me: null, settings: null, groups: [], today: null, staff: [], services: [], cardTypes: [], materials: [], recipes: [], page: 'dashboard', params: {} };
 const ROLE = { owner: 'Lãnh đạo', manager: 'Quản lý', staff: 'Nhân viên' };
 const APPT = { booked: ['Đã đặt', 'brand'], arrived: ['Đã đến', 'warn'], done: ['Hoàn thành', 'ok'], cancelled: ['Đã hủy', ''], noshow: ['Không đến', 'bad'] };
 const $ = (s, el = document) => el.querySelector(s);
@@ -103,6 +103,7 @@ const PAGES = [
   ['sales', 'Doanh số', '📊', () => true],
   ['attendance', 'Chấm công', '🕘', () => true],
   ['offs', 'Lịch off', '🌴', () => true],
+  ['stock', 'Kho & giá cốt', '🧪', isMgr],
   ['excel', 'Nhập / Xuất Excel', '📥', isMgr],
   ['settings', 'Cài đặt', '⚙️', () => true],
 ];
@@ -114,7 +115,7 @@ async function boot() {
     const me = await api('/me');
     S.me = me.user; S.settings = me.settings; S.groups = me.groups; S.today = me.today;
     if (S.me.must_change_pw) return renderChangePw(true);
-    [S.staff, S.services, S.cardTypes] = await Promise.all([api('/staff'), api('/services'), api('/card-types')]);
+    [S.staff, S.services, S.cardTypes, S.materials, S.recipes] = await Promise.all([api('/staff'), api('/services'), api('/card-types'), api('/materials'), api('/recipes')]);
     shell();
     route();
   } catch (e) { if (e.status !== 401) console.error(e); if (!S.me) renderLogin(); }
@@ -522,6 +523,17 @@ const estTotal = (text) => splitSvc(text).reduce((t, n) => t + svcPrice(n), 0);
 const kMoney = (v) => (v >= 1000 ? (v / 1000).toLocaleString('vi-VN') + 'k' : money(v));
 // Dòng dịch vụ kèm giá: "Cắt nữ 150k + Gội 50k"
 const svcWithPrice = (text) => splitSvc(text).map((n) => { const p = svcPrice(n); return esc(n) + (p ? ` <span class="price">${kMoney(p)}</span>` : ''); }).join(' + ');
+// ---------- Kho: hóa chất & sản phẩm ----------
+const matById = (id) => S.materials.find((m) => m.id === Number(id));
+const matUnit = (m) => (m && m.size ? m.size_unit : (m && m.unit ? m.unit.split(' ')[0].toLowerCase() : 'đv'));
+// lượng nhập trên phiếu (ml/g, hoặc số tuýp/chai nếu chưa có dung tích) ↔ số đơn vị kho
+const toUnits = (m, amt) => (m && m.size ? Number(amt) / m.size : Number(amt));
+const fromUnits = (m, q) => Math.round((m && m.size ? q * m.size : q) * 100) / 100;
+const matOptions = (kind, sel) => {
+  const list = S.materials.filter((m) => m.kind === kind && (m.active || m.id === sel));
+  const groups = [...new Set(list.map((m) => m.grp || 'Khác'))];
+  return groups.map((g) => `<optgroup label="${esc(g)}">${list.filter((m) => (m.grp || 'Khác') === g).map((m) => `<option value="${m.id}" ${m.id === sel ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</optgroup>`).join('');
+};
 const SVC_MIN = { 'Cắt': 45, 'Gội & chăm sóc': 30, 'Hóa chất': 120, 'Bán sản phẩm': 0 }; // thời lượng gợi ý
 function apptForm(a = {}, after) {
   const isEdit = !!a.id;
@@ -693,8 +705,21 @@ async function visitForm(v = {}, after) {
   const isEdit = !!v.id;
   const methods = S.settings.payment_methods;
   const svcOpts = (sel) => `<option value="">— Dịch vụ —</option>` + S.groups.map((g) => `<optgroup label="${esc(g)}">${S.services.filter((s) => s.grp === g && (s.active || s.id === sel))
-    .map((s) => `<option value="${s.id}" data-price="${s.price}" ${s.id === sel ? 'selected' : ''}>${esc(s.name)}${s.price ? ' · ' + (s.price / 1000) + 'k' : ''}</option>`).join('')}</optgroup>`).join('');
-  let items = v.items ? v.items.map((i) => ({ service_id: i.service_id, name: i.name, price: i.price })) : [];
+    .map((s) => `<option value="${s.id}" data-price="${s.price}" ${s.id === sel ? 'selected' : ''}>${esc(s.name)}${s.price ? ' · ' + (s.price / 1000) + 'k' : ''}</option>`).join('')}</optgroup>`).join('')
+    + (S.materials.some((m) => m.kind === 'retail' && m.active) ? `<optgroup label="🛍 Sản phẩm bán lẻ (trừ kho)">${S.materials.filter((m) => m.kind === 'retail' && m.active)
+      .map((m) => `<option value="m${m.id}" data-price="${m.sell_price || 0}">${esc(m.name)}${m.sell_price ? ' · ' + kMoney(m.sell_price) : ''}</option>`).join('')}</optgroup>` : '');
+  let items = v.items ? v.items.map((i) => (i.material_id ? { material_id: i.material_id, qty: i.qty || 1, price: i.price } : { service_id: i.service_id, name: i.name, price: i.price })) : [];
+  // Hóa chất đã dùng: amt theo ml/g (hoặc tuýp/chai nếu chưa khai dung tích)
+  let used = (v.materials || []).map((x) => ({ material_id: x.material_id, amt: fromUnits(matById(x.material_id), x.qty) }));
+  const recipeFor = (its) => {
+    const out = [];
+    for (const it of its) for (const r of S.recipes.filter((x) => x.service_id === Number(it.service_id))) {
+      const m = matById(r.material_id); if (!m) continue;
+      const ex = out.find((o) => o.material_id === r.material_id);
+      if (ex) ex.amt = Math.round((ex.amt + fromUnits(m, r.qty)) * 100) / 100; else out.push({ material_id: r.material_id, amt: fromUnits(m, r.qty) });
+    }
+    return out;
+  };
   if (!items.length) {
     items = splitSvc(v.service).map((n) => { const g = findSvc(n); return g ? { service_id: g.id, price: g.price } : { service_id: '', name: n, price: '' }; });
     if (!items.length) items = [{ service_id: '', price: '' }];
@@ -706,7 +731,9 @@ async function visitForm(v = {}, after) {
     <div><label>Giờ</label><input type="time" name="time" value="${v.time || new Date().toTimeString().slice(0, 5)}"></div>
     <div><label>Thợ chính *</label><select name="main_staff_id" required>${staffOptions(v.main_staff_id || (!isMgr() ? S.me.id : null))}</select></div>
     <div><label>Người phụ</label><select name="assistant_id">${staffOptions(v.assistant_id, 'Không có')}</select></div>
-    <div class="full"><label>Dịch vụ (giá sửa được)</label><div id="items"></div><div class="row"><div style="flex:1;min-width:200px" id="vSvcS"></div><button type="button" class="btn sm" id="addItem">+ Thêm dòng</button></div></div>
+    <div class="full"><label>Dịch vụ / sản phẩm bán (giá sửa được)</label><div id="items"></div><div class="row"><div style="flex:1;min-width:200px" id="vSvcS"></div><button type="button" class="btn sm" id="addItem">+ Thêm dòng</button></div></div>
+    ${S.materials.some((m) => m.kind === 'service') ? `<div class="full"><label>🧪 Hóa chất đã dùng (ghi để tính giá cốt, trừ kho)</label><div id="used"></div>
+      <div class="row"><button type="button" class="btn sm" id="addUsed">+ Thêm hóa chất</button><button type="button" class="btn sm" id="recipeFill">↻ Lấy theo định mức dịch vụ</button></div></div>` : ''}
     <div><label>Phụ thu</label><input type="number" name="surcharge" min="0" step="1000" value="${v.surcharge || ''}"></div>
     <div><label>Giảm giá</label><input type="number" name="discount" min="0" step="1000" value="${v.discount || ''}"></div>
     <div class="full"><label>Lý do giảm (bắt buộc nếu có giảm)</label><input name="discount_reason" list="reasons" value="${esc(v.discount_reason || '')}">
@@ -727,9 +754,15 @@ async function visitForm(v = {}, after) {
   const f = $('#vf');
   let cards = [];
   const renderItems = () => {
-    $('#items').innerHTML = items.map((it, i) => `<div class="item-row"><select data-i="${i}" class="isvc">${svcOpts(it.service_id)}${!it.service_id && it.name ? `<option selected value="">${esc(it.name)}</option>` : ''}</select>
+    $('#items').innerHTML = items.map((it, i) => `<div class="item-row"><select data-i="${i}" class="isvc">${svcOpts(it.service_id).replace(it.material_id ? `value="m${it.material_id}"` : '\u0000', `value="m${it.material_id}" selected`)}${!it.service_id && !it.material_id && it.name ? `<option selected value="">${esc(it.name)}</option>` : ''}</select>
+      ${it.material_id ? `<input type="number" data-i="${i}" class="iqty" min="1" step="1" value="${it.qty || 1}" title="Số lượng" style="width:64px">` : ''}
       <input type="number" data-i="${i}" class="iprice" min="0" step="1000" value="${it.price ?? ''}" placeholder="Giá"><button type="button" class="icon-btn" data-rm="${i}">×</button></div>`).join('');
-    $$('.isvc', f).forEach((s) => (s.onchange = () => { const o = s.selectedOptions[0]; items[s.dataset.i] = { service_id: Number(s.value) || '', price: o && o.dataset.price ? Number(o.dataset.price) : '' }; renderItems(); }));
+    $$('.isvc', f).forEach((s) => (s.onchange = () => {
+      const o = s.selectedOptions[0], price = o && o.dataset.price ? Number(o.dataset.price) : '';
+      items[s.dataset.i] = s.value.startsWith('m') ? { material_id: Number(s.value.slice(1)), qty: 1, price } : { service_id: Number(s.value) || '', price };
+      renderItems(); autoRecipe();
+    }));
+    $$('.iqty', f).forEach((q) => (q.oninput = () => { const it = items[q.dataset.i]; const m = matById(it.material_id); it.qty = Math.max(1, Number(q.value) || 1); if (m && m.sell_price) { it.price = m.sell_price * it.qty; $(`.iprice[data-i="${q.dataset.i}"]`, f).value = it.price; } calc(); }));
     $$('.iprice', f).forEach((p) => (p.oninput = () => { items[p.dataset.i].price = p.value; calc(); }));
     $$('[data-rm]', f).forEach((b) => (b.onclick = () => { items.splice(b.dataset.rm, 1); if (!items.length) items.push({ service_id: '', price: '' }); renderItems(); }));
     calc();
@@ -748,8 +781,25 @@ async function visitForm(v = {}, after) {
     $('#tot').innerHTML = `<div class="row"><span>Tạm tính</span><span class="num">${money(sub)}</span></div>
       <div class="row"><span>Doanh số lượt này</span><span class="num big">${money(total)}</span></div>
       ${cardSel ? `<div class="row"><span>Trừ thẻ</span><span class="num">−${money(cardPaid)}</span></div>` : ''}
-      <div class="row"><span><b>Khách trả thêm</b></span><span class="num big">${money(Math.max(0, total - cardPaid))}</span></div>`;
+      <div class="row"><span><b>Khách trả thêm</b></span><span class="num big">${money(Math.max(0, total - cardPaid))}</span></div>
+      ${isMgr() && (used.length || items.some((i) => i.material_id)) ? (() => {
+        const cost = Math.round(used.reduce((t, u) => { const m = matById(u.material_id); return t + (m ? toUnits(m, u.amt || 0) * (m.avg_cost || 0) : 0); }, 0)
+          + items.reduce((t, i) => { const m = i.material_id && matById(i.material_id); return t + (m ? (i.qty || 1) * (m.avg_cost || 0) : 0); }, 0));
+        return `<div class="row small muted"><span>Giá cốt (hóa chất + giá vốn SP) · chỉ quản lý thấy</span><span class="num">${money(cost)} · lãi gộp ${money(total - cost)}${total ? ' (' + Math.round((total - cost) / total * 100) + '%)' : ''}</span></div>`;
+      })() : ''}`;
   };
+  const renderUsed = () => {
+    const box = $('#used'); if (!box) return;
+    box.innerHTML = used.map((u, i) => { const m = matById(u.material_id); return `<div class="item-row"><select data-u="${i}" class="usel"><option value="">— Chọn hóa chất —</option>${matOptions('service', u.material_id)}</select>
+      <input type="number" data-u="${i}" class="uamt" min="0" step="any" value="${u.amt ?? ''}" placeholder="Lượng" style="width:90px"><span class="small muted" style="min-width:34px">${esc(matUnit(m))}</span><button type="button" class="icon-btn" data-urm="${i}">×</button></div>`; }).join('')
+      || '<div class="small muted">Chưa ghi hóa chất. Bấm "Lấy theo định mức" hoặc "+ Thêm hóa chất".</div>';
+    $$('.usel', box).forEach((s) => (s.onchange = () => { used[s.dataset.u] = { material_id: Number(s.value) || '', amt: used[s.dataset.u].amt }; renderUsed(); }));
+    $$('.uamt', box).forEach((a) => (a.oninput = () => { used[a.dataset.u].amt = a.value === '' ? '' : Number(a.value); calc(); }));
+    $$('[data-urm]', box).forEach((b) => (b.onclick = () => { used.splice(Number(b.dataset.urm), 1); renderUsed(); }));
+    calc();
+  };
+  let usedTouched = isEdit;
+  const autoRecipe = () => { if (usedTouched) return; const r = recipeFor(items); if (r.length) { used = r; renderUsed(); } };
   let extraCards = [];
   const loadCards = async (customerId, pick) => {
     const own = customerId ? (await api('/cards?status=active&customer_id=' + customerId)).filter((c) => c.balance > 0 || c.id === v.card_id) : [];
@@ -813,16 +863,25 @@ async function visitForm(v = {}, after) {
   };
   bindPicker(f, loadCards);
   $('#addItem').onclick = () => { items.push({ service_id: '', price: '' }); renderItems(); };
+  if ($('#used')) {
+    $('#used').addEventListener('input', () => { usedTouched = true; });
+    $('#used').addEventListener('change', () => { usedTouched = true; });
+    $('#addUsed').onclick = () => { usedTouched = true; used.push({ material_id: '', amt: '' }); renderUsed(); };
+    $('#recipeFill').onclick = () => { const r = recipeFor(items); if (!r.length) return toast('Dịch vụ đã chọn chưa có định mức. Quản lý cài ở Kho & giá cốt → Định mức'); used = r; usedTouched = true; renderUsed(); };
+  }
   const vss = svcSearch('vSvcQ', (sv) => { const empty = items.findIndex((i) => !i.service_id && !i.name); const it = { service_id: sv.id, price: sv.price }; if (empty >= 0) items[empty] = it; else items.push(it); renderItems(); });
   $('#vSvcS').innerHTML = vss.html; vss.bind();
   for (const n of ['surcharge', 'discount']) f[n].oninput = calc;
   renderItems();
+  if (!isEdit && !used.length) autoRecipe(); else renderUsed();
   loadCards(custSel && custSel.id);
   f.onsubmit = (e) => {
     e.preventDefault();
     guard($('#vf button.primary'), async () => {
       const d = formData(f);
-      const body = { ...d, items: items.filter((i) => i.service_id || i.name).map((i) => ({ service_id: i.service_id || null, name: i.name, price: i.price === '' ? null : Number(i.price) })), appointment_id: v.appointment_id };
+      const body = { ...d, items: items.filter((i) => i.service_id || i.name || i.material_id).map((i) => (i.material_id ? { material_id: i.material_id, qty: i.qty || 1, price: i.price === '' ? null : Number(i.price) }
+        : { service_id: i.service_id || null, name: i.name, price: i.price === '' ? null : Number(i.price) })), appointment_id: v.appointment_id };
+      if ($('#used')) body.materials = used.filter((u) => u.material_id && Number(u.amt) > 0).map((u) => ({ material_id: u.material_id, qty: toUnits(matById(u.material_id), u.amt) }));
       if (body.card_id && body.card_paid === '') body.card_paid = 0;
       const saved = await api(isEdit ? '/visits/' + v.id : '/visits', { method: isEdit ? 'PUT' : 'POST', body });
       if (!isEdit) {
@@ -984,6 +1043,124 @@ VIEWS.cards = async (main) => {
   bindCardTable(main, cards, () => VIEWS.cards(main));
 };
 
+// ---------- Kho & giá cốt (chỉ Lãnh đạo / Quản lý) ----------
+const perUnit = (m) => (m.size ? `${money(Math.round(m.avg_cost / m.size))}/${m.size_unit}` : '');
+VIEWS.stock = async (main) => {
+  if (!isMgr()) { main.innerHTML = '<div class="empty">Chỉ quản lý xem được trang này</div>'; return; }
+  const tab = S.params.tab || 'report';
+  const reload = () => VIEWS.stock(main);
+  const tabs = [['report', 'Giá cốt & lãi gộp'], ['items', 'Hóa chất & sản phẩm'], ['recipes', 'Định mức dịch vụ']];
+  const top = header('Kho & giá cốt', 'Chỉ Lãnh đạo / Quản lý thấy giá nhập, giá cốt, lãi gộp') +
+    `<div class="card"><div class="row">${tabs.map(([k, l]) => `<button class="btn sm ${k === tab ? 'primary' : ''}" data-tab="${k}">${l}</button>`).join('')}
+    <span class="spacer"></span><button class="btn sm" data-goto="excel">📥 Tải file sổ nhập hàng</button></div></div>`;
+  S.materials = await api('/materials?all=1');
+  const bindTop = () => { $$('[data-tab]', main).forEach((b) => (b.onclick = () => go('stock', { tab: b.dataset.tab }))); $$('[data-goto]', main).forEach((b) => (b.onclick = () => go(b.dataset.goto))); };
+
+  if (tab === 'report') {
+    const from = S.params.from || S.today.slice(0, 8) + '01', to = S.params.to || S.today;
+    const r = await api(`/reports/cost?from=${from}&to=${to}`);
+    const s = r.summary;
+    const pc = (a, b) => (b ? Math.round(a / b * 100) + '%' : '—');
+    main.innerHTML = top + `<div class="card"><div class="row"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="t" value="${to}" style="width:auto"><button class="btn sm" id="go">Xem</button></div></div>
+      <div class="grid kpis">
+        <div class="kpi"><div class="l">Doanh số hóa chất</div><div class="v">${money(s.chem_revenue)}</div><div class="s">${s.chem_visits} lượt</div></div>
+        <div class="kpi"><div class="l">Giá cốt hóa chất đã dùng</div><div class="v">${money(s.use_cost)}</div><div class="s">= ${pc(s.use_cost, s.chem_revenue)} doanh số hóa chất</div></div>
+        <div class="kpi"><div class="l">Bán sản phẩm</div><div class="v">${money(s.product_revenue)}</div><div class="s">giá vốn ${money(s.product_cost)} · lãi ${money(s.product_revenue - s.product_cost)}</div></div>
+        <div class="kpi"><div class="l">Tồn kho (giá vốn)</div><div class="v">${money(s.stock_value_service + s.stock_value_retail)}</div><div class="s">hóa chất ${money(s.stock_value_service)} · SP ${money(s.stock_value_retail)}</div></div></div>
+      ${s.chem_visits_no_record ? `<div class="card" style="border-color:var(--warn)">⚠ <b>${s.chem_visits_no_record}/${s.chem_visits}</b> lượt hóa chất <b>chưa ghi lượng hóa chất</b> → giá cốt đang thấp hơn thực tế. Nhắc thợ ghi ở phiếu thu (có nút "Lấy theo định mức").</div>` : ''}
+      <div class="card"><h3>Từng lượt có hóa chất / bán sản phẩm</h3>${r.visits.length ? `<div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Lượt</th><th>Khách</th><th>Thợ</th><th>Dịch vụ</th><th class="num">Doanh số</th><th class="num">Giá cốt</th><th class="num">Lãi gộp</th><th class="num">% cốt</th></tr></thead>
+        <tbody>${r.visits.map((v) => `<tr class="click" data-c="${v.id}"><td>${dmy(v.date)}</td><td class="muted">${esc(v.code)}</td><td>${esc(v.customer_name)}</td><td>${esc(v.staff_name || '')}</td><td class="small">${esc(v.services || '')}</td>
+          <td class="num">${money(v.total)}</td><td class="num">${v.used_lines || v.cost ? money(v.cost) : '<span class="badge warn">chưa ghi</span>'}</td><td class="num"><b>${money(v.total - v.cost)}</b></td><td class="num">${pc(v.cost, v.total)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Chưa có lượt nào</div>'}</div>
+      <div class="card"><h3>Hóa chất / sản phẩm dùng nhiều tiền nhất</h3>${r.top_used.length ? r.top_used.map((t) => `<div class="stat-line"><span>${esc(t.name)} <span class="muted small">${t.size ? Math.round(t.qty * t.size) + ' ' + t.size_unit : Math.round(t.qty * 100) / 100 + ' ' + esc(t.unit || '')}</span></span><b>${money(t.cost)}</b></div>`).join('') : '<div class="empty">—</div>'}</div>`;
+    bindTop();
+    $('#go').onclick = () => go('stock', { tab, from: $('#f').value, to: $('#t').value });
+    $$('[data-c]', main).forEach((tr) => (tr.onclick = async () => visitForm(await api('/visits/' + tr.dataset.c), reload)));
+    return;
+  }
+
+  if (tab === 'items') {
+    const kind = S.params.kind || 'service';
+    const list = S.materials.filter((m) => m.kind === kind);
+    main.innerHTML = top + `<div class="card"><div class="row"><button class="btn sm ${kind === 'service' ? 'primary' : ''}" data-k="service">🧪 Hóa chất làm dịch vụ</button><button class="btn sm ${kind === 'retail' ? 'primary' : ''}" data-k="retail">🛍 Sản phẩm bán lẻ</button>
+      <span class="spacer"></span><button class="btn sm primary" id="newM">+ Thêm</button></div>
+      <div class="small muted" style="margin-top:6px">Giá vốn = bình quân các lần nhập (hàng tặng kèm làm giá vốn giảm). Khai <b>dung tích</b> (vd tuýp màu 60ml) để thợ ghi theo ml/g.</div></div>
+      <div class="card"><div class="table-wrap"><table><thead><tr><th>Tên</th><th>Nhóm</th><th>ĐVT</th><th>Dung tích</th><th class="num">Tồn</th><th class="num">Giá vốn/đv</th><th class="num">Giá cốt</th>${kind === 'retail' ? '<th class="num">Giá bán</th><th class="num">Lãi/SP</th>' : ''}<th class="num">Giá trị tồn</th><th></th></tr></thead>
+      <tbody>${list.map((m) => `<tr style="${m.active ? '' : 'opacity:.5'}"><td><b>${esc(m.name)}</b></td><td class="small">${esc(m.grp || '')}</td><td class="small">${esc(m.unit || '')}</td><td>${m.size ? m.size + ' ' + m.size_unit : '<span class="badge warn">chưa khai</span>'}</td>
+        <td class="num ${m.stock <= 0 ? 'bad' : ''}">${m.stock}</td><td class="num">${money(m.avg_cost)}</td><td class="num small">${perUnit(m)}</td>
+        ${kind === 'retail' ? `<td class="num">${m.sell_price ? money(m.sell_price) : '<span class="badge warn">chưa có</span>'}</td><td class="num">${m.sell_price ? money(m.sell_price - m.avg_cost) : '—'}</td>` : ''}
+        <td class="num">${money(m.stock_value)}</td><td style="white-space:nowrap"><button class="btn sm" data-em="${m.id}">Sửa</button><button class="btn sm" data-mv="${m.id}">Nhập/kiểm</button></td></tr>`).join('')}</tbody></table></div>
+      ${list.length ? '' : '<div class="empty">Chưa có. Tải file sổ nhập hàng ở "Nhập / Xuất Excel" hoặc bấm + Thêm.</div>'}</div>`;
+    bindTop();
+    $$('[data-k]', main).forEach((b) => (b.onclick = () => go('stock', { tab, kind: b.dataset.k })));
+    const form = (m = { kind, active: 1 }) => {
+      openModal(m.id ? 'Sửa ' + m.name : 'Thêm hóa chất / sản phẩm', `<form id="mf"><div class="form-grid">
+        <div class="full"><label>Tên *</label><input name="name" value="${esc(m.name || '')}" required></div>
+        <div><label>Loại</label><select name="kind"><option value="service" ${m.kind === 'service' ? 'selected' : ''}>Hóa chất làm dịch vụ</option><option value="retail" ${m.kind === 'retail' ? 'selected' : ''}>Sản phẩm bán lẻ</option></select></div>
+        <div><label>Nhóm</label><input name="grp" value="${esc(m.grp || '')}"></div>
+        <div><label>ĐVT (tuýp, chai, hộp…)</label><input name="unit" value="${esc(m.unit || '')}"></div>
+        <div><label>Dung tích 1 đơn vị</label><div class="row"><input type="number" name="size" step="any" min="0" value="${m.size || ''}" style="flex:1"><select name="size_unit" style="width:auto"><option ${m.size_unit !== 'g' ? 'selected' : ''}>ml</option><option ${m.size_unit === 'g' ? 'selected' : ''}>g</option></select></div></div>
+        <div><label>Giá bán cho khách (sản phẩm)</label><input type="number" name="sell_price" min="0" step="1000" value="${m.sell_price ?? ''}"></div>
+        <div><label>Trạng thái</label><select name="active"><option value="1">Đang dùng</option><option value="0" ${m.active ? '' : 'selected'}>Ngừng</option></select></div>
+        <div class="full"><label>Ghi chú</label><input name="note" value="${esc(m.note || '')}"></div></div>
+        <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu</button></div></form>`);
+      $('#mf').onsubmit = (e) => { e.preventDefault(); guard($('#mf button.primary'), async () => {
+        await api(m.id ? '/materials/' + m.id : '/materials', { method: m.id ? 'PUT' : 'POST', body: formData($('#mf')) }); closeModal(); toast('Đã lưu'); reload(); }); };
+    };
+    $('#newM').onclick = () => form();
+    $$('[data-em]', main).forEach((b) => (b.onclick = () => form(matById(b.dataset.em))));
+    $$('[data-mv]', main).forEach((b) => (b.onclick = async () => {
+      const m = matById(b.dataset.mv);
+      const hist = await api(`/materials/${m.id}/moves`);
+      const KN = { in: 'Nhập', use: 'Dùng', sale: 'Bán', adjust: 'Điều chỉnh' };
+      openModal(m.name, `<div class="stat-line"><span class="muted">Tồn hiện tại</span><b>${m.stock} ${esc(m.unit || '')}</b></div>
+        <form id="mvf"><div class="form-grid"><div><label>Loại</label><select name="kind"><option value="in">Nhập thêm hàng</option><option value="adjust">Kiểm kho: điều chỉnh +/−</option></select></div>
+        <div><label>Số lượng (${esc(m.unit || 'đơn vị')})</label><input type="number" name="qty" step="any" required></div>
+        <div><label>Đơn giá nhập (khi nhập)</label><input type="number" name="unit_cost" min="0" step="1000"></div><div><label>Ngày</label><input type="date" name="date" value="${S.today}"></div>
+        <div class="full"><label>Nhà cung cấp / lý do</label><input name="note"></div></div><div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu</button></div></form>
+        <h3 style="margin-top:14px">Lịch sử</h3>${hist.length ? `<table><tbody>${hist.map((h) => `<tr><td>${dmy(h.date)}</td><td>${KN[h.kind]}</td><td class="num">${Math.round(h.qty * 1000) / 1000}</td><td class="num small">${money(Math.round(h.unit_cost))}</td><td class="small muted">${esc(h.visit_code ? h.visit_code + ' · ' + (h.customer_name || '') : h.supplier || h.note || '')}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">—</div>'}`);
+      $('#mvf').onsubmit = (e) => { e.preventDefault(); guard($('#mvf button.primary'), async () => {
+        const d = formData($('#mvf')); await api(`/materials/${m.id}/move`, { method: 'POST', body: { ...d, supplier: d.kind === 'in' ? d.note : '' } }); closeModal(); toast('Đã lưu'); reload(); }); };
+    }));
+    return;
+  }
+
+  // Định mức: mỗi dịch vụ dùng bao nhiêu hóa chất → giá cốt dự kiến
+  S.recipes = await api('/recipes');
+  const svcs = S.services.filter((x) => x.active && x.grp !== 'Bán sản phẩm').sort((a, b) => (b.grp === 'Hóa chất') - (a.grp === 'Hóa chất'));
+  const rc = (sid) => S.recipes.filter((r) => r.service_id === sid);
+  main.innerHTML = top + `<div class="card small muted">Khai 1 lần: dịch vụ này thường dùng bao nhiêu ml/g hóa chất. Phiếu thu sẽ <b>tự điền</b> theo định mức, thợ sửa lại lượng thực tế. Giá cốt dự kiến tính theo giá vốn bình quân hiện tại.</div>
+    <div class="card"><div class="table-wrap"><table><thead><tr><th>Dịch vụ</th><th>Nhóm</th><th>Định mức</th><th class="num">Giá bán</th><th class="num">Giá cốt dự kiến</th><th class="num">Lãi gộp</th><th class="num">% cốt</th><th></th></tr></thead>
+    <tbody>${svcs.map((x) => { const lines = rc(x.id); const cost = lines.reduce((t, r) => t + r.cost, 0);
+      return `<tr><td><b>${esc(x.name)}</b></td><td class="small">${esc(x.grp)}</td><td class="small">${lines.map((r) => { const m = matById(r.material_id); return m ? `${esc(m.name)}: ${fromUnits(m, r.qty)} ${esc(matUnit(m))}` : ''; }).join('<br>') || '<span class="muted">—</span>'}</td>
+      <td class="num">${money(x.price)}</td><td class="num">${lines.length ? money(cost) : '—'}</td><td class="num">${lines.length && x.price ? `<b>${money(x.price - cost)}</b>` : '—'}</td><td class="num">${lines.length && x.price ? Math.round(cost / x.price * 100) + '%' : '—'}</td>
+      <td><button class="btn sm" data-rcp="${x.id}">Sửa</button></td></tr>`; }).join('')}</tbody></table></div></div>`;
+  bindTop();
+  $$('[data-rcp]', main).forEach((b) => (b.onclick = () => {
+    const sv = S.services.find((x) => x.id === Number(b.dataset.rcp));
+    let lines = rc(sv.id).map((r) => ({ material_id: r.material_id, amt: fromUnits(matById(r.material_id), r.qty) }));
+    if (!lines.length) lines = [{ material_id: '', amt: '' }];
+    openModal('Định mức · ' + sv.name, `<div id="rl"></div><button type="button" class="btn sm" id="rAdd">+ Thêm hóa chất</button><div class="totals" id="rTot" style="margin-top:10px"></div>
+      <div class="err"></div><div class="modal-foot"><button class="btn primary" id="rSave">Lưu định mức</button></div>`, true);
+    const draw = () => {
+      $('#rl').innerHTML = lines.map((l, i) => { const m = matById(l.material_id); return `<div class="item-row"><select data-r="${i}" class="rsel"><option value="">— Chọn hóa chất —</option>${matOptions('service', l.material_id)}</select>
+        <input type="number" data-r="${i}" class="ramt" step="any" min="0" value="${l.amt}" placeholder="Lượng" style="width:90px"><span class="small muted" style="min-width:34px">${esc(matUnit(m))}</span>
+        <span class="small" style="min-width:80px;text-align:right">${m && l.amt ? money(Math.round(toUnits(m, l.amt) * m.avg_cost)) : ''}</span><button type="button" class="icon-btn" data-rr="${i}">×</button></div>`; }).join('');
+      const cost = Math.round(lines.reduce((t, l) => { const m = matById(l.material_id); return t + (m && l.amt ? toUnits(m, l.amt) * m.avg_cost : 0); }, 0));
+      $('#rTot').innerHTML = `<div class="row"><span>Giá bán</span><span class="num">${money(sv.price)}</span></div><div class="row"><span>Giá cốt dự kiến</span><span class="num big">${money(cost)}</span></div>
+        <div class="row"><span><b>Lãi gộp / lượt</b></span><span class="num big">${money(sv.price - cost)}${sv.price ? ' (' + Math.round((sv.price - cost) / sv.price * 100) + '%)' : ''}</span></div>`;
+      $$('.rsel').forEach((x) => (x.onchange = () => { lines[x.dataset.r].material_id = Number(x.value) || ''; draw(); }));
+      $$('.ramt').forEach((x) => (x.onchange = () => { lines[x.dataset.r].amt = x.value; draw(); }));
+      $$('[data-rr]').forEach((x) => (x.onclick = () => { lines.splice(Number(x.dataset.rr), 1); draw(); }));
+    };
+    draw();
+    $('#rAdd').onclick = () => { lines.push({ material_id: '', amt: '' }); draw(); };
+    $('#rSave').onclick = () => guard($('#rSave'), async () => {
+      await api('/recipes/' + sv.id, { method: 'PUT', body: { lines: lines.filter((l) => l.material_id && Number(l.amt) > 0).map((l) => ({ material_id: l.material_id, qty: toUnits(matById(l.material_id), l.amt) })) } });
+      closeModal(); toast('Đã lưu định mức'); reload();
+    });
+  }));
+};
+
 // ---------- Doanh số ----------
 VIEWS.sales = async (main) => {
   const from = S.params.from || S.today.slice(0, 8) + '01', to = S.params.to || S.today;
@@ -1029,7 +1206,7 @@ VIEWS.sales = async (main) => {
 VIEWS.excel = async (main) => {
   main.innerHTML = header('Nhập / Xuất Excel') + `<div class="grid two">
     <div class="card"><h3>📥 Nhập từ Excel</h3>
-      <div class="small muted">Nhận các mẫu: <b>Salon Nếp – Nhật ký</b> (khách, nhật ký dịch vụ, danh mục), <b>CRM Nếp Hair</b> (CRM Khách, lịch hẹn đã đặt), <b>Sổ đặt lịch</b> (tab Tháng 10, Tháng 11… + Quản lý Thẻ 1Tr) và file <b>xuất từ phần mềm này</b>.
+      <div class="small muted">Nhận các mẫu: <b>Salon Nếp – Nhật ký</b> (khách, nhật ký dịch vụ, danh mục), <b>CRM Nếp Hair</b> (CRM Khách, lịch hẹn đã đặt), <b>Sổ đặt lịch</b> (tab Tháng 10, Tháng 11… + Quản lý Thẻ 1Tr) , <b>sổ nhập mỹ phẩm/hóa chất</b> (file theo dõi chi phí, tab "Nhập mỹ phẩm" → vào Kho) và file <b>xuất từ phần mềm này</b>.
       Khách trùng được ghép theo mã cũ → SĐT → tên. Nhập lại cùng file không bị nhân đôi.</div>
       <form id="imp"><label>File .xlsx</label><input type="file" name="file" accept=".xlsx" required>
       <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="include_history"> Nhập cả lịch sử cũ (lượt "Hoàn thành" ở tab Lịch sử của CRM Nếp Hair / lịch các ngày đã qua trong Sổ đặt lịch)</label>
@@ -1059,10 +1236,13 @@ VIEWS.excel = async (main) => {
         ${s.cards_created || s.cards_skipped_existing ? `<div class="stat-line"><span>Thẻ voucher mới / đã có</span><b>${s.cards_created} / ${s.cards_skipped_existing}</b></div>` : ''}
         ${s.visits_updated ? `<div class="stat-line"><span>Lượt cũ được bổ sung công thức hóa chất</span><b>${s.visits_updated}</b></div>` : ''}
         <div class="stat-line"><span>Dịch vụ mới</span><b>${s.services_added}</b></div>
+        ${s.purchases_created != null ? `<div class="stat-line"><span>Hóa chất / sản phẩm mới trong kho</span><b>${s.materials_created}</b></div>
+          <div class="stat-line"><span>Dòng nhập hàng mới / cập nhật</span><b>${s.purchases_created} / ${s.purchases_updated}</b></div>
+          <div class="stat-line"><span class="muted">Vật tư vận hành (Loại 2) không đưa vào kho</span><b>${s.purchases_skipped_ops}</b></div>` : ''}
         ${s.staff_created.length ? `<div class="small">Nhân viên lạ được tạo (không đăng nhập được): ${s.staff_created.map(esc).join(', ')}</div>` : ''}
         ${s.matched_by_name.length ? `<details class="small"><summary>${s.matched_by_name.length} khách ghép theo TÊN — nên kiểm tra</summary>${s.matched_by_name.map(esc).join(', ')}</details>` : ''}
         ${s.warnings.map((w) => `<div class="small" style="color:var(--warn)">⚠ ${esc(w)}</div>`).join('')}</div>`;
-      if (!r.dry_run) { S.services = await api('/services'); S.staff = await api('/staff'); refreshReminderBadge(); }
+      if (!r.dry_run) { S.services = await api('/services'); S.staff = await api('/staff'); S.materials = await api('/materials'); refreshReminderBadge(); }
     });
   }));
   const dl = async (from, to) => {
