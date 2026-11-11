@@ -208,6 +208,12 @@ test('luồng chính và phân quyền', async () => {
   assert.equal(ap.status, 'done'); assert.equal(ap.visit_total, cutM.price); assert.equal(ap.visit_services, 'Cắt tóc nữ – Director');
   assert.equal((await nv6.get(`/appointments?from=${d3}&to=${d3}`)).data.find((x) => x.id === apId).visit_total, null, 'thợ khác không thấy tiền');
 
+  // Tìm kiếm nhanh: theo tên, SĐT, mã thẻ
+  r = await thu.get('/search?q=Hương');
+  assert.ok(r.data.customers.some((c) => c.id === huong)); assert.ok(r.data.appointments.some((x) => x.id === apId));
+  assert.ok((await thu.get('/search?q=059659')).data.customers.some((c) => c.id === huong));
+  assert.ok((await thu.get('/search?q=0979143612')).data.cards.length >= 1, 'tìm thẻ theo SĐT chủ thẻ');
+
   // Khóa tài khoản nghỉ việc → mất phiên ngay
   assert.equal((await owner.put('/users/' + staff['Dương'], { active: false })).status, 200);
   assert.equal((await duong.get('/me')).status, 401);

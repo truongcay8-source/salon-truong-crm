@@ -123,6 +123,7 @@ function shell() {
   const pages = PAGES.filter((p) => p[3]());
   $('#root').innerHTML = `<div class="app">
     <aside class="side"><div class="brand"><div class="logo">N</div><div><b>${esc(S.settings.salon_name)}</b><div class="small muted">CRM</div></div></div>
+      <button class="search-btn" data-search>🔍 Tìm kiếm… <kbd>/</kbd></button>
       ${pages.map((p) => `<button class="nav-btn" data-page="${p[0]}"><span>${p[2]}</span>${p[1]}${p[0] === 'reminders' ? '<span class="badge count hidden" data-rc></span>' : ''}</button>`).join('')}
       <div class="me"><b>${esc(S.me.full_name)}</b> · ${ROLE[S.me.role]}<div class="row" style="margin-top:8px"><button class="btn sm" id="pwBtn">Đổi mật khẩu</button><button class="btn sm" id="outBtn">Đăng xuất</button></div></div>
     </aside>
@@ -132,11 +133,45 @@ function shell() {
       const p = PAGES.find((x) => x[0] === k);
       const short = { customers: 'Khách', appointments: 'Lịch hẹn' }[k] || p[1];
       return `<button data-page="${k}"><span class="ico">${p[2]}</span>${short}${k === 'reminders' ? '<span class="badge count hidden" data-rc></span>' : ''}</button>`;
-    }).join('')}</nav></div>`;
+    }).join('')}</nav><button class="search-fab" data-search aria-label="Tìm kiếm">🔍</button></div>`;
   $$('[data-page]').forEach((b) => (b.onclick = () => go(b.dataset.page)));
+  $$('[data-search]').forEach((b) => (b.onclick = searchBox));
   $('#pwBtn').onclick = () => renderChangePw(false);
   $('#outBtn').onclick = logout;
   refreshReminderBadge();
+}
+// ---------- Tìm kiếm nhanh ----------
+document.addEventListener('keydown', (e) => {
+  if (e.key === '/' && S.me && !e.target.closest('input,textarea,select') && $('#modal').classList.contains('hidden')) { e.preventDefault(); searchBox(); }
+});
+function searchBox() {
+  openModal('Tìm kiếm', `<input id="sq" type="search" placeholder="Tên khách, SĐT, mã KH, mã thẻ, mã lượt, dịch vụ, công thức…" autocomplete="off">
+    <div class="small muted" style="margin:6px 2px">Gõ ít nhất 2 ký tự.</div><div id="sres"></div>`);
+  const inp = $('#sq'); inp.focus();
+  let t, seq = 0;
+  const sec = (title, rows) => (rows.length ? `<h3 style="margin:12px 0 4px">${title}</h3>${rows.join('')}` : '');
+  const item = (attrs, main, sub, right) => `<div class="list-item click" ${attrs}><div style="flex:1;min-width:0"><b>${main}</b><div class="small muted">${sub}</div></div>${right ? `<div style="text-align:right">${right}</div>` : ''}</div>`;
+  inp.oninput = () => {
+    clearTimeout(t);
+    t = setTimeout(async () => {
+      const q = inp.value.trim(), my = ++seq;
+      if (q.length < 2) { $('#sres').innerHTML = ''; return; }
+      const r = await api('/search?q=' + encodeURIComponent(q));
+      if (my !== seq) return;
+      const html = sec('👤 Khách hàng', r.customers.map((c) => item(`data-sc="${c.id}"`, esc(c.name), `${esc(c.code)} · ${esc(c.phone || 'chưa có SĐT')}${c.last_visit ? ' · lần cuối ' + dmy(c.last_visit) : ''}`)))
+        + sec('💳 Thẻ', r.cards.map((c) => item(`data-sc="${c.customer_id}"`, `${esc(c.code)} · ${esc(c.name)}`, `${esc(c.customer_name)} · ${esc(c.phone || '')} · hạn ${dmy(c.expires_at)}`, `<b>${money(c.balance)}</b><div class="small muted">số dư</div>`)))
+        + sec('📅 Lịch hẹn', r.appointments.map((a) => item(`data-sa="${a.date}"`, `${dmy(a.date)} ${esc(a.time)} · ${esc(a.name)}`, `${esc(a.service || '')}${a.staff_name ? ' · ' + esc(a.staff_name) : ''}`, `<span class="badge ${APPT[a.status][1]}">${APPT[a.status][0]}</span>`)))
+        + sec('✂️ Lượt làm', r.visits.map((v) => item(`data-sc="${v.customer_id}"`, `${esc(v.code)} · ${esc(v.customer_name)}`, `${dmy(v.date)} · ${esc(v.services || '')}`)));
+      $('#sres').innerHTML = html || '<div class="empty">Không tìm thấy</div>';
+      $$('[data-sc]', $('#sres')).forEach((el) => (el.onclick = () => { closeModal(); go('customer', { id: el.dataset.sc }); }));
+      $$('[data-sa]', $('#sres')).forEach((el) => (el.onclick = () => { closeModal(); go('appointments', { date: el.dataset.sa, view: 'list' }); }));
+    }, 250);
+  };
+}
+// Ô gõ tìm dịch vụ (thay vì cuộn danh sách dài)
+function svcSearch(id, onPick) {
+  return { html: `<input id="${id}" list="${id}L" placeholder="🔍 Gõ tìm dịch vụ (vd: nhuộm, gội…)" autocomplete="off"><datalist id="${id}L">${S.services.filter((x) => x.active).map((x) => `<option value="${esc(x.name)}">${x.price ? kMoney(x.price) : ''}</option>`).join('')}</datalist>`,
+    bind: () => { const el = $('#' + id); el.onchange = () => { const sv = findSvc(el.value); if (sv) { onPick(sv); el.value = ''; } }; } };
 }
 async function refreshReminderBadge() {
   try {
@@ -499,7 +534,7 @@ function apptForm(a = {}, after) {
     <div><label>Thợ</label><select name="staff_id">${staffOptions(a.staff_id, 'Chưa chọn')}</select></div>
     <div><label>Thời lượng (phút)</label><input type="number" name="duration" value="${a.duration || 60}" min="15" step="15"></div>
     <div class="full"><label>Dịch vụ dự kiến (chọn được nhiều)</label><div id="svcChips" class="chips"></div>
-      <div class="row"><select id="svcAdd" style="flex:1"><option value="">+ Thêm dịch vụ…</option>${S.groups.map((g) => `<optgroup label="${esc(g)}">${S.services.filter((x) => x.active && x.grp === g).map((x) => `<option>${esc(x.name)}</option>`).join('')}</optgroup>`).join('')}</select></div>
+      <div class="row"><div style="flex:1;min-width:200px" id="aSvcS"></div><select id="svcAdd" style="flex:1"><option value="">+ Thêm dịch vụ…</option>${S.groups.map((g) => `<optgroup label="${esc(g)}">${S.services.filter((x) => x.active && x.grp === g).map((x) => `<option>${esc(x.name)}</option>`).join('')}</optgroup>`).join('')}</select></div>
       <input type="hidden" name="service" value="${esc(a.service || '')}"></div>
     ${isEdit ? `<div class="full"><label>Trạng thái</label><select name="status">${Object.entries(APPT).map(([k, v]) => `<option value="${k}" ${a.status === k ? 'selected' : ''}>${v[0]}</option>`).join('')}</select></div>` : ''}
     <div class="full"><label>Ghi chú</label><textarea name="note">${esc(a.note || '')}</textarea></div></div>
@@ -516,6 +551,8 @@ function apptForm(a = {}, after) {
     const mins = chosen.reduce((t, n) => t + (SVC_MIN[(S.services.find((x) => x.name === n) || {}).grp] || 0), 0);
     if (mins && !a.id) $('#af [name=duration]').value = Math.max(30, mins);
   };
+  const ass = svcSearch('aSvcQ', (sv) => { if (!chosen.includes(sv.name)) chosen.push(sv.name); drawChips(); });
+  $('#aSvcS').innerHTML = ass.html; ass.bind();
   $('#svcAdd').onchange = (e) => { if (e.target.value && !chosen.includes(e.target.value)) chosen.push(e.target.value); e.target.value = ''; drawChips(); };
   drawChips();
   $('#af').onsubmit = (e) => {
@@ -669,7 +706,7 @@ async function visitForm(v = {}, after) {
     <div><label>Giờ</label><input type="time" name="time" value="${v.time || new Date().toTimeString().slice(0, 5)}"></div>
     <div><label>Thợ chính *</label><select name="main_staff_id" required>${staffOptions(v.main_staff_id || (!isMgr() ? S.me.id : null))}</select></div>
     <div><label>Người phụ</label><select name="assistant_id">${staffOptions(v.assistant_id, 'Không có')}</select></div>
-    <div class="full"><label>Dịch vụ (giá sửa được)</label><div id="items"></div><button type="button" class="btn sm" id="addItem">+ Thêm dịch vụ</button></div>
+    <div class="full"><label>Dịch vụ (giá sửa được)</label><div id="items"></div><div class="row"><div style="flex:1;min-width:200px" id="vSvcS"></div><button type="button" class="btn sm" id="addItem">+ Thêm dòng</button></div></div>
     <div><label>Phụ thu</label><input type="number" name="surcharge" min="0" step="1000" value="${v.surcharge || ''}"></div>
     <div><label>Giảm giá</label><input type="number" name="discount" min="0" step="1000" value="${v.discount || ''}"></div>
     <div class="full"><label>Lý do giảm (bắt buộc nếu có giảm)</label><input name="discount_reason" list="reasons" value="${esc(v.discount_reason || '')}">
@@ -724,8 +761,45 @@ async function visitForm(v = {}, after) {
     $('#cardBox').innerHTML = (cards.length ? `<div class="form-grid"><div><label>Trừ vào thẻ</label><select name="card_id"><option value="">Không dùng thẻ</option>
       ${cards.map((c) => `<option value="${c.id}" ${sel === c.id ? 'selected' : ''}>${esc(c.code)} · ${esc(c.name)} · còn ${money(c.balance)}${c.customer_id !== Number(customerId) ? ' · thẻ của ' + esc(c.customer_name) : ''}${c.expires_at < S.today ? ' (HẾT HẠN)' : ''}</option>`).join('')}</select></div>
       <div><label>Số tiền trừ thẻ (trống = tự tính)</label><input type="number" name="card_paid" min="0" step="1000" value="${isEdit && v.card_id ? v.card_paid : ''}"><div class="small muted" id="cardHint"></div></div></div>` : '')
+      + (customerId ? `<div class="row small" style="margin-top:6px"><button type="button" class="btn sm" id="vGift">🎁 Tặng thẻ tri ân 1Tr</button><button type="button" class="btn sm" id="vSell">💳 Bán thẻ trả trước</button>
+        <span class="muted">→ tạo xong trừ vào thẻ luôn ở phiếu này</span></div><div id="vSellBox"></div>` : '')
       + (customerId ? `<div class="row small" style="margin-top:6px"><span class="muted">Khách dùng thẻ tặng của người khác?</span><input id="giftQ" placeholder="Mã thẻ (T1M-…) hoặc SĐT chủ thẻ" style="width:auto;flex:1;min-width:150px"><button type="button" class="btn sm" id="giftFind">Tìm thẻ</button></div>` : '');
     if (cards.length) { f.card_id.onchange = calc; f.card_paid.oninput = calc; }
+    // Bán / tặng thẻ ngay trong phiếu thu, rồi chọn luôn thẻ đó để trừ
+    const giftType = S.cardTypes.find((t) => t.active && !t.price && t.fixed_expiry) || S.cardTypes.find((t) => t.active && !t.price);
+    const makeCard = async (body) => {
+      const c = await api('/cards', { method: 'POST', body: { customer_id: customerId, ...body } });
+      await loadCards(customerId, c.id);
+      toast(c.price ? `Đã bán thẻ ${c.code}: thu ${money(c.price)}, số dư ${money(c.balance)}` : `Đã tặng thẻ ${c.code} trị giá ${money(c.balance)}`);
+    };
+    const vg = $('#vGift');
+    if (vg) {
+      if (!giftType) vg.remove();
+      else vg.onclick = () => guard(vg, async () => {
+        const all = await api('/cards?customer_id=' + customerId);
+        const had = all.find((c) => c.card_type_id === giftType.id);
+        if (had && !confirm(`Khách đã được tặng thẻ ${had.code} (còn ${money(had.balance)}). Vẫn tặng thêm thẻ nữa?`)) return;
+        await makeCard({ card_type_id: giftType.id });
+      });
+    }
+    const vs = $('#vSell');
+    if (vs) vs.onclick = () => {
+      const paid = S.cardTypes.filter((t) => t.active && t.price);
+      $('#vSellBox').innerHTML = `<div class="totals" style="margin-top:6px"><div class="form-grid">
+        <div class="full"><label>Gói thẻ</label><select id="vsType">${paid.map((t) => `<option value="${t.id}">${esc(t.name)} · thu ${money(t.price)} → dùng ${money(t.value)}</option>`).join('')}<option value="">Tùy chỉnh số tiền…</option></select></div>
+        <div><label>Khách trả (trống = theo gói)</label><input type="number" id="vsPrice" min="0" step="100000"></div>
+        <div><label>Giá trị dùng (trống = theo gói)</label><input type="number" id="vsValue" min="0" step="100000"></div>
+        <div><label>Hình thức thanh toán</label><select id="vsPay">${S.settings.payment_methods.map((m) => `<option>${esc(m)}</option>`).join('')}</select></div>
+        <div><label>Loại</label><select id="vsKind"><option value="new">Khách mua mới</option><option value="renewal">Mua lại / nạp thêm</option></select></div></div>
+        <div class="small muted">Tiền bán thẻ tính vào tiền vào, không cộng vào doanh số dịch vụ. Đừng ghi bán thẻ vào dòng "Bán sản phẩm".</div>
+        <div class="row" style="margin-top:8px"><button type="button" class="btn sm primary" id="vsGo">Xác nhận bán thẻ</button><button type="button" class="btn sm" id="vsX">Bỏ</button></div></div>`;
+      $('#vsX').onclick = () => { $('#vSellBox').innerHTML = ''; };
+      $('#vsGo').onclick = () => guard($('#vsGo'), async () => {
+        const type = $('#vsType').value, price = $('#vsPrice').value, value = $('#vsValue').value;
+        if (!type && !price) throw new Error('Nhập số tiền khách trả');
+        await makeCard({ card_type_id: type || null, price, value: value || (!type ? price : ''), payment_method: $('#vsPay').value, sale_type: $('#vsKind').value });
+      });
+    };
     const gb = $('#giftFind');
     if (gb) gb.onclick = () => guard(gb, async () => {
       const q = $('#giftQ').value.trim(); if (!q) return;
@@ -739,6 +813,8 @@ async function visitForm(v = {}, after) {
   };
   bindPicker(f, loadCards);
   $('#addItem').onclick = () => { items.push({ service_id: '', price: '' }); renderItems(); };
+  const vss = svcSearch('vSvcQ', (sv) => { const empty = items.findIndex((i) => !i.service_id && !i.name); const it = { service_id: sv.id, price: sv.price }; if (empty >= 0) items[empty] = it; else items.push(it); renderItems(); });
+  $('#vSvcS').innerHTML = vss.html; vss.bind();
   for (const n of ['surcharge', 'discount']) f[n].oninput = calc;
   renderItems();
   loadCards(custSel && custSel.id);
