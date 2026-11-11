@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const express = require('express');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
-const { db, DATA_DIR, getSettings, audit, nextCode, GROUPS } = require('./db');
+const { db, DATA_DIR, getSettings, audit, nextCode, GROUPS, diffObj } = require('./db');
 const L = require('./logic');
 const { importWorkbook } = require('./importer');
 const { exportWorkbook } = require('./exporter');
@@ -101,7 +101,7 @@ app.use('/api', auth);
 app.get('/api/me', (req, res) => {
   const { token, ...u } = req.user;
   const s = getSettings();
-  res.json({ user: u, settings: { salon_name: s.salon_name, salon_address: s.salon_address, salon_phone: s.salon_phone, bank_info: s.bank_info, receipt_footer: s.receipt_footer, payment_methods: s.payment_methods.split(',').map((x) => x.trim()) }, groups: GROUPS, today: today() });
+  res.json({ user: { ...u, ...stockMod.perm(req.user) }, settings: { salon_name: s.salon_name, salon_address: s.salon_address, salon_phone: s.salon_phone, bank_info: s.bank_info, receipt_footer: s.receipt_footer, payment_methods: s.payment_methods.split(',').map((x) => x.trim()) }, groups: GROUPS, today: today() });
 });
 app.post('/api/me/password', (req, res) => {
   const u = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
@@ -286,7 +286,7 @@ app.put('/api/customers/:id', (req, res) => {
   if ((before.formula || null) !== (c.formula || null)) db.prepare('UPDATE customers SET formula_at=?, formula_by=? WHERE id=?').run(today(), req.user.id, id);
   const changed = {};
   for (const k of Object.keys(c)) if ((before[k] || null) !== (c[k] || null)) changed[k] = [before[k], c[k]];
-  audit(req.user.id, 'update_customer', 'customer', id, changed);
+  audit(req.user.id, 'update_customer', 'customer', id, { changes: changed });
   res.json({ ok: true });
 });
 // Thông tin nhanh khi chọn khách ở phiếu thu / đặt lịch: thợ phụ trách, công thức, lưu ý tóc
@@ -376,7 +376,7 @@ app.put('/api/appointments/:id', (req, res) => {
   const id = int(req.params.id);
   if (!db.prepare('SELECT 1 FROM appointments WHERE id=?').get(id)) throw new HttpError(404, 'Không tìm thấy lịch hẹn');
   const a = apptInput(req.body);
-  const old = db.prepare('SELECT status, staff_id, date, time FROM appointments WHERE id=?').get(id);
+  const old = db.prepare('SELECT * FROM appointments WHERE id=?').get(id);
   if (a.staff_id && ['booked', 'arrived'].includes(a.status) && (a.staff_id !== old.staff_id || a.date !== old.date || a.time !== old.time)) {
     const w = offWarning(a); if (w && !req.body.force) return res.status(409).json({ error: w, clash: true });
   }
@@ -385,7 +385,7 @@ app.put('/api/appointments/:id', (req, res) => {
   }
   const cols = Object.keys(a);
   db.prepare(`UPDATE appointments SET ${cols.map((k) => k + '=?').join(',')} WHERE id=?`).run(...cols.map((k) => a[k]), id);
-  audit(req.user.id, 'update_appointment', 'appointment', id, { status: a.status, date: a.date, time: a.time });
+  audit(req.user.id, 'update_appointment', 'appointment', id, { changes: diffObj(old, a, Object.keys(a).filter((k) => !/^cancel/.test(k))) });
   res.json({ ok: true });
 });
 app.post('/api/appointments/:id/status', (req, res) => {
@@ -583,7 +583,11 @@ app.get('/api/reports/sales', (req, res) => {
   const to = L.isDate(req.query.to) ? req.query.to : t;
   res.json(L.salesReport(from, to, req.user));
 });
-app.get('/api/reminders', (req, res) => res.json(L.reminders()));
+app.get('/api/reminders', (req, res) => {
+  const r = L.reminders();
+  if (stockMod.perm(req.user).stock_view) { r.stock = stockMod.stockAlerts(); r.counts.stock = r.stock.filter((m) => !m.ordered_at).length; }
+  res.json(r);
+});
 // Khách phụ trách theo thợ: nhân viên chỉ xem dòng của mình, không có số tiền
 app.get('/api/reports/staff-customers', (req, res) => {
   const t = today();
@@ -633,6 +637,7 @@ app.get('/api/dashboard', (req, res) => {
 });
 
 staffMod.mount(app, { MGR, OWNER });
+require('./tips').mount(app, { MGR, OWNER });
 stockMod.mount(app, { MGR, OWNER });
 
 // ---------- Nhập / xuất Excel ----------
@@ -656,9 +661,24 @@ app.get('/api/export', MGR, async (req, res) => {
 });
 
 // ---------- Nhật ký thao tác & sao lưu ----------
+// Lịch sử chỉnh sửa: ai, lúc nào, sửa gì (lọc theo người, ngày, chỉ sửa/xóa)
 app.get('/api/audit', OWNER, (req, res) => {
-  const limit = Math.min(1000, int(req.query.limit) || 300);
-  res.json(db.prepare(`SELECT a.*, u.full_name user_name FROM audit_log a LEFT JOIN users u ON u.id=a.user_id ORDER BY a.id DESC LIMIT ?`).all(limit));
+  const limit = Math.min(2000, int(req.query.limit) || 300);
+  let where = '1=1'; const p = [];
+  if (int(req.query.user_id)) { where += ' AND a.user_id=?'; p.push(int(req.query.user_id)); }
+  if (L.isDate(req.query.from)) { where += ' AND a.created_at>=?'; p.push(req.query.from); }
+  if (L.isDate(req.query.to)) { where += ' AND a.created_at<?'; p.push(L.addDays(req.query.to, 1)); }
+  if (req.query.only === 'edit') where += " AND (a.action LIKE 'update%' OR a.action LIKE 'delete%' OR a.action IN ('adjust_card','stock_adjust','stock_count','transfer_customers','appointment_status','reset_password','tip_paid'))";
+  res.json(db.prepare(`SELECT a.*, u.full_name user_name,
+      CASE a.entity
+        WHEN 'visit' THEN (SELECT v.code||' · '||COALESCE(c.name,'') FROM visits v LEFT JOIN customers c ON c.id=v.customer_id WHERE v.id=a.entity_id)
+        WHEN 'customer' THEN (SELECT name FROM customers WHERE id=a.entity_id)
+        WHEN 'appointment' THEN (SELECT COALESCE(c.name,ap.guest_name)||' · '||ap.date FROM appointments ap LEFT JOIN customers c ON c.id=ap.customer_id WHERE ap.id=a.entity_id)
+        WHEN 'card' THEN (SELECT cd.code||' · '||c.name FROM cards cd JOIN customers c ON c.id=cd.customer_id WHERE cd.id=a.entity_id)
+        WHEN 'material' THEN (SELECT name FROM materials WHERE id=a.entity_id)
+        WHEN 'user' THEN (SELECT full_name FROM users WHERE id=a.entity_id)
+      END entity_label
+    FROM audit_log a LEFT JOIN users u ON u.id=a.user_id WHERE ${where} ORDER BY a.id DESC LIMIT ?`).all(...p, limit));
 });
 app.get('/api/backups', OWNER, (req, res) => {
   const dir = path.join(DATA_DIR, 'backups');

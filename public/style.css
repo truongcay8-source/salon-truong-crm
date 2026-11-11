@@ -207,3 +207,5 @@ tfoot td { font-weight: 700; }
 .list-item.click:hover { background: var(--surface-2); }
 .formula-box { background: var(--brand-soft); border-radius: 8px; padding: 8px 10px; font-size: 14px; }
 .formula-cell { max-width: 220px; color: var(--muted); }
+.aud-old { color: var(--bad, #b42318); text-decoration: line-through; opacity: .8; }
+.aud-new { color: var(--ok, #067647); font-weight: 600; }

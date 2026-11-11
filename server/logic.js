@@ -1,5 +1,5 @@
 'use strict';
-const { db, getSettings, num, audit, nextCode } = require('./db');
+const { db, getSettings, num, audit, nextCode, diffObj } = require('./db');
 
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
 const bad = (m) => new HttpError(400, m);
@@ -159,6 +159,7 @@ function saveVisit(input, user, existing, opts = {}) {
     note: str(input.note), next_visit_date: isDate(input.next_visit_date) ? input.next_visit_date : null,
   };
 
+  const oldServices = isNew ? null : db.prepare('SELECT name FROM visit_items WHERE visit_id=? ORDER BY id').all(existing.id).map((x) => x.name).join(' + ');
   const tx = db.transaction(() => {
     let id;
     if (isNew) {
@@ -192,7 +193,9 @@ function saveVisit(input, user, existing, opts = {}) {
     if (row.formula) db.prepare("UPDATE customers SET formula=?, formula_at=?, formula_by=? WHERE id=? AND (formula_at IS NULL OR formula_at<=?)")
       .run(row.formula, date, mainStaff, customerId, date);
     audit(user.id, isNew ? 'create_visit' : 'update_visit', 'visit', id,
-      isNew ? { total, cash_paid: cashPaid, card_paid: cardPaid } : { before: { total: existing.total, cash_paid: existing.cash_paid, discount: existing.discount }, after: { total, cash_paid: cashPaid, discount } });
+      isNew ? { total, cash_paid: cashPaid, card_paid: cardPaid } : { code: existing.code, changes: {
+        ...diffObj(existing, row, ['date', 'time', 'customer_id', 'main_staff_id', 'assistant_id', 'surcharge', 'discount', 'discount_reason', 'total', 'card_paid', 'cash_paid', 'payment_method', 'tip', 'formula', 'result', 'note']),
+        ...diffObj({ services: oldServices }, { services: cleanItems.map((i) => i.name).join(' + ') }) } });
     return id;
   });
   return tx();

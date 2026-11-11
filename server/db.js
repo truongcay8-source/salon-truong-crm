@@ -294,6 +294,16 @@ function audit(userId, action, entity, entityId, detail) {
     .run(userId || null, action, entity || null, entityId || null, detail == null ? null : JSON.stringify(detail));
 }
 
+// So sánh trước/sau → { field: [cũ, mới] } chỉ những ô thay đổi (để xem lịch sử chỉnh sửa)
+function diffObj(before, after, keys) {
+  const out = {};
+  for (const k of keys || Object.keys(after)) {
+    const a = before[k] ?? null, b = after[k] ?? null;
+    if ((a === '' ? null : a) !== (b === '' ? null : b)) out[k] = [a, b];
+  }
+  return out;
+}
+
 function nextCode(table, prefix, width) {
   const rows = db.prepare(`SELECT code FROM ${table} WHERE code LIKE ?`).all(prefix + '%');
   let max = 0;
@@ -301,4 +311,5 @@ function nextCode(table, prefix, width) {
   return prefix + String(max + 1).padStart(width, '0');
 }
 
-module.exports = { db, DATA_DIR, getSettings, num, audit, nextCode, GROUPS, GIFT_CARD };
+module.exports = {
+  diffObj, db, DATA_DIR, getSettings, num, audit, nextCode, GROUPS, GIFT_CARD };
