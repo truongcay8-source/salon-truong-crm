@@ -449,6 +449,7 @@ async function showReceipt(id) {
     ${v.card_paid ? line(`Trừ thẻ ${esc(v.card_code || '')}`, '−' + money(v.card_paid)) : ''}
     ${line('Khách thanh toán', money(paid), true)}${v.payment_method && paid ? line('Hình thức', esc(v.payment_method)) : ''}
     ${v.tip ? line('Tip cho thợ', money(v.tip)) : ''}
+    ${v.tip_private ? line('Tip riêng · ' + esc(staffName(v.tip_private_to)), money(v.tip_private)) : ''}
     ${r.card_balance != null ? line(`Số dư thẻ còn lại`, money(r.card_balance), true) : ''}
     ${s.bank_info && paid ? `<hr><div class="rc-c small">${esc(s.bank_info)}</div>` : ''}
     <hr><div class="rc-c">${esc(s.footer || 'Cảm ơn quý khách!')}</div></div>`;
@@ -912,7 +913,7 @@ function visitBlock(v, photos) {
 // Nhân viên sửa hóa đơn đã hoàn thành: chỉ ghi chú, tiền khóa (quản lý mới sửa được)
 function visitNotesForm(v, after) {
   openModal('Sửa ghi chú lượt ' + (v.code || ''), `<form id="vn"><div class="small" style="margin-bottom:8px">🔒 Hóa đơn đã hoàn thành: <b>dịch vụ, giá, giảm giá, tip, thanh toán</b> chỉ quản lý sửa được. Cần sửa tiền thì nhắn quản lý.</div>
-    <div class="totals small">${esc((v.items || []).map((i) => i.name).join(' + '))}${v.total != null ? ` · <b>${money(v.total)}</b>` : ''}${v.tip ? ' · tip ' + money(v.tip) : ''}</div>
+    <div class="totals small">${esc((v.items || []).map((i) => i.name).join(' + '))}${v.total != null ? ` · <b>${money(v.total)}</b>` : ''}${v.tip ? ' · tip ' + money(v.tip) : ''}${v.tip_private ? ' · tip riêng ' + money(v.tip_private) : ''}</div>
     <div class="form-grid" style="margin-top:8px">
     <div class="full"><label>Tình trạng tóc trước khi làm</label><textarea name="hair_before">${esc(v.hair_before || '')}</textarea></div>
     <div class="full"><label>Mong muốn của khách</label><input name="wish" value="${esc(v.wish || '')}"></div>
@@ -963,7 +964,9 @@ async function visitForm(v = {}, after) {
       <datalist id="reasons"><option value="Khách quen"><option value="Khách giới thiệu"><option value="Khuyến mãi"><option value="Bù lỗi dịch vụ"><option value="Người nhà / nhân viên"></datalist></div>
     <div id="cardBox" class="full"></div>
     <div><label>Hình thức thanh toán</label><select name="payment_method"><option value="">—</option>${methods.map((m) => `<option ${v.payment_method === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></div>
-    <div><label>Tip</label><input type="number" name="tip" min="0" step="1000" value="${v.tip || ''}"></div>
+    <div><label>Tip chung (chia cả nhóm)</label><input type="number" name="tip" min="0" step="1000" value="${v.tip || ''}"></div>
+    <div class="full"><div class="form-grid" style="margin:0"><div><label>Tip riêng (khách tặng riêng 1 người)</label><input type="number" name="tip_private" min="0" step="1000" value="${v.tip_private || ''}"></div>
+      <div><label>Người nhận tip riêng</label><select name="tip_private_to">${staffOptions(v.tip_private_to || null, '— Thợ chính —')}</select></div></div></div>
     <div class="full"><div class="totals" id="tot"></div></div>
     <div class="full"><label>Tình trạng tóc trước khi làm</label><textarea name="hair_before">${esc(v.hair_before || '')}</textarea></div>
     <div class="full"><label>Mong muốn của khách</label><input name="wish" value="${esc(v.wish || '')}"></div>
@@ -1147,7 +1150,7 @@ VIEWS.visits = async (main) => {
     <div class="card"><div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Khách</th><th>Dịch vụ</th><th>Thợ</th><th class="num">Doanh số</th><th class="num">Trừ thẻ</th><th class="num">Thu</th><th>TT</th><th class="num">Tip</th><th></th></tr></thead>
     <tbody>${rows.map((v) => `<tr><td>${dmy(v.date).slice(0, 5)} ${esc(v.time || '')}</td><td><a href="#customer?id=${v.customer_id}">${esc(v.customer_name)}</a></td>
       <td>${v.items.map((i) => esc(i.name)).join(' + ')}</td><td>${esc(v.main_staff_name)}${v.assistant_name ? ' <span class="muted small">+' + esc(v.assistant_name) + '</span>' : ''}</td>
-      <td class="num">${money(v.total)}</td><td class="num">${v.card_paid ? money(v.card_paid) : ''}</td><td class="num">${money(v.cash_paid)}</td><td class="small">${esc(v.payment_method || '')}</td><td class="num">${v.tip ? money(v.tip) : ''}</td>
+      <td class="num">${money(v.total)}</td><td class="num">${v.card_paid ? money(v.card_paid) : ''}</td><td class="num">${money(v.cash_paid)}</td><td class="small">${esc(v.payment_method || '')}</td><td class="num">${v.tip ? money(v.tip) : ''}${v.tip_private ? `<div class="small muted">riêng ${money(v.tip_private)}</div>` : ''}</td>
       <td class="nowrap">${v.masked ? '' : `<button class="btn sm" data-rc-id="${v.id}">Hóa đơn</button>`}${v.can_edit ? `<button class="btn sm" data-ev="${v.id}">${isMgr() ? 'Sửa' : 'Ghi chú'}</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="empty">Chưa có lượt nào</td></tr>'}</tbody>
     ${rows.length ? `<tfoot><tr><td colspan="4">${rows.length} lượt${rows.some((r) => r.masked) ? ' <span class="muted small">(chỉ cộng lượt của bạn)</span>' : ''}</td><td class="num">${money(sum.total)}</td><td class="num">${money(sum.card)}</td><td class="num">${money(sum.cash)}</td><td></td><td class="num">${money(sum.tip)}</td><td></td></tr></tfoot>` : ''}
     </table></div></div>`;
@@ -1615,15 +1618,18 @@ VIEWS.tips = async (main) => {
   main.innerHTML = header('Chia tip', `Tip cả tháng chia đều cho nhóm · ai nghỉ ngày nào không được chia tip ngày đó · trả ngày <b>${dmy(r.pay_date)}</b>`) +
     `<div class="card"><div class="row"><button class="btn sm" id="pm">‹</button><input type="month" id="mo" value="${month}" style="width:auto"><button class="btn sm" id="nm">›</button>
       <span class="small muted">Nhóm chia: ${r.members.map((m) => esc(m.name)).join(', ') || '—'}</span>${isMgr() ? '<button class="btn sm" id="pool">Sửa nhóm</button>' : ''}</div></div>
-    <div class="grid kpis"><div class="kpi"><div class="l">Tổng tip tháng</div><div class="v">${money(r.total_tip)}</div><div class="s">${r.days.length} ngày có tip</div></div>
+    <div class="grid kpis"><div class="kpi"><div class="l">Tip chung tháng</div><div class="v">${money(r.total_tip)}</div><div class="s">${r.days.length} ngày có tip · chia đều</div></div>
+      ${r.total_private ? `<div class="kpi"><div class="l">Tip riêng</div><div class="v">${money(r.total_private)}</div><div class="s">${r.private_list.length} lượt · ai được tặng người đó nhận</div></div>` : ''}
       <div class="kpi"><div class="l">Ngày trả</div><div class="v">${dmy(r.pay_date)}</div><div class="s">${isPast ? 'đã đến hạn trả' : 'mồng 5 tháng sau'}</div></div>
       ${r.unallocated ? `<div class="kpi"><div class="l">Chưa chia được</div><div class="v">${money(r.unallocated)}</div><div class="s">ngày cả nhóm đều nghỉ</div></div>` : ''}</div>
-    <div class="card"><h3>Mỗi người nhận</h3><div class="table-wrap"><table><thead><tr><th>Nhân viên</th><th class="num">Ngày được chia</th><th class="num">Ngày nghỉ có tip</th><th class="num">Tiền tip</th><th>Trạng thái</th></tr></thead>
-      <tbody>${r.shares.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td class="num">${x.days_shared}/${r.days.length}</td><td class="num">${x.days_off || ''}</td><td class="num"><b>${money(x.amount)}</b></td>
+    <div class="card"><h3>Mỗi người nhận</h3><div class="table-wrap"><table><thead><tr><th>Nhân viên</th><th class="num">Ngày được chia</th><th class="num">Ngày nghỉ có tip</th><th class="num">Tip chung</th><th class="num">Tip riêng</th><th class="num">Tổng nhận</th><th>Trạng thái</th></tr></thead>
+      <tbody>${r.shares.map((x) => `<tr><td><b>${esc(x.name)}</b>${x.outside ? ' <span class="small muted">(ngoài nhóm)</span>' : ''}</td><td class="num">${x.outside ? '' : x.days_shared + '/' + r.days.length}</td><td class="num">${x.days_off || ''}</td>
+        <td class="num">${money(x.shared)}</td><td class="num">${x.private ? money(x.private) : ''}</td><td class="num"><b>${money(x.amount)}</b></td>
         <td>${x.paid_at ? `<span class="badge ok">Đã trả ${money(x.paid_amount)}</span> <span class="small muted">${dmy(x.paid_at.slice(0, 10))}${x.paid_by_name ? ' · ' + esc(x.paid_by_name) : ''}</span>${x.paid_amount !== x.amount ? ' <span class="badge warn">số đã đổi</span>' : ''}${isMgr() ? ` <button class="btn sm" data-unpay="${x.user_id}">Hủy</button>` : ''}`
           : isMgr() ? `<button class="btn sm" data-pay="${x.user_id}" ${x.amount ? '' : 'disabled'}>Đánh dấu đã trả</button>` : '<span class="muted small">Chưa trả</span>'}</td></tr>`).join('')}</tbody>
-      <tfoot><tr><td>Tổng</td><td></td><td></td><td class="num"><b>${money(r.shares.reduce((a, x) => a + x.amount, 0))}</b></td><td></td></tr></tfoot></table></div>
-      <div class="small muted" style="margin-top:8px">Tip lấy từ ô “Tip” ở phiếu thu. Nghỉ = đơn off <b>cả ngày</b> đã duyệt ở trang Lịch off; nghỉ vài giờ vẫn được chia. Làm tròn đến đồng nên tổng có thể lệch vài đồng.</div></div>
+      <tfoot><tr><td>Tổng</td><td></td><td></td><td class="num">${money(r.shares.reduce((a, x) => a + x.shared, 0))}</td><td class="num">${money(r.shares.reduce((a, x) => a + x.private, 0))}</td><td class="num"><b>${money(r.shares.reduce((a, x) => a + x.amount, 0))}</b></td><td></td></tr></tfoot></table></div>
+      ${r.private_list.length ? `<details class="small" style="margin-top:8px"><summary>Chi tiết tip riêng (${r.private_list.length} lượt)</summary>${r.private_list.map((p) => `<div>${dmy(p.date)} · ${esc(p.code)} · ${esc(p.customer_name || '')} → <b>${nm(p.user_id)}</b> ${money(p.amount)}</div>`).join('')}</details>` : ''}
+      <div class="small muted" style="margin-top:8px">Tip chung lấy từ ô “Tip chung” ở phiếu thu, chia đều. Tip riêng (khách tặng riêng 1 người) người đó nhận nguyên, không chia. Nghỉ = đơn off <b>cả ngày</b> đã duyệt ở trang Lịch off; nghỉ vài giờ vẫn được chia. Làm tròn đến đồng nên tổng có thể lệch vài đồng.</div></div>
     <div class="card"><h3>Chi tiết từng ngày</h3>${r.days.length ? `<div class="table-wrap"><table><thead><tr><th>Ngày</th><th class="num">Tip</th><th class="num">Số người chia</th><th class="num">Mỗi người</th><th>Nghỉ (không chia)</th><th>Ghi chú</th></tr></thead>
       <tbody>${r.days.map((d) => `<tr><td>${dmy(d.date)}</td><td class="num">${money(d.tip)}</td><td class="num">${d.present.length}</td><td class="num">${money(d.share)}</td>
         <td>${d.absent.map((id) => `<span class="badge bad">${nm(id)}</span>`).join(' ')}</td>
@@ -1822,9 +1828,9 @@ VIEWS.settings = async (main) => {
     const LB = { date: 'Ngày', time: 'Giờ', customer_id: 'Khách', main_staff_id: 'Thợ chính', assistant_id: 'Người phụ', staff_id: 'Thợ', surcharge: 'Phụ thu', discount: 'Giảm giá', discount_reason: 'Lý do giảm',
       total: 'Tổng tiền', card_paid: 'Trừ thẻ', cash_paid: 'Tiền thu', payment_method: 'Hình thức TT', tip: 'Tip', formula: 'Công thức', result: 'Kết quả', note: 'Ghi chú', services: 'Dịch vụ', name: 'Tên', phone: 'SĐT',
       gender: 'Giới tính', birthday: 'Sinh nhật', source: 'Nguồn', hair_notes: 'Lưu ý tóc', notes: 'Ghi chú', status: 'Trạng thái', service: 'Dịch vụ', duration: 'Thời lượng (phút)', guest_name: 'Tên khách',
-      guest_phone: 'SĐT khách', amount: 'Số tiền', reason: 'Lý do', qty: 'Số lượng', expires_at: 'Hạn thẻ', price: 'Giá', value: 'Giá trị', role: 'Quyền', active: 'Đang làm', count: 'Số khách', to: 'Sang thợ', month: 'Tháng', seller_id: 'Người chốt bán', consultant_id: 'Người tư vấn', seller_share: '% người chốt', commission: 'HH người chốt', consultant_commission: 'HH người tư vấn' };
-    const MONEY = ['surcharge', 'discount', 'total', 'card_paid', 'cash_paid', 'tip', 'amount', 'price', 'value', 'unit_cost', 'commission', 'consultant_commission'];
-    const STAFFK = ['main_staff_id', 'assistant_id', 'staff_id', 'to', 'user_id', 'seller_id', 'consultant_id'];
+      guest_phone: 'SĐT khách', amount: 'Số tiền', reason: 'Lý do', qty: 'Số lượng', expires_at: 'Hạn thẻ', price: 'Giá', value: 'Giá trị', role: 'Quyền', active: 'Đang làm', count: 'Số khách', to: 'Sang thợ', month: 'Tháng', seller_id: 'Người chốt bán', tip_private: 'Tip riêng', tip_private_to: 'Người nhận tip riêng', consultant_id: 'Người tư vấn', seller_share: '% người chốt', commission: 'HH người chốt', consultant_commission: 'HH người tư vấn' };
+    const MONEY = ['surcharge', 'discount', 'total', 'card_paid', 'cash_paid', 'tip', 'amount', 'price', 'value', 'unit_cost', 'commission', 'consultant_commission', 'tip_private'];
+    const STAFFK = ['main_staff_id', 'assistant_id', 'staff_id', 'to', 'user_id', 'seller_id', 'consultant_id', 'tip_private_to'];
     const fv = (k, v) => v == null || v === '' ? '<span class="muted">(trống)</span>' : MONEY.includes(k) ? money(v) : STAFFK.includes(k) ? esc(staffName(v) || '#' + v)
       : k === 'status' && APPT[v] ? APPT[v][0] : k === 'status' && EXP_ST[v] ? EXP_ST[v][0] : esc(typeof v === 'object' ? JSON.stringify(v) : String(v));
     const detail = (r) => {

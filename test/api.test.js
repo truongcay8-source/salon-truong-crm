@@ -423,11 +423,25 @@ test('bán thẻ 2 người: người tư vấn + chia hoa hồng, quản lý s�
 test('lượt nhập từ Excel không có hình thức TT: chủ vẫn sửa được tip', async () => {
   const vinh = client(); await vinh.post('/login', { username: 'vinh', password: 'moi-vinh' });
   const v = db.prepare("SELECT * FROM visits WHERE status='done' AND card_paid=0 ORDER BY id LIMIT 1").get();
-  db.prepare('UPDATE visits SET payment_method=NULL WHERE id=?').run(v.id);
+  db.prepare("UPDATE visits SET payment_method=NULL, import_ref='NK:test' WHERE id=?").run(v.id);
   const full = (await vinh.get('/visits/' + v.id)).data;
   const r = await vinh.put('/visits/' + v.id, { ...full, payment_method: '', tip: 77000, items: full.items.map((i) => ({ service_id: i.service_id, name: i.name, price: i.price })) });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(db.prepare('SELECT tip FROM visits WHERE id=?').get(v.id).tip, 77000);
+  // Lượt bình thường bỏ trừ thẻ thì vẫn phải chọn hình thức TT
+  const v2 = db.prepare("SELECT * FROM visits WHERE status='done' AND import_ref IS NULL AND card_paid=0 AND id<>? ORDER BY id LIMIT 1").get(v.id);
+  db.prepare('UPDATE visits SET payment_method=NULL WHERE id=?').run(v2.id);
+  const f2 = (await vinh.get('/visits/' + v2.id)).data;
+  assert.equal((await vinh.put('/visits/' + v2.id, { ...f2, payment_method: '', items: f2.items.map((i) => ({ service_id: i.service_id, name: i.name, price: i.price })) })).status, 400);
+  // Tip riêng: người nhận lấy nguyên, không vào quỹ chia
+  const tipBefore = (await vinh.get('/tips?month=' + v.date.slice(0, 7))).data;
+  const thoai = (await vinh.get('/staff')).data.find((x) => x.full_name === 'Thoại').id;
+  const r3 = await vinh.put('/visits/' + v.id, { ...full, payment_method: '', tip: 77000, tip_private: 100000, tip_private_to: thoai, items: full.items.map((i) => ({ service_id: i.service_id, name: i.name, price: i.price })) });
+  assert.equal(r3.status, 200, JSON.stringify(r3.data));
+  const tipAfter = (await vinh.get('/tips?month=' + v.date.slice(0, 7))).data;
+  assert.equal(tipAfter.total_tip, tipBefore.total_tip);
+  const t1 = tipAfter.shares.find((x) => x.user_id === thoai), t0 = tipBefore.shares.find((x) => x.user_id === thoai);
+  assert.equal(t1.private, 100000); assert.equal(t1.amount - t0.amount, 100000);
 });
 
 test('sao lưu Excel về máy: nhắc mỗi tuần, nhân viên không tải được', async () => {

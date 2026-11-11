@@ -51,15 +51,24 @@ function tipReport(month) {
       partial: members.filter((m) => partOff.has(`${m.id}|${d.date}`)).map((m) => m.id),
       no_checkin: usesAttendance ? present.filter((id) => !checked.has(`${id}|${d.date}`)) : [] };
   });
+  // Tip riêng: khách tặng riêng 1 người → người đó nhận nguyên, không chia
+  const priv = db.prepare(`SELECT v.tip_private_to uid, u.full_name name, SUM(v.tip_private) amt, COUNT(*) n FROM visits v LEFT JOIN users u ON u.id=v.tip_private_to
+    WHERE v.status='done' AND v.tip_private>0 AND v.date BETWEEN ? AND ? GROUP BY v.tip_private_to`).all(from, to);
+  for (const p of priv) if (!per.has(p.uid)) per.set(p.uid, { user_id: p.uid, name: p.name, exact: 0, days_shared: 0, days_off: 0, outside: true });
+  const privBy = new Map(priv.map((p) => [p.uid, p]));
+  const privList = db.prepare(`SELECT v.id, v.code, v.date, v.tip_private amount, v.tip_private_to user_id, c.name customer_name FROM visits v LEFT JOIN customers c ON c.id=v.customer_id
+    WHERE v.status='done' AND v.tip_private>0 AND v.date BETWEEN ? AND ? ORDER BY v.date, v.id`).all(from, to);
   const paid = new Map(db.prepare(`SELECT p.*, u.full_name paid_by_name FROM tip_paid p LEFT JOIN users u ON u.id=p.paid_by WHERE month=?`).all(month).map((p) => [p.user_id, p]));
   const shares = [...per.values()].map((p) => {
     const pd = paid.get(p.user_id);
-    return { user_id: p.user_id, name: p.name, amount: Math.round(p.exact), days_shared: p.days_shared, days_off: p.days_off,
+    const pv = privBy.get(p.user_id);
+    const shared = Math.round(p.exact), own = pv ? pv.amt : 0;
+    return { user_id: p.user_id, name: p.name, shared, private: own, private_count: pv ? pv.n : 0, amount: shared + own, outside: !!p.outside, days_shared: p.days_shared, days_off: p.days_off,
       paid_amount: pd ? pd.amount : null, paid_at: pd ? pd.paid_at : null, paid_by_name: pd ? pd.paid_by_name : null };
   });
   const payDay = String(Math.min(28, Math.max(1, Number(getSettings().tip_pay_day || 5)))).padStart(2, '0');
   return { month, from, to, pay_date: `${nextMonth(month)}-${payDay}`, members, days, shares,
-    total_tip: tipDays.reduce((s, d) => s + d.tip, 0), unallocated, uses_attendance: usesAttendance };
+    total_tip: tipDays.reduce((s, d) => s + d.tip, 0), total_private: privList.reduce((s, x) => s + x.amount, 0), private_list: privList, unallocated, uses_attendance: usesAttendance };
 }
 
 function mount(app, { MGR }) {
