@@ -257,6 +257,25 @@ test('luồng chính và phân quyền', async () => {
   br = (await thu.get(`/customers/${huong}/brief`)).data;
   assert.equal(br.staff_id, staff['Trường']); assert.equal(br.formula, 'Milbon 7NB 40g', 'không gửi công thức → giữ nguyên');
 
+  // Báo cáo khách phụ trách theo thợ: quản lý thấy tiền, nhân viên chỉ thấy dòng của mình, không có tiền
+  let sc = (await mgr.get(`/reports/staff-customers?from=${d3}&to=${d3}`)).data;
+  const rowT = sc.rows.find((x) => x.staff_id === staff['Trường']);
+  assert.ok(rowT.customers >= 1 && rowT.active_period >= 1 && rowT.avg_spend > 0);
+  assert.equal(rowT.return_rate, 1, 'C Hương đã đến nhiều lần');
+  sc = (await thu.get(`/reports/staff-customers?from=${d3}&to=${d3}`)).data;
+  assert.ok(sc.rows.every((x) => x.staff_id === staff['Chị Thu'] && x.avg_spend === null));
+  // Nhắc nhở có thợ phụ trách để lọc "khách của tôi"
+  assert.ok('staff_id' in ((await thu.get('/reminders')).data.birthdays[0] || { staff_id: 1 }));
+  // Bàn giao khách: chỉ quản lý; chuyển toàn bộ khách của Trường sang Dương rồi trả lại
+  assert.equal((await thu.post('/customers/transfer', { from_staff_id: staff['Trường'], to_staff_id: staff['Chị Thu'] })).status, 403);
+  assert.equal((await mgr.post('/customers/transfer', { from_staff_id: staff['Trường'], to_staff_id: staff['Trường'] })).status, 400);
+  r = await mgr.post('/customers/transfer', { from_staff_id: staff['Trường'], to_staff_id: staff['Dương'] });
+  assert.equal(r.status, 200); assert.ok(r.data.count >= 1);
+  assert.equal((await thu.get(`/customers/${huong}/brief`)).data.staff_id, staff['Dương']);
+  r = await mgr.post('/customers/transfer', { from_staff_id: staff['Dương'], to_staff_id: staff['Trường'], customer_ids: [huong] });
+  assert.equal(r.data.count, 1, 'chuyển từng khách được chọn');
+  assert.equal((await thu.get(`/customers/${huong}/brief`)).data.staff_id, staff['Trường']);
+
   // Tìm kiếm nhanh: theo tên, SĐT, mã thẻ
   r = await thu.get('/search?q=Hương');
   assert.ok(r.data.customers.some((c) => c.id === huong)); assert.ok(r.data.appointments.some((x) => x.id === apId));

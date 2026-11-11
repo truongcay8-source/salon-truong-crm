@@ -584,6 +584,36 @@ app.get('/api/reports/sales', (req, res) => {
   res.json(L.salesReport(from, to, req.user));
 });
 app.get('/api/reminders', (req, res) => res.json(L.reminders()));
+// Khách phụ trách theo thợ: nhân viên chỉ xem dòng của mình, không có số tiền
+app.get('/api/reports/staff-customers', (req, res) => {
+  const t = today();
+  const from = L.isDate(req.query.from) ? req.query.from : t.slice(0, 8) + '01';
+  const to = L.isDate(req.query.to) ? req.query.to : t;
+  const r = L.staffCustomerReport(from, to);
+  if (!['owner', 'manager'].includes(req.user.role)) {
+    r.rows = r.rows.filter((x) => x.staff_id === req.user.id).map((x) => ({ ...x, spend_period: null, avg_spend: null }));
+  }
+  res.json(r);
+});
+// Bàn giao toàn bộ khách từ thợ này sang thợ khác (thợ nghỉ việc, chia lại khách)
+app.post('/api/customers/transfer', MGR, (req, res) => {
+  const from = req.body.from_staff_id === 'none' ? null : int(req.body.from_staff_id);
+  const to = int(req.body.to_staff_id) || null;
+  if (req.body.from_staff_id !== 'none' && !from) throw bad('Chọn thợ cần chuyển khách đi');
+  if (from === to) throw bad('Thợ nhận phải khác thợ hiện tại');
+  if (to && !db.prepare('SELECT 1 FROM users WHERE id=? AND active=1').get(to)) throw bad('Thợ nhận không hợp lệ hoặc đã nghỉ');
+  const ids = Array.isArray(req.body.customer_ids) ? req.body.customer_ids.map(int).filter(Boolean) : null;
+  const cond = from ? 'staff_id=?' : 'staff_id IS NULL';
+  const args = from ? [from] : [];
+  let n;
+  if (ids && ids.length) {
+    n = db.prepare(`UPDATE customers SET staff_id=? WHERE deleted=0 AND ${cond} AND id IN (${ids.map(() => '?').join(',')})`).run(to, ...args, ...ids).changes;
+  } else {
+    n = db.prepare(`UPDATE customers SET staff_id=? WHERE deleted=0 AND ${cond}`).run(to, ...args).changes;
+  }
+  audit(req.user.id, 'transfer_customers', 'user', from, { to, count: n });
+  res.json({ ok: true, count: n });
+});
 app.post('/api/reminders/done', (req, res) => {
   const { customer_id, type, ref, note } = req.body;
   if (!['birthday', 'card', 'return', 'appointment'].includes(type)) throw bad('Loại nhắc không hợp lệ');

@@ -599,7 +599,8 @@ VIEWS.customers = async (main) => {
   const q = S.params.q || '';
   const sf = S.params.staff || '';
   const r = await api('/customers?limit=200&q=' + encodeURIComponent(q) + (sf ? '&staff_id=' + sf : ''));
-  main.innerHTML = header('Khách hàng', `${r.total} khách`, `<button class="btn primary" id="newC">+ Khách mới</button>`) +
+  const canMove = isMgr() && sf && sf !== 'mine' && r.total > 0;
+  main.innerHTML = header('Khách hàng', `${r.total} khách`, `${canMove ? '<button class="btn" id="moveC">🔄 Bàn giao khách</button>' : ''}<button class="btn primary" id="newC">+ Khách mới</button>`) +
     `<div class="card"><div class="row"><input id="q" placeholder="🔍 Tìm tên, SĐT, mã khách, công thức (vd: 7NB)…" value="${esc(q)}" type="search" style="flex:1;min-width:220px">
       <select id="sf" style="width:auto"><option value="">Tất cả thợ</option><option value="mine" ${sf === 'mine' ? 'selected' : ''}>⭐ Khách của tôi</option>${activeStaff().map((u) => `<option value="${u.id}" ${String(u.id) === sf ? 'selected' : ''}>Khách của ${esc(u.full_name)}</option>`).join('')}<option value="none" ${sf === 'none' ? 'selected' : ''}>Chưa giao thợ</option></select></div></div>
     <div class="card"><div class="table-wrap"><table><thead><tr><th>Mã</th><th>Tên khách</th><th>SĐT</th><th class="num">Lượt</th><th>Lần gần nhất</th><th>Thợ phụ trách</th><th>Công thức</th>${isMgr() ? '<th class="num">Tổng chi</th>' : ''}</tr></thead>
@@ -613,6 +614,33 @@ VIEWS.customers = async (main) => {
   if (q) { const i = $('#q'); i.focus(); i.setSelectionRange(q.length, q.length); }
   $$('[data-c]', main).forEach((tr) => (tr.onclick = () => go('customer', { id: tr.dataset.c })));
   $('#newC').onclick = () => customerForm({}, (id) => go('customer', { id }));
+  if (canMove) $('#moveC').onclick = () => {
+    const fromName = sf === 'none' ? 'chưa giao thợ' : 'của ' + staffName(Number(sf));
+    const list = r.rows;
+    openModal('Bàn giao khách', `<form id="mf"><div class="small">Chuyển khách <b>${esc(fromName)}</b> sang thợ khác. Lịch sử lượt làm, công thức giữ nguyên.</div>
+      <label style="margin-top:10px">Chuyển sang</label><select name="to"><option value="">— Chọn thợ nhận —</option>${activeStaff().filter((u) => String(u.id) !== sf).map((u) => `<option value="${u.id}">${esc(u.full_name)}</option>`).join('')}${sf !== 'none' ? '<option value="0">Bỏ giao (chưa giao thợ)</option>' : ''}</select>
+      <label style="margin-top:10px">Khách cần chuyển</label><label class="small"><input type="checkbox" id="mAll" checked style="width:auto"> Chọn tất cả (${r.total} khách)</label>
+      <div style="max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px">${list.map((c) => `<label class="small" style="display:block;font-weight:normal"><input type="checkbox" class="mc" value="${c.id}" checked style="width:auto"> ${esc(c.name)} <span class="muted">${esc(c.phone || '')} · ${c.visits} lượt</span></label>`).join('')}</div>
+      ${r.total > list.length ? `<div class="small muted">Danh sách hiện ${list.length}/${r.total}. “Chọn tất cả” sẽ chuyển đủ ${r.total} khách.</div>` : ''}
+      <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Chuyển khách</button></div></form>`);
+    const all = $('#mAll');
+    all.onchange = () => $$('.mc').forEach((x) => (x.checked = all.checked));
+    $$('.mc').forEach((x) => (x.onchange = () => { all.checked = $$('.mc').every((y) => y.checked); }));
+    $('#mf').onsubmit = (e) => {
+      e.preventDefault();
+      guard($('#mf button.primary'), async () => {
+        const to = $('#mf [name=to]').value;
+        if (to === '') throw new Error('Chọn thợ nhận');
+        const ids = all.checked ? null : $$('.mc').filter((x) => x.checked).map((x) => Number(x.value));
+        if (ids && !ids.length) throw new Error('Chưa chọn khách nào');
+        const n = ids ? ids.length : r.total;
+        const toName = to === '0' ? 'chưa giao thợ' : staffName(Number(to));
+        if (!confirm(`Chuyển ${n} khách ${fromName} sang ${toName}?`)) return;
+        const res = await api('/customers/transfer', { method: 'POST', body: { from_staff_id: sf, to_staff_id: Number(to) || null, customer_ids: ids } });
+        closeModal(); toast(`Đã chuyển ${res.count} khách sang ${toName}`); go('customers', { staff: to === '0' ? 'none' : to });
+      });
+    };
+  };
 };
 function customerForm(c = {}, after) {
   const isEdit = !!c.id;
@@ -960,10 +988,26 @@ VIEWS.visits = async (main) => {
 // ---------- Nhắc nhở ----------
 VIEWS.reminders = async (main) => {
   const r = await api('/reminders');
+  // Lọc theo thợ phụ trách: nhân viên mặc định thấy khách của mình
+  const sf0 = S.params.staff ?? (S.me.role === 'staff' ? 'mine' : '');
+  const sf = sf0 === 'all' ? '' : sf0;
+  const want = sf === 'mine' ? S.me.id : sf === 'none' ? null : sf ? Number(sf) : undefined;
+  const owner = (x) => x.cust_staff_id !== undefined ? x.cust_staff_id : x.staff_id;
+  const keep = (x, appt) => want === undefined || (want === null ? !owner(x) : owner(x) === want || (appt && x.staff_id === want));
+  for (const k of ['birthdays', 'cards', 'returns']) r[k] = r[k].filter((x) => keep(x));
+  for (const k of ['appointments', 'cancels']) r[k] = r[k].filter((x) => keep(x, true));
+  for (const k of Object.keys(r.counts)) r.counts[k] = r[k].filter((x) => !x.done).length;
+  const who = (x) => { const id = owner(x); return id ? ` <span class="badge">${esc(staffName(id))}</span>` : ''; };
   const sec = (key, title, help, rows, line) => `<div class="card"><h3>${title} <span class="badge ${r.counts[key] ? 'bad' : ''}">${r.counts[key]}</span></h3><div class="small muted">${help}</div>
     ${rows.length ? rows.map((x) => `<div class="list-item" style="${x.done ? 'opacity:.5' : ''}"><div style="flex:1;min-width:0">${line(x)}<div class="small">${telLinks(x.phone)}</div></div>
       ${x.done ? '<span class="badge ok">Đã liên hệ</span>' : `<button class="btn sm" data-done='${esc(JSON.stringify({ customer_id: x.customer_id || x.id, type: key === 'birthdays' ? 'birthday' : key === 'cards' ? 'card' : key === 'returns' ? 'return' : 'appointment', ref: x.ref }))}'>Đã liên hệ</button>`}</div>`).join('') : '<div class="empty">Không có</div>'}</div>`;
-  main.innerHTML = header('Nhắc nhở', 'Gọi / nhắn Zalo cho khách rồi bấm “Đã liên hệ”') + `<div class="grid two">
+  main.innerHTML = header('Nhắc nhở', 'Gọi / nhắn Zalo cho khách rồi bấm “Đã liên hệ”') +
+    `<div class="card"><div class="row"><span class="muted small">Xem nhắc nhở của</span><select id="rsf" style="width:auto">
+      <option value="all" ${!sf ? 'selected' : ''}>Tất cả khách</option><option value="mine" ${sf === 'mine' ? 'selected' : ''}>⭐ Khách của tôi</option>
+      ${activeStaff().map((u) => `<option value="${u.id}" ${String(u.id) === sf ? 'selected' : ''}>Khách của ${esc(u.full_name)}</option>`).join('')}
+      <option value="none" ${sf === 'none' ? 'selected' : ''}>Khách chưa giao thợ</option></select>
+      <span class="small muted">Mỗi thợ tự gọi khách của mình, quản lý xem tổng.</span></div></div>
+    <div class="grid two">
     ${sec('appointments', '📞 Xác nhận lịch ngày mai', 'Gọi trước để giảm khách không đến.', r.appointments, (a) => `<b>${esc(a.time)} · ${a.customer_id ? `<a href="#customer?id=${a.customer_id}">${esc(a.name)}</a>` : esc(a.name)}</b> <span class="muted small">${esc(a.service || '')} ${a.staff_name ? '· ' + esc(a.staff_name) : ''}</span>`)}
     <div class="card"><h3>❌ Khách hủy / không đến <span class="badge ${r.counts.cancels ? 'bad' : ''}">${r.counts.cancels}</span></h3><div class="small muted">14 ngày gần đây, khách chưa đặt lịch mới. Nhắn mời đặt lại rồi bấm “Đã mời”.</div>
       ${r.cancels.length ? r.cancels.map((a) => `<div class="list-item" style="${a.done ? 'opacity:.5' : ''}"><div style="flex:1;min-width:0">
@@ -972,10 +1016,11 @@ VIEWS.reminders = async (main) => {
         <div class="small">Lý do: ${esc(a.cancel_reason || '—')}</div><div class="small">${telLinks(a.phone)}</div></div>
         <div class="row" style="flex-direction:column;align-items:flex-end"><button class="btn sm" data-inv="${a.id}">📋 Tin mời</button>
         ${a.done ? '<span class="badge ok">Đã mời</span>' : `<button class="btn sm" data-fu="${a.id}">Đã mời</button>`}</div></div>`).join('') : '<div class="empty">Không có</div>'}</div>
-    ${sec('birthdays', '🎂 Sinh nhật sắp tới', 'Gửi lời chúc + ưu đãi sinh nhật.', r.birthdays, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b> <span class="badge warn">${c.date === S.today ? 'HÔM NAY' : dmy(c.date).slice(0, 5)}</span>`)}
-    ${sec('cards', '💳 Thẻ trả trước', 'Thẻ sắp hết hạn → nhắc khách dùng; hết tiền → mời nạp thêm.', r.cards, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b> <span class="small">${esc(c.card_name)} · còn ${money(c.balance)}</span> <span class="badge warn">${esc(c.reason)}</span>`)}
-    ${sec('returns', '🔁 Khách đến hạn quay lại', 'Đã quá số ngày cài đặt kể từ lần làm gần nhất và chưa có lịch hẹn.', r.returns, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b> <span class="small muted">lần cuối ${dmy(c.last_date)} · ${c.days} ngày · ${c.n} lượt</span>`)}
+    ${sec('birthdays', '🎂 Sinh nhật sắp tới', 'Gửi lời chúc + ưu đãi sinh nhật.', r.birthdays, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b>${who(c)} <span class="badge warn">${c.date === S.today ? 'HÔM NAY' : dmy(c.date).slice(0, 5)}</span>`)}
+    ${sec('cards', '💳 Thẻ trả trước', 'Thẻ sắp hết hạn → nhắc khách dùng; hết tiền → mời nạp thêm.', r.cards, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b>${who(c)} <span class="small">${esc(c.card_name)} · còn ${money(c.balance)}</span> <span class="badge warn">${esc(c.reason)}</span>`)}
+    ${sec('returns', '🔁 Khách đến hạn quay lại', 'Đã quá số ngày cài đặt kể từ lần làm gần nhất và chưa có lịch hẹn.', r.returns, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b>${who(c)} <span class="small muted">lần cuối ${dmy(c.last_date)} · ${c.days} ngày · ${c.n} lượt</span>`)}
     </div>`;
+  $('#rsf').onchange = (e) => go('reminders', { staff: e.target.value });
   $$('[data-done]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api('/reminders/done', { method: 'POST', body: JSON.parse(b.dataset.done) }); refreshReminderBadge(); VIEWS.reminders(main); })));
   $$('[data-inv]', main).forEach((b) => (b.onclick = () => { const a = r.cancels.find((x) => x.id === Number(b.dataset.inv)); openModal('Mời đặt lại · ' + a.name, msgBox(msgRebook(a), a.phone)); bindMsgBox(); }));
   $$('[data-fu]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/appointments/${b.dataset.fu}/followup`, { method: 'POST', body: {} }); refreshReminderBadge(); VIEWS.reminders(main); })));
@@ -1195,7 +1240,7 @@ VIEWS.stock = async (main) => {
 // ---------- Doanh số ----------
 VIEWS.sales = async (main) => {
   const from = S.params.from || S.today.slice(0, 8) + '01', to = S.params.to || S.today;
-  const r = await api(`/reports/sales?from=${from}&to=${to}`);
+  const [r, sc] = await Promise.all([api(`/reports/sales?from=${from}&to=${to}`), api(`/reports/staff-customers?from=${from}&to=${to}`)]);
   const s = r.summary;
   const G = S.groups;
   main.innerHTML = header('Doanh số & hoa hồng', isMgr() ? 'Toàn tiệm' : 'Chỉ hiển thị số liệu của bạn') +
@@ -1221,7 +1266,8 @@ VIEWS.sales = async (main) => {
       <tbody>${r.rows.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td class="num">${x.main_count}</td><td class="num">${x.assist_count}</td>${G.map((g) => `<td class="num">${money(x.by_group[g])}</td>`).join('')}
       <td class="num"><b>${money(x.sales)}</b></td><td class="num">${money(x.main_commission)}</td><td class="num">${money(x.assistant_commission)}</td><td class="num">${x.cards_count} · ${money(x.cards_amount)}</td>
       <td class="num">${money(x.card_commission)}</td><td class="num"><b>${money(x.total_commission)}</b></td><td class="num">${money(x.tip)}</td></tr>`).join('')}</tbody></table></div>
-      <div class="small muted" style="margin-top:8px">Hoa hồng tạm tính theo % từng dịch vụ (Cài đặt › Dịch vụ) và % người phụ, bán thẻ (Cài đặt › Tham số). Chưa gồm lương cứng, thưởng mốc doanh số và chia tip.</div></div>`;
+      <div class="small muted" style="margin-top:8px">Hoa hồng tạm tính theo % từng dịch vụ (Cài đặt › Dịch vụ) và % người phụ, bán thẻ (Cài đặt › Tham số). Chưa gồm lương cứng, thưởng mốc doanh số và chia tip.</div></div>
+    ${staffCustomerCard(sc)}`;
   const set = (a, b) => go('sales', { from: a, to: b });
   $('#f').onchange = (e) => set(e.target.value, to); $('#t').onchange = (e) => set(from, e.target.value);
   $$('[data-p]').forEach((b) => (b.onclick = () => {
@@ -1232,6 +1278,22 @@ VIEWS.sales = async (main) => {
     if (b.dataset.p === 'last') { const f = addDays(t.slice(0, 8) + '01', -1); set(f.slice(0, 8) + '01', f); }
   }));
 };
+
+// Khách phụ trách theo thợ: giữ khách, khách quay lại, chi tiêu TB (dùng cho KPI/3P)
+function staffCustomerCard(sc) {
+  const pct = (x) => (x == null ? '—' : Math.round(x * 100) + '%');
+  const mgr = isMgr();
+  return `<div class="card"><h3>👥 Khách phụ trách theo thợ</h3>
+    <div class="table-wrap"><table><thead><tr><th>Thợ</th><th class="num">Khách phụ trách</th><th class="num">Đến trong kỳ</th><th class="num">Khách mới</th><th class="num">Lượt trong kỳ</th>
+      <th class="num" title="Lượt của khách mình do chính mình làm chính">Tự làm</th><th class="num" title="Khách đã đến từ 2 lần ÷ khách đã từng đến">Tỷ lệ quay lại</th>
+      <th class="num" title="Lần cuối quá ${sc.return_days} ngày">Quá hạn chưa quay lại</th>${mgr ? '<th class="num">Chi tiêu TB/khách</th><th class="num">Tổng chi trong kỳ</th>' : ''}</tr></thead>
+    <tbody>${sc.rows.map((x) => `<tr><td><b><a href="#customers?staff=${x.staff_id || 'none'}">${esc(x.name)}</a></b></td>
+      <td class="num">${x.customers}</td><td class="num">${x.active_period}</td><td class="num">${x.new_period}</td><td class="num">${x.visits_period}</td>
+      <td class="num">${x.staff_id && x.visits_period ? pct(x.own_visits_period / x.visits_period) : '—'}</td>
+      <td class="num"><b>${pct(x.return_rate)}</b></td><td class="num">${x.overdue ? `<a href="#reminders?staff=${x.staff_id || 'none'}">${x.overdue}</a>` : 0}</td>
+      ${mgr ? `<td class="num"><b>${money(x.avg_spend)}</b></td><td class="num">${money(x.spend_period)}</td>` : ''}</tr>`).join('') || '<tr><td colspan="10" class="empty">Chưa có khách được giao</td></tr>'}</tbody></table></div>
+    <div class="small muted" style="margin-top:8px">“Khách phụ trách” tính theo hồ sơ hiện tại. Tỷ lệ quay lại = khách đã đến từ 2 lần trở lên ÷ khách đã từng đến (tính đến ngày cuối kỳ). “Tự làm” thấp nghĩa là khách của thợ này hay được thợ khác làm. Bấm số quá hạn để mở danh sách cần gọi.</div></div>`;
+}
 
 // ---------- Nhập / xuất Excel ----------
 VIEWS.excel = async (main) => {
