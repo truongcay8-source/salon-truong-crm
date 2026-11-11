@@ -425,6 +425,8 @@ test('lượt nhập từ Excel không có hình thức TT: chủ vẫn sửa đ
   const v = db.prepare("SELECT * FROM visits WHERE status='done' AND card_paid=0 ORDER BY id LIMIT 1").get();
   db.prepare("UPDATE visits SET payment_method=NULL, import_ref='NK:test' WHERE id=?").run(v.id);
   const full = (await vinh.get('/visits/' + v.id)).data;
+  // Trang khách hàng: chủ thấy nút Sửa lượt
+  assert.equal((await vinh.get('/customers/' + v.customer_id)).data.visits.find((x) => x.id === v.id).can_edit, true);
   const r = await vinh.put('/visits/' + v.id, { ...full, payment_method: '', tip: 77000, items: full.items.map((i) => ({ service_id: i.service_id, name: i.name, price: i.price })) });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(db.prepare('SELECT tip FROM visits WHERE id=?').get(v.id).tip, 77000);

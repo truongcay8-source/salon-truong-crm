@@ -265,7 +265,7 @@ app.get('/api/customers/:id', (req, res) => {
     LEFT JOIN users f ON f.id=c.formula_by WHERE c.id=? AND c.deleted=0`).get(id);
   if (!c) throw new HttpError(404, 'Không tìm thấy khách');
   const visits = db.prepare("SELECT id FROM visits WHERE customer_id=? AND status='done' ORDER BY date DESC, id DESC").all(id)
-    .map((v) => L.maskVisitMoney(L.getVisit(v.id), req.user));
+    .map((v) => { const x = L.maskVisitMoney(L.getVisit(v.id), req.user); x.can_edit = L.canEditVisit(req.user, x); return x; });
   c.visits = visits;
   c.photos = db.prepare('SELECT p.id,p.kind,p.visit_id,p.created_at,v.date FROM photos p LEFT JOIN visits v ON v.id=p.visit_id WHERE p.customer_id=? ORDER BY p.id DESC').all(id);
   c.cards = db.prepare('SELECT * FROM cards WHERE customer_id=? ORDER BY id DESC').all(id).map(L.cardRow);
