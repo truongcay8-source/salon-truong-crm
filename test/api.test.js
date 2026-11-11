@@ -313,6 +313,21 @@ test('luồng chính và phân quyền', async () => {
   assert.equal(r.data.count, 1, 'chuyển từng khách được chọn');
   assert.equal((await thu.get(`/customers/${huong}/brief`)).data.staff_id, staff['Trường']);
 
+  // Chat nội bộ: tin đặt lịch → gợi ý; tạo lịch rồi gắn vào tin; tin thường không gợi ý; xóa là xóa hẳn
+  let cm = (await thu.post('/chat', { body: 'chị Lan 0912 345 678 mai 9h30 nhuộm với Dương' })).data;
+  assert.equal(cm.draft.phone, '0912345678'); assert.equal(cm.draft.time, '09:30'); assert.equal(cm.draft.staff_id, staff['Dương']);
+  assert.equal(cm.draft.name, 'Chị Lan'); assert.equal(cm.draft.service, 'Nhuộm'); assert.ok(cm.draft.date > '2000');
+  assert.equal((await duong.get('/chat/unread')).data.unread >= 1, true);
+  const apC = (await thu.post('/appointments', { guest_name: cm.draft.name, guest_phone: cm.draft.phone, date: cm.draft.date, time: cm.draft.time, staff_id: cm.draft.staff_id, service: cm.draft.service, force: true })).data;
+  cm = (await duong.post(`/chat/${cm.id}/link`, { appointment_id: apC.id })).data;
+  assert.equal(cm.appointment_id, apC.id); assert.equal(cm.linked_by_name, 'Dương');
+  const plain = (await duong.post('/chat', { body: 'chị Thu ơi lấy giúp em hộp màu' })).data;
+  assert.equal(plain.draft, null);
+  assert.equal((await thu.del('/chat/' + plain.id)).status, 403, 'không xóa tin người khác');
+  assert.equal((await duong.del('/chat/' + plain.id)).status, 200);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM chat_messages WHERE id=?').get(plain.id).n, 0, 'xóa hẳn');
+  assert.equal((await duong.get('/chat')).data.length, 1);
+
   // Lịch sử chỉnh sửa: chỉ chủ xem; ghi rõ ô nào đổi, cũ → mới
   assert.equal((await mgr.get('/audit')).status, 403);
   const au = (await owner.get(`/audit?only=edit&user_id=${staff['Chị Thu']}`)).data;

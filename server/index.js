@@ -101,7 +101,7 @@ app.use('/api', auth);
 app.get('/api/me', (req, res) => {
   const { token, ...u } = req.user;
   const s = getSettings();
-  res.json({ user: { ...u, ...stockMod.perm(req.user) }, settings: { salon_name: s.salon_name, salon_address: s.salon_address, salon_phone: s.salon_phone, bank_info: s.bank_info, receipt_footer: s.receipt_footer, payment_methods: s.payment_methods.split(',').map((x) => x.trim()) }, groups: GROUPS, today: today() });
+  res.json({ user: { ...u, ...stockMod.perm(req.user) }, settings: { salon_name: s.salon_name, salon_address: s.salon_address, salon_phone: s.salon_phone, bank_info: s.bank_info, receipt_footer: s.receipt_footer, chat_keep_days: Number(s.chat_keep_days) || 90, payment_methods: s.payment_methods.split(',').map((x) => x.trim()) }, groups: GROUPS, today: today() });
 });
 app.post('/api/me/password', (req, res) => {
   const u = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
@@ -638,6 +638,7 @@ app.get('/api/dashboard', (req, res) => {
 
 staffMod.mount(app, { MGR, OWNER });
 require('./tips').mount(app, { MGR, OWNER });
+require('./chat').mount(app, { MGR, OWNER });
 stockMod.mount(app, { MGR, OWNER });
 
 // ---------- Nhập / xuất Excel ----------
