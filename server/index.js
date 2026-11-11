@@ -222,11 +222,14 @@ app.get('/api/customers', (req, res) => {
   let where = 'c.deleted=0';
   const params = [];
   if (q) {
-    where += ' AND (c.name LIKE ? OR c.code LIKE ? OR c.phone LIKE ?)';
+    where += ' AND (c.name LIKE ? OR c.code LIKE ? OR c.phone LIKE ? OR c.formula LIKE ? OR c.hair_notes LIKE ?)';
     const digits = q.replace(/\D/g, '');
-    params.push(`%${q}%`, `%${q}%`, `%${digits || q}%`);
+    params.push(`%${q}%`, `%${q}%`, `%${digits || q}%`, `%${q}%`, `%${q}%`);
   }
-  const rows = db.prepare(`SELECT c.id,c.code,c.name,c.phone,c.gender,c.birthday,c.source,
+  const sf = req.query.staff_id === 'mine' ? req.user.id : req.query.staff_id === 'none' ? 'none' : int(req.query.staff_id);
+  if (sf === 'none') where += ' AND c.staff_id IS NULL';
+  else if (sf) { where += ' AND c.staff_id=?'; params.push(sf); }
+  const rows = db.prepare(`SELECT c.id,c.code,c.name,c.phone,c.gender,c.birthday,c.source,c.staff_id,c.formula,c.formula_at,
       (SELECT COUNT(*) FROM visits v WHERE v.customer_id=c.id AND v.status='done') visits,
       (SELECT MAX(date) FROM visits v WHERE v.customer_id=c.id AND v.status='done') last_visit,
       (SELECT COALESCE(SUM(total),0) FROM visits v WHERE v.customer_id=c.id AND v.status='done') spend
@@ -241,7 +244,8 @@ function customerInput(b) {
   if (phone && !/^0\d{9,10}$/.test(phone)) throw bad('Số điện thoại không hợp lệ');
   let birthday = str(b.birthday);
   if (birthday && !/^(\d{4}-)?\d{2}-\d{2}$/.test(birthday)) throw bad('Ngày sinh dạng YYYY-MM-DD');
-  return { name, phone, gender: str(b.gender), birthday, source: str(b.source), hair_notes: str(b.hair_notes), notes: str(b.notes) };
+  return { name, phone, gender: str(b.gender), birthday, source: str(b.source), hair_notes: str(b.hair_notes), notes: str(b.notes),
+    staff_id: int(b.staff_id) || null, formula: str(b.formula) };
 }
 app.post('/api/customers', (req, res) => {
   const c = customerInput(req.body);
@@ -250,14 +254,15 @@ app.post('/api/customers', (req, res) => {
     if (dup && !req.body.allow_duplicate) return res.status(409).json({ error: `SĐT đã có: ${dup.code} – ${dup.name}`, duplicate: dup });
   }
   const code = nextCode('customers', 'KH', 4);
-  const id = db.prepare('INSERT INTO customers(code,name,phone,gender,birthday,source,hair_notes,notes,created_by) VALUES (?,?,?,?,?,?,?,?,?)')
-    .run(code, c.name, c.phone, c.gender, c.birthday, c.source, c.hair_notes, c.notes, req.user.id).lastInsertRowid;
+  const id = db.prepare('INSERT INTO customers(code,name,phone,gender,birthday,source,hair_notes,notes,created_by,staff_id,formula,formula_at,formula_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run(code, c.name, c.phone, c.gender, c.birthday, c.source, c.hair_notes, c.notes, req.user.id, c.staff_id, c.formula, c.formula ? today() : null, c.formula ? req.user.id : null).lastInsertRowid;
   audit(req.user.id, 'create_customer', 'customer', id, { code, name: c.name });
   res.json({ id, code });
 });
 app.get('/api/customers/:id', (req, res) => {
   const id = int(req.params.id);
-  const c = db.prepare('SELECT * FROM customers WHERE id=? AND deleted=0').get(id);
+  const c = db.prepare(`SELECT c.*, s.full_name staff_name, f.full_name formula_by_name FROM customers c LEFT JOIN users s ON s.id=c.staff_id
+    LEFT JOIN users f ON f.id=c.formula_by WHERE c.id=? AND c.deleted=0`).get(id);
   if (!c) throw new HttpError(404, 'Không tìm thấy khách');
   const visits = db.prepare("SELECT id FROM visits WHERE customer_id=? AND status='done' ORDER BY date DESC, id DESC").all(id)
     .map((v) => L.maskVisitMoney(L.getVisit(v.id), req.user));
@@ -274,12 +279,22 @@ app.put('/api/customers/:id', (req, res) => {
   const before = db.prepare('SELECT * FROM customers WHERE id=? AND deleted=0').get(id);
   if (!before) throw new HttpError(404, 'Không tìm thấy khách');
   const c = customerInput(req.body);
-  db.prepare('UPDATE customers SET name=?,phone=?,gender=?,birthday=?,source=?,hair_notes=?,notes=? WHERE id=?')
-    .run(c.name, c.phone, c.gender, c.birthday, c.source, c.hair_notes, c.notes, id);
+  if (req.user.role === 'staff' || !('staff_id' in req.body)) c.staff_id = before.staff_id; // chỉ quản lý đổi thợ phụ trách
+  if (!('formula' in req.body)) c.formula = before.formula;
+  db.prepare('UPDATE customers SET name=?,phone=?,gender=?,birthday=?,source=?,hair_notes=?,notes=?,staff_id=?,formula=? WHERE id=?')
+    .run(c.name, c.phone, c.gender, c.birthday, c.source, c.hair_notes, c.notes, c.staff_id, c.formula, id);
+  if ((before.formula || null) !== (c.formula || null)) db.prepare('UPDATE customers SET formula_at=?, formula_by=? WHERE id=?').run(today(), req.user.id, id);
   const changed = {};
   for (const k of Object.keys(c)) if ((before[k] || null) !== (c[k] || null)) changed[k] = [before[k], c[k]];
   audit(req.user.id, 'update_customer', 'customer', id, changed);
   res.json({ ok: true });
+});
+// Thông tin nhanh khi chọn khách ở phiếu thu / đặt lịch: thợ phụ trách, công thức, lưu ý tóc
+app.get('/api/customers/:id/brief', (req, res) => {
+  const c = db.prepare(`SELECT c.id, c.code, c.name, c.staff_id, c.formula, c.formula_at, c.hair_notes, s.full_name staff_name, f.full_name formula_by_name
+    FROM customers c LEFT JOIN users s ON s.id=c.staff_id LEFT JOIN users f ON f.id=c.formula_by WHERE c.id=? AND c.deleted=0`).get(int(req.params.id));
+  if (!c) throw new HttpError(404, 'Không tìm thấy khách');
+  res.json(c);
 });
 app.delete('/api/customers/:id', OWNER, (req, res) => {
   const id = int(req.params.id);
@@ -297,7 +312,8 @@ app.get('/api/search', (req, res) => {
   const ph = digits.length >= 3 ? `%${digits}%` : '%%NOPE%%';
   const customers = db.prepare(`SELECT id, code, name, phone,
       (SELECT MAX(date) FROM visits v WHERE v.customer_id=c.id AND v.status='done') last_visit
-    FROM customers c WHERE deleted=0 AND (name LIKE ? OR code LIKE ? OR phone LIKE ?) ORDER BY name LIMIT 10`).all(like, like, ph);
+    , (SELECT full_name FROM users u WHERE u.id=c.staff_id) staff_name, formula
+    FROM customers c WHERE deleted=0 AND (name LIKE ? OR code LIKE ? OR phone LIKE ? OR formula LIKE ?) ORDER BY name LIMIT 10`).all(like, like, ph, like);
   const cards = db.prepare(`SELECT cd.id, cd.code, cd.name, cd.status, cd.expires_at, cd.customer_id, c.name customer_name, c.phone
     FROM cards cd JOIN customers c ON c.id=cd.customer_id WHERE cd.code LIKE ? OR c.name LIKE ? OR c.phone LIKE ? ORDER BY cd.id DESC LIMIT 10`).all(like, like, ph)
     .map((c) => ({ ...c, balance: L.cardBalance(c.id) }));

@@ -187,6 +187,10 @@ function saveVisit(input, user, existing, opts = {}) {
     if (input.appointment_id) {
       db.prepare("UPDATE appointments SET status='done', visit_id=? WHERE id=?").run(id, int(input.appointment_id));
     }
+    // Hồ sơ khách: chưa có thợ phụ trách → gán thợ chính; công thức mới nhất → thành công thức của khách
+    db.prepare('UPDATE customers SET staff_id=? WHERE id=? AND staff_id IS NULL').run(mainStaff, customerId);
+    if (row.formula) db.prepare("UPDATE customers SET formula=?, formula_at=?, formula_by=? WHERE id=? AND (formula_at IS NULL OR formula_at<=?)")
+      .run(row.formula, date, mainStaff, customerId, date);
     audit(user.id, isNew ? 'create_visit' : 'update_visit', 'visit', id,
       isNew ? { total, cash_paid: cashPaid, card_paid: cardPaid } : { before: { total: existing.total, cash_paid: existing.cash_paid, discount: existing.discount }, after: { total, cash_paid: cashPaid, discount } });
     return id;

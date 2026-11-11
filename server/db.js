@@ -210,6 +210,15 @@ const DEFAULT_SETTINGS = {
   }
   // Gói thẻ có hạn cố định (VD: thẻ tri ân hết hạn 25/10/2027 dù tặng ngày nào)
   if (!db.prepare('PRAGMA table_info(card_types)').all().some((c) => c.name === 'fixed_expiry')) db.exec('ALTER TABLE card_types ADD COLUMN fixed_expiry TEXT');
+  // Thợ phụ trách + công thức chuẩn của khách
+  if (!db.prepare('PRAGMA table_info(customers)').all().some((c) => c.name === 'staff_id')) {
+    db.exec('ALTER TABLE customers ADD COLUMN staff_id INTEGER REFERENCES users(id); ALTER TABLE customers ADD COLUMN formula TEXT; ALTER TABLE customers ADD COLUMN formula_at TEXT; ALTER TABLE customers ADD COLUMN formula_by INTEGER');
+    // Điền sẵn từ lịch sử: thợ làm chính nhiều nhất + công thức lượt gần nhất
+    db.exec(`UPDATE customers SET staff_id = (SELECT main_staff_id FROM visits v WHERE v.customer_id=customers.id AND v.status='done' AND main_staff_id IS NOT NULL
+        GROUP BY main_staff_id ORDER BY COUNT(*) DESC, MAX(date) DESC LIMIT 1)`);
+    db.exec(`UPDATE customers SET (formula, formula_at, formula_by) = (SELECT formula, date, main_staff_id FROM visits v WHERE v.customer_id=customers.id AND v.status='done'
+        AND formula IS NOT NULL AND formula<>'' ORDER BY date DESC, id DESC LIMIT 1)`);
+  }
 }
 const insSetting = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)');
 for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) insSetting.run(k, v);
