@@ -294,9 +294,13 @@ app.get('/api/appointments', (req, res) => {
   const params = [from, to];
   let extra = '';
   if (req.query.staff_id) { extra = ' AND a.staff_id=?'; params.push(int(req.query.staff_id)); }
-  res.json(db.prepare(`SELECT a.*, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, c.code customer_code, u.full_name staff_name
+  const u = req.user;
+  res.json(db.prepare(`SELECT a.*, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, c.code customer_code, u.full_name staff_name,
+      v.total visit_total, v.main_staff_id v_main, v.assistant_id v_asst, (SELECT GROUP_CONCAT(name, ' + ') FROM visit_items WHERE visit_id=v.id) visit_services
     FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id
-    WHERE a.date BETWEEN ? AND ?${extra} ORDER BY a.date, a.time`).all(...params));
+    LEFT JOIN visits v ON v.id=a.visit_id AND v.status='done'
+    WHERE a.date BETWEEN ? AND ?${extra} ORDER BY a.date, a.time`).all(...params)
+    .map(({ v_main, v_asst, ...a }) => (u.role === 'staff' && v_main !== u.id && v_asst !== u.id ? { ...a, visit_total: null } : a)));
 });
 function offWarning(a) {
   const o = staffMod.offAt(a.staff_id, a.date, a.time, a.duration);
@@ -356,6 +360,29 @@ app.post('/api/appointments/:id/status', (req, res) => {
   }
   audit(req.user.id, 'appointment_status', 'appointment', id, { status: st, reason: str(req.body.reason) });
   res.json({ ok: true });
+});
+// Khách vãng lai đặt lịch → tự tạo hồ sơ khách (hoặc nhận khách cũ trùng SĐT) để thu tiền, ghi doanh số
+app.post('/api/appointments/:id/customer', (req, res) => {
+  const id = int(req.params.id);
+  const a = db.prepare('SELECT * FROM appointments WHERE id=?').get(id);
+  if (!a) throw new HttpError(404, 'Không tìm thấy lịch hẹn');
+  if (a.customer_id) {
+    const c = db.prepare('SELECT id, code, name FROM customers WHERE id=?').get(a.customer_id);
+    return res.json({ ...c, created: false });
+  }
+  const phone = L.normPhone(a.guest_phone);
+  let c = phone ? db.prepare('SELECT id, code, name FROM customers WHERE phone=? AND deleted=0').get(phone) : null;
+  let created = false;
+  if (!c) {
+    const name = str(a.guest_name) || 'Khách lẻ';
+    const code = nextCode('customers', 'KH', 4);
+    const cid = db.prepare('INSERT INTO customers(code,name,phone,source,created_by) VALUES (?,?,?,?,?)')
+      .run(code, name, phone && /^0\d{9,10}$/.test(phone) ? phone : null, 'Đặt lịch', req.user.id).lastInsertRowid;
+    audit(req.user.id, 'create_customer', 'customer', cid, { code, name, from_appointment: id });
+    c = { id: cid, code, name }; created = true;
+  }
+  db.prepare('UPDATE appointments SET customer_id=?, guest_name=NULL, guest_phone=NULL WHERE id=?').run(c.id, id);
+  res.json({ ...c, created });
 });
 function cancelFields(status, reason, user) {
   const r = str(reason);
