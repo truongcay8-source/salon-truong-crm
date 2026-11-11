@@ -210,6 +210,10 @@ const DEFAULT_SETTINGS = {
   }
   // Gói thẻ có hạn cố định (VD: thẻ tri ân hết hạn 25/10/2027 dù tặng ngày nào)
   if (!db.prepare('PRAGMA table_info(card_types)').all().some((c) => c.name === 'fixed_expiry')) db.exec('ALTER TABLE card_types ADD COLUMN fixed_expiry TEXT');
+  // Bán thẻ 2 người: người tư vấn/giới thiệu + % hoa hồng của người chốt
+  if (!db.prepare('PRAGMA table_info(cards)').all().some((c) => c.name === 'consultant_id')) {
+    db.exec('ALTER TABLE cards ADD COLUMN consultant_id INTEGER REFERENCES users(id); ALTER TABLE cards ADD COLUMN seller_share INTEGER NOT NULL DEFAULT 100; ALTER TABLE cards ADD COLUMN consultant_commission INTEGER NOT NULL DEFAULT 0');
+  }
   // Thợ phụ trách + công thức chuẩn của khách
   if (!db.prepare('PRAGMA table_info(customers)').all().some((c) => c.name === 'staff_id')) {
     db.exec('ALTER TABLE customers ADD COLUMN staff_id INTEGER REFERENCES users(id); ALTER TABLE customers ADD COLUMN formula TEXT; ALTER TABLE customers ADD COLUMN formula_at TEXT; ALTER TABLE customers ADD COLUMN formula_by INTEGER');

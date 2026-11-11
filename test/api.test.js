@@ -391,3 +391,38 @@ test('ảnh trước/sau: chỉ nhận ảnh thật, phải đăng nhập mới 
   assert.equal(res.status, 200);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM photos').get().n, 1);
 });
+
+test('bán thẻ 2 người: người tư vấn + chia hoa hồng, quản lý sửa tỷ lệ', async () => {
+  const thu = client(); await thu.post('/login', { username: 'thu', password: 'moi-thu' });
+  const vinh = client(); await vinh.post('/login', { username: 'vinh', password: 'moi-vinh' });
+  const staff = Object.fromEntries((await vinh.get('/staff')).data.map((s) => [s.full_name, s.id]));
+  const vang = (await thu.get('/card-types')).data.find((t) => t.name === 'Thẻ Vàng');
+  let r = await thu.post('/cards', { customer_id: ids.lan, card_type_id: vang.id, consultant_id: staff['Dương'], seller_share: 50, payment_method: 'Tiền mặt' });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.commission, 125000); assert.equal(r.data.consultant_commission, 125000);
+  const id = r.data.id;
+  // Nhân viên không được sửa tỷ lệ; quản lý đổi sang 70/30
+  assert.equal((await thu.put('/cards/' + id, { seller_id: staff['Chị Thu'], consultant_id: staff['Dương'], seller_share: 30 })).status, 403);
+  r = await vinh.put('/cards/' + id, { seller_id: staff['Chị Thu'], consultant_id: staff['Dương'], seller_share: 70 });
+  assert.equal(r.status, 200);
+  const c = db.prepare('SELECT * FROM cards WHERE id=?').get(id);
+  assert.equal(c.commission, 175000); assert.equal(c.consultant_commission, 75000);
+  // Báo cáo: mỗi người nhận đúng phần mình
+  const d = c.sold_at;
+  const rep = (await vinh.get(`/reports/sales?from=${d}&to=${d}`)).data;
+  const duong = rep.rows.find((x) => x.user_id === staff['Dương']);
+  assert.ok(duong.card_commission >= 75000);
+  // Nhân viên khác chỉ thấy HH của mình
+  const list = (await thu.get('/cards?customer_id=' + ids.lan)).data.find((x) => x.id === id);
+  assert.equal(list.commission, 175000); assert.equal(list.consultant_commission, null);
+});
+
+test('lượt nhập từ Excel không có hình thức TT: chủ vẫn sửa được tip', async () => {
+  const vinh = client(); await vinh.post('/login', { username: 'vinh', password: 'moi-vinh' });
+  const v = db.prepare("SELECT * FROM visits WHERE status='done' AND card_paid=0 ORDER BY id LIMIT 1").get();
+  db.prepare('UPDATE visits SET payment_method=NULL WHERE id=?').run(v.id);
+  const full = (await vinh.get('/visits/' + v.id)).data;
+  const r = await vinh.put('/visits/' + v.id, { ...full, payment_method: '', tip: 77000, items: full.items.map((i) => ({ service_id: i.service_id, name: i.name, price: i.price })) });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(db.prepare('SELECT tip FROM visits WHERE id=?').get(v.id).tip, 77000);
+});

@@ -42,6 +42,24 @@ function cardRow(c) {
   return { ...c, balance: cardBalance(c.id) };
 }
 
+// Hoa hồng bán thẻ: tổng = giá bán × tỷ lệ (mới / nạp lại); 2 người bán thì chia theo % người chốt
+function cardCommission(price, saleType, sellerId, consultantId, share) {
+  const rate = saleType === 'new' ? num('card_new_rate') : saleType === 'renewal' ? num('card_renewal_rate') : 0;
+  const total = Math.round(price * rate);
+  const sh = consultantId ? share : 100;
+  const on = (id) => { const u = id && db.prepare('SELECT commission_enabled FROM users WHERE id=?').get(id); return !!(u && u.commission_enabled); };
+  const sellerPart = Math.round((total * sh) / 100);
+  return { commission: on(sellerId) ? sellerPart : 0, consultant_commission: consultantId && on(consultantId) ? total - sellerPart : 0 };
+}
+function cardSplit(input, sellerId) {
+  let consultantId = int(input.consultant_id) || null;
+  if (consultantId === sellerId) consultantId = null;
+  if (consultantId && !db.prepare('SELECT 1 FROM users WHERE id=?').get(consultantId)) throw bad('Người tư vấn không tồn tại');
+  const raw = input.seller_share != null && input.seller_share !== '' ? int(input.seller_share) : 50;
+  if (consultantId && (raw < 0 || raw > 100)) throw bad('Tỷ lệ chia phải từ 0 đến 100%');
+  return { consultantId, share: consultantId ? raw : 100 };
+}
+
 function sellCard(input, user) {
   const customer = db.prepare('SELECT id FROM customers WHERE id=? AND deleted=0').get(input.customer_id);
   if (!customer) throw bad('Không tìm thấy khách hàng');
@@ -59,14 +77,13 @@ function sellCard(input, user) {
   // Gói giá 0đ (thẻ tặng) luôn là "Tặng": không hoa hồng, không tính tiền vào
   const saleType = price === 0 ? 'gift' : ['new', 'renewal', 'gift'].includes(input.sale_type) ? input.sale_type : 'new';
   const sellerId = user.role === 'staff' ? user.id : int(input.seller_id) || user.id;
-  const rate = saleType === 'new' ? num('card_new_rate') : saleType === 'renewal' ? num('card_renewal_rate') : 0;
-  const seller = db.prepare('SELECT commission_enabled FROM users WHERE id=?').get(sellerId);
-  const commission = seller && seller.commission_enabled ? Math.round(price * rate) : 0;
+  const { consultantId, share } = cardSplit(input, sellerId);
+  const cm = cardCommission(price, saleType, sellerId, consultantId, share);
   const code = nextCode('cards', 'THE', 4);
-  const r = db.prepare(`INSERT INTO cards(code,customer_id,card_type_id,name,price,value,sold_at,expires_at,seller_id,sale_type,commission,payment_method,note,created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(code, customer.id, type ? type.id : null, str(input.name) || (type ? type.name : 'Thẻ trả trước'),
-    price, value, soldAt, expires, sellerId, saleType, commission, str(input.payment_method), str(input.note), user.id);
-  audit(user.id, 'sell_card', 'card', r.lastInsertRowid, { code, price, value, customer_id: customer.id });
+  const r = db.prepare(`INSERT INTO cards(code,customer_id,card_type_id,name,price,value,sold_at,expires_at,seller_id,sale_type,commission,payment_method,note,created_by,consultant_id,seller_share,consultant_commission)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(code, customer.id, type ? type.id : null, str(input.name) || (type ? type.name : 'Thẻ trả trước'),
+    price, value, soldAt, expires, sellerId, saleType, cm.commission, str(input.payment_method), str(input.note), user.id, consultantId, share, cm.consultant_commission);
+  audit(user.id, 'sell_card', 'card', r.lastInsertRowid, { code, price, value, customer_id: customer.id, consultant_id: consultantId, seller_share: share });
   return cardRow(db.prepare('SELECT * FROM cards WHERE id=?').get(r.lastInsertRowid));
 }
 
@@ -147,7 +164,8 @@ function saveVisit(input, user, existing, opts = {}) {
   const methods = getSettings().payment_methods.split(',').map((s) => s.trim());
   const pm = str(input.payment_method);
   if (!opts.imported) {
-    if (cashPaid > 0 && !pm) throw bad('Chọn hình thức thanh toán');
+    // Lượt nhập từ Excel cũ không ghi hình thức TT → cho sửa (tip, giá…) mà không bắt chọn lại
+    if (cashPaid > 0 && !pm && (isNew || existing.payment_method)) throw bad('Chọn hình thức thanh toán');
     if (pm && !methods.includes(pm)) throw bad('Hình thức thanh toán không hợp lệ');
   }
 
@@ -279,8 +297,11 @@ function salesReport(from, to, user) {
   }
   const cards = db.prepare("SELECT * FROM cards WHERE status!='refunded' AND sold_at BETWEEN ? AND ?").all(from, to);
   for (const c of cards) {
+    const sh = c.consultant_id ? c.seller_share : 100;
     const s = per.get(c.seller_id);
-    if (s) { s.cards_count++; s.cards_amount += c.price; s.card_commission += c.commission; }
+    if (s) { s.cards_count++; s.cards_amount += Math.round((c.price * sh) / 100); s.card_commission += c.commission; }
+    const k = c.consultant_id && per.get(c.consultant_id);
+    if (k) { k.cards_count++; k.cards_amount += c.price - Math.round((c.price * sh) / 100); k.card_commission += c.consultant_commission; }
   }
   let rows = [...per.values()].map((r) => ({ ...r, total_commission: r.main_commission + r.assistant_commission + r.card_commission }))
     .filter((r) => r.active || r.main_count || r.assist_count || r.cards_count);
@@ -421,6 +442,7 @@ function staffCustomerReport(from, to) {
 }
 
 module.exports = {
+  cardCommission, cardSplit,
   staffCustomerReport,
   HttpError, bad, int, str, today, addDays, addMonths, isDate, normPhone, localDate,
   cardBalance, cardRow, sellCard, saveVisit, updateVisitNotes, deleteVisit, getVisit, maskVisitMoney, canEditVisit,

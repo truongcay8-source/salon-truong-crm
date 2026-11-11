@@ -101,7 +101,7 @@ app.use('/api', auth);
 app.get('/api/me', (req, res) => {
   const { token, ...u } = req.user;
   const s = getSettings();
-  res.json({ user: { ...u, ...stockMod.perm(req.user) }, settings: { salon_name: s.salon_name, salon_address: s.salon_address, salon_phone: s.salon_phone, bank_info: s.bank_info, receipt_footer: s.receipt_footer, chat_keep_days: Number(s.chat_keep_days) || 90, payment_methods: s.payment_methods.split(',').map((x) => x.trim()) }, groups: GROUPS, today: today() });
+  res.json({ user: { ...u, ...stockMod.perm(req.user) }, settings: { salon_name: s.salon_name, salon_address: s.salon_address, salon_phone: s.salon_phone, bank_info: s.bank_info, receipt_footer: s.receipt_footer, chat_keep_days: Number(s.chat_keep_days) || 90, card_new_rate: Number(s.card_new_rate) || 0, card_renewal_rate: Number(s.card_renewal_rate) || 0, payment_methods: s.payment_methods.split(',').map((x) => x.trim()) }, groups: GROUPS, today: today() });
 });
 app.post('/api/me/password', (req, res) => {
   const u = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
@@ -545,9 +545,11 @@ app.get('/api/cards', (req, res) => {
   if (req.query.customer_id) { where += ' AND cd.customer_id=?'; params.push(int(req.query.customer_id)); }
   if (req.query.status) { where += ' AND cd.status=?'; params.push(String(req.query.status)); }
   if (req.query.q) { const q = String(req.query.q).trim(); where += " AND cd.sale_type='gift' AND (UPPER(cd.code)=UPPER(?) OR c.phone=?)"; params.push(q, L.normPhone(q)); }
-  const rows = db.prepare(`SELECT cd.*, c.name customer_name, c.code customer_code, c.phone, u.full_name seller_name
-    FROM cards cd JOIN customers c ON c.id=cd.customer_id LEFT JOIN users u ON u.id=cd.seller_id WHERE ${where} ORDER BY cd.id DESC`).all(...params);
-  res.json(rows.map(L.cardRow).map((c) => (req.user.role === 'staff' && c.seller_id !== req.user.id ? { ...c, commission: null } : c)));
+  const rows = db.prepare(`SELECT cd.*, c.name customer_name, c.code customer_code, c.phone, u.full_name seller_name, k.full_name consultant_name
+    FROM cards cd JOIN customers c ON c.id=cd.customer_id LEFT JOIN users u ON u.id=cd.seller_id LEFT JOIN users k ON k.id=cd.consultant_id WHERE ${where} ORDER BY cd.id DESC`).all(...params);
+  // Nhân viên chỉ thấy phần hoa hồng của chính mình
+  res.json(rows.map(L.cardRow).map((c) => (req.user.role === 'staff'
+    ? { ...c, commission: c.seller_id === req.user.id ? c.commission : null, consultant_commission: c.consultant_id === req.user.id ? c.consultant_commission : null } : c)));
 });
 app.post('/api/cards', (req, res) => res.json(L.sellCard(req.body, req.user)));
 app.get('/api/cards/:id/history', (req, res) => {
@@ -562,8 +564,16 @@ app.put('/api/cards/:id', MGR, (req, res) => {
   const expires = L.isDate(req.body.expires_at) ? req.body.expires_at : c.expires_at;
   const status = ['active', 'closed', 'refunded'].includes(req.body.status) ? req.body.status : c.status;
   db.prepare('UPDATE cards SET expires_at=?, status=?, note=? WHERE id=?').run(expires, status, str(req.body.note) ?? c.note, id);
-  if (status === 'refunded' && c.status !== 'refunded') db.prepare('UPDATE cards SET commission=0 WHERE id=?').run(id);
-  audit(req.user.id, 'update_card', 'card', id, { expires_at: [c.expires_at, expires], status: [c.status, status] });
+  // Sửa người bán / người tư vấn / tỷ lệ chia → tính lại hoa hồng
+  if (req.body.seller_id !== undefined && status !== 'refunded') {
+    const sellerId = int(req.body.seller_id) || c.seller_id;
+    const { consultantId, share } = L.cardSplit(req.body, sellerId);
+    const cm = L.cardCommission(c.price, c.sale_type, sellerId, consultantId, share);
+    db.prepare('UPDATE cards SET seller_id=?, consultant_id=?, seller_share=?, commission=?, consultant_commission=? WHERE id=?').run(sellerId, consultantId, share, cm.commission, cm.consultant_commission, id);
+  }
+  if (status === 'refunded' && c.status !== 'refunded') db.prepare('UPDATE cards SET commission=0, consultant_commission=0 WHERE id=?').run(id);
+  const after = db.prepare('SELECT * FROM cards WHERE id=?').get(id);
+  audit(req.user.id, 'update_card', 'card', id, { code: c.code, changes: diffObj(c, after, ['expires_at', 'status', 'seller_id', 'consultant_id', 'seller_share', 'commission', 'consultant_commission']) });
   res.json({ ok: true });
 });
 app.post('/api/cards/:id/adjust', MGR, (req, res) => {

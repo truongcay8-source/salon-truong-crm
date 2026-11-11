@@ -1191,7 +1191,7 @@ function cardTable(cards, showCustomer = true) {
   return `<div class="table-wrap"><table><thead><tr><th>Mã</th>${showCustomer ? '<th>Khách</th>' : ''}<th>Gói</th><th>Ngày bán</th><th>Hạn</th><th class="num">Giá bán</th><th class="num">Số dư</th><th>NV bán</th><th>Trạng thái</th><th></th></tr></thead>
     <tbody>${cards.map((c) => `<tr><td>${esc(c.code)}</td>${showCustomer ? `<td><a href="#customer?id=${c.customer_id}">${esc(c.customer_name)}</a></td>` : ''}<td>${esc(c.name)}</td>
     <td>${dmy(c.sold_at)}</td><td>${dmy(c.expires_at)}${c.status === 'active' && c.expires_at < S.today ? ' <span class="badge bad">hết hạn</span>' : ''}</td><td class="num">${money(c.price)}</td>
-    <td class="num"><b>${money(c.balance)}</b></td><td>${esc(c.seller_name || staffName(c.seller_id))}</td><td><span class="badge ${ST[c.status][1]}">${ST[c.status][0]}</span></td>
+    <td class="num"><b>${money(c.balance)}</b></td><td>${esc(c.seller_name || staffName(c.seller_id))}${c.consultant_id ? `<div class="small muted">+ ${esc(c.consultant_name || staffName(c.consultant_id))} (${c.seller_share}/${100 - c.seller_share})</div>` : ''}</td><td><span class="badge ${ST[c.status][1]}">${ST[c.status][0]}</span></td>
     <td><button class="btn sm" data-card="${c.id}">Chi tiết</button></td></tr>`).join('')}</tbody></table></div>`;
 }
 // Tin nhắn báo số dư thẻ cho khách (gửi Zalo/SMS sau khi bán thẻ hoặc khi khách hỏi)
@@ -1215,26 +1215,58 @@ function bindCardTable(root, cards, reload) {
     openModal(`Thẻ ${c.code} · ${c.name}`, `<div class="stat-line"><span class="muted">Giá bán / giá trị</span><b>${money(c.price)} / ${money(c.value)}</b></div>
       <div class="stat-line"><span class="muted">Số dư</span><b>${money(c.balance)}</b></div>
       <div class="stat-line"><span class="muted">Hạn dùng</span><b>${dmy(c.expires_at)}</b></div>
-      ${c.commission != null ? `<div class="stat-line"><span class="muted">Hoa hồng bán thẻ</span><b>${money(c.commission)}</b></div>` : ''}
+      <div class="stat-line"><span class="muted">Người chốt bán</span><b>${esc(c.seller_name || staffName(c.seller_id))}${c.consultant_id ? ` (${c.seller_share}%)` : ''}${c.commission != null ? ' · HH ' + money(c.commission) : ''}</b></div>
+      ${c.consultant_id ? `<div class="stat-line"><span class="muted">Người tư vấn</span><b>${esc(c.consultant_name || staffName(c.consultant_id))} (${100 - c.seller_share}%)${c.consultant_commission != null ? ' · HH ' + money(c.consultant_commission) : ''}</b></div>` : ''}
       ${msgBox(cardMsg(c, hist), c.phone)}
       <h3 style="margin-top:14px">Lịch sử dùng thẻ</h3>${hist.length ? `<table><tbody>${hist.map((h) => `<tr><td>${esc(h.created_at.slice(0, 10).split('-').reverse().join('/'))}</td><td>${esc(h.visit_code || h.note || '')}</td><td class="num">${money(h.amount)}</td><td class="small muted">${esc(h.by_name || '')}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Chưa dùng</div>'}
       ${isMgr() ? `<form id="cardEdit"><h3 style="margin-top:14px">Quản lý thẻ</h3><div class="form-grid">
         <div><label>Gia hạn đến</label><input type="date" name="expires_at" value="${c.expires_at || ''}"></div>
         <div><label>Trạng thái</label><select name="status"><option value="active" ${c.status === 'active' ? 'selected' : ''}>Đang dùng</option><option value="closed" ${c.status === 'closed' ? 'selected' : ''}>Đóng thẻ</option><option value="refunded" ${c.status === 'refunded' ? 'selected' : ''}>Hoàn tiền (thu hồi HH)</option></select></div>
-        <div><label>Điều chỉnh số dư (+/−)</label><input type="number" name="amount" step="1000"></div><div><label>Lý do điều chỉnh</label><input name="note"></div></div>
+        <div><label>Điều chỉnh số dư (+/−)</label><input type="number" name="amount" step="1000"></div><div><label>Lý do điều chỉnh</label><input name="note"></div>
+        ${sellerFields(c)}</div>
         <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu</button></div></form>` : ''}`);
     bindMsgBox();
     const f = $('#cardEdit');
+    if (f) bindSellerFields(f, c);
     if (f) f.onsubmit = (e) => {
       e.preventDefault();
       guard($('#cardEdit button'), async () => {
         const d = formData(f);
-        await api('/cards/' + c.id, { method: 'PUT', body: { expires_at: d.expires_at, status: d.status } });
+        await api('/cards/' + c.id, { method: 'PUT', body: { expires_at: d.expires_at, status: d.status, seller_id: d.seller_id, consultant_id: d.consultant_id, seller_share: d.seller_share } });
         if (d.amount) await api(`/cards/${c.id}/adjust`, { method: 'POST', body: { amount: Number(d.amount), note: d.note } });
         closeModal(); toast('Đã cập nhật thẻ'); reload();
       });
     };
   }));
+}
+// Người chốt bán + người tư vấn + cách chia hoa hồng (gợi ý 50/50 khi cùng làm, 70/30 khi 1 người chỉ giới thiệu)
+const SPLITS = [[50, '50/50 · hai người cùng tư vấn và chốt'], [70, '70/30 · người chốt 70%, người giới thiệu 30%'], [60, '60/40'], [30, '30/70 · người tư vấn làm chính']];
+function sellerFields(c = {}) {
+  const share = c.consultant_id ? c.seller_share : 50;
+  return `<div><label>Nhân viên chốt bán</label><select name="seller_id" ${!isMgr() ? 'disabled' : ''}>${staffOptions(c.seller_id || S.me.id, '')}</select></div>
+    <div><label>Người tư vấn / giới thiệu (nếu có)</label><select name="consultant_id">${staffOptions(c.consultant_id || null, '— Không có —')}</select></div>
+    <div class="full sp-wrap" ${c.consultant_id ? '' : 'hidden'}><label>Chia hoa hồng (người chốt / người tư vấn)</label><select name="seller_share">${SPLITS.map(([v, t]) => `<option value="${v}" ${v === share ? 'selected' : ''}>${t}</option>`).join('')}${SPLITS.some(([v]) => v === share) ? '' : `<option value="${share}" selected>${share}/${100 - share}</option>`}</select>
+      <div class="small muted sp-txt"></div></div>`;
+}
+function bindSellerFields(f, c = {}) {
+  const sel = f.querySelector('[name=consultant_id]'), wrap = f.querySelector('.sp-wrap'), sh = f.querySelector('[name=seller_share]'), txt = f.querySelector('.sp-txt');
+  const show = () => {
+    const seller = Number(f.querySelector('[name=seller_id]').value || S.me.id), k = Number(sel.value);
+    wrap.hidden = !k;
+    if (k && k === seller) txt.textContent = 'Người tư vấn trùng người chốt → không chia.';
+    else if (k) {
+      const typeSel = f.querySelector('[name=card_type_id]'), st = f.querySelector('[name=sale_type]');
+      const t = typeSel && S.cardTypes.find((x) => x.id === Number(typeSel.value));
+      const pr = f.querySelector('[name=price]');
+      const price = c.price != null ? c.price : pr && pr.value !== '' ? Number(pr.value) : t ? t.price : 0;
+      const type = c.sale_type || (st ? st.value : 'new');
+      const rate = type === 'new' ? Number(S.settings.card_new_rate || 0) : type === 'renewal' ? Number(S.settings.card_renewal_rate || 0) : 0;
+      const tot = Math.round(price * rate), a = Math.round((tot * Number(sh.value)) / 100);
+      txt.innerHTML = tot ? `Tổng HH ${money(tot)} → người chốt <b>${money(a)}</b>, người tư vấn <b>${money(tot - a)}</b>` : 'Thẻ này không có hoa hồng.';
+    }
+  };
+  f.querySelectorAll('select,input').forEach((x) => x.addEventListener('change', show));
+  show();
 }
 function cardForm(customer, after) {
   openModal('Bán thẻ trả trước', `<form id="sf"><div class="form-grid">
@@ -1243,13 +1275,14 @@ function cardForm(customer, after) {
     <div><label>Giá bán (trống = theo gói)</label><input type="number" name="price" min="0" step="1000"></div>
     <div><label>Giá trị dùng (trống = theo gói)</label><input type="number" name="value" min="0" step="1000"></div>
     <div><label>Loại</label><select name="sale_type"><option value="new">Khách mua mới</option><option value="renewal">Mua lại / nạp thêm</option><option value="gift">Tặng (không HH)</option></select></div>
-    <div><label>Nhân viên bán</label><select name="seller_id" ${!isMgr() ? 'disabled' : ''}>${staffOptions(S.me.id, '')}</select></div>
+    ${sellerFields()}
     <div><label>Hình thức thanh toán</label><select name="payment_method">${S.settings.payment_methods.map((m) => `<option>${esc(m)}</option>`).join('')}</select></div>
     <div><label>Ngày bán</label><input type="date" name="sold_at" value="${S.today}"></div>
     <div class="full"><label>Ghi chú</label><input name="note"></div></div>
     <div class="small muted">Tiền bán thẻ tính vào <b>tiền vào</b>, không tính vào doanh số dịch vụ (doanh số tính khi khách dùng thẻ) — tránh cộng 2 lần.</div>
     <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Bán thẻ</button></div></form>`);
   bindPicker($('#sf'));
+  bindSellerFields($('#sf'));
   $('#sf').onsubmit = (e) => {
     e.preventDefault();
     guard($('#sf button.primary'), async () => {
@@ -1732,9 +1765,9 @@ VIEWS.settings = async (main) => {
     const LB = { date: 'Ngày', time: 'Giờ', customer_id: 'Khách', main_staff_id: 'Thợ chính', assistant_id: 'Người phụ', staff_id: 'Thợ', surcharge: 'Phụ thu', discount: 'Giảm giá', discount_reason: 'Lý do giảm',
       total: 'Tổng tiền', card_paid: 'Trừ thẻ', cash_paid: 'Tiền thu', payment_method: 'Hình thức TT', tip: 'Tip', formula: 'Công thức', result: 'Kết quả', note: 'Ghi chú', services: 'Dịch vụ', name: 'Tên', phone: 'SĐT',
       gender: 'Giới tính', birthday: 'Sinh nhật', source: 'Nguồn', hair_notes: 'Lưu ý tóc', notes: 'Ghi chú', status: 'Trạng thái', service: 'Dịch vụ', duration: 'Thời lượng (phút)', guest_name: 'Tên khách',
-      guest_phone: 'SĐT khách', amount: 'Số tiền', reason: 'Lý do', qty: 'Số lượng', expires_at: 'Hạn thẻ', price: 'Giá', value: 'Giá trị', role: 'Quyền', active: 'Đang làm', count: 'Số khách', to: 'Sang thợ', month: 'Tháng' };
-    const MONEY = ['surcharge', 'discount', 'total', 'card_paid', 'cash_paid', 'tip', 'amount', 'price', 'value', 'unit_cost'];
-    const STAFFK = ['main_staff_id', 'assistant_id', 'staff_id', 'to', 'user_id'];
+      guest_phone: 'SĐT khách', amount: 'Số tiền', reason: 'Lý do', qty: 'Số lượng', expires_at: 'Hạn thẻ', price: 'Giá', value: 'Giá trị', role: 'Quyền', active: 'Đang làm', count: 'Số khách', to: 'Sang thợ', month: 'Tháng', seller_id: 'Người chốt bán', consultant_id: 'Người tư vấn', seller_share: '% người chốt', commission: 'HH người chốt', consultant_commission: 'HH người tư vấn' };
+    const MONEY = ['surcharge', 'discount', 'total', 'card_paid', 'cash_paid', 'tip', 'amount', 'price', 'value', 'unit_cost', 'commission', 'consultant_commission'];
+    const STAFFK = ['main_staff_id', 'assistant_id', 'staff_id', 'to', 'user_id', 'seller_id', 'consultant_id'];
     const fv = (k, v) => v == null || v === '' ? '<span class="muted">(trống)</span>' : MONEY.includes(k) ? money(v) : STAFFK.includes(k) ? esc(staffName(v) || '#' + v)
       : k === 'status' && APPT[v] ? APPT[v][0] : k === 'status' && EXP_ST[v] ? EXP_ST[v][0] : esc(typeof v === 'object' ? JSON.stringify(v) : String(v));
     const detail = (r) => {
