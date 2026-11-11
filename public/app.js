@@ -552,7 +552,11 @@ function apptForm(a = {}, after) {
     <div class="full"><label>Ghi chú</label><textarea name="note">${esc(a.note || '')}</textarea></div></div>
     ${isEdit && !a.visit_id ? '<div class="full small muted">💡 Chọn trạng thái <b>Hoàn thành</b> rồi Lưu (hoặc bấm <b>💰 Thu tiền</b>) → phiếu thu mở sẵn dịch vụ + giá, lưu là tự vào doanh số.</div>' : ''}
     <div class="err"></div><div class="modal-foot">${isEdit && !a.visit_id && !['cancelled', 'noshow'].includes(a.status) ? '<button type="button" class="btn" id="afPay">💰 Thu tiền</button><span class="spacer"></span>' : ''}<button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu lịch hẹn</button></div></form>`);
-  bindPicker($('#af'));
+  bindPicker($('#af'), async (cid) => {
+    const st = $('#af [name=staff_id]');
+    if (st.value) return;
+    try { const b = await api(`/customers/${cid}/brief`); if (b.staff_id) { st.value = b.staff_id; toast('Đã chọn thợ phụ trách: ' + b.staff_name); } } catch { /* bỏ qua */ }
+  });
   const svcIn = $('#af [name=service]');
   let chosen = splitSvc(svcIn.value);
   const drawChips = () => {
@@ -593,14 +597,19 @@ function apptForm(a = {}, after) {
 // ---------- Khách hàng ----------
 VIEWS.customers = async (main) => {
   const q = S.params.q || '';
-  const r = await api('/customers?limit=200&q=' + encodeURIComponent(q));
+  const sf = S.params.staff || '';
+  const r = await api('/customers?limit=200&q=' + encodeURIComponent(q) + (sf ? '&staff_id=' + sf : ''));
   main.innerHTML = header('Khách hàng', `${r.total} khách`, `<button class="btn primary" id="newC">+ Khách mới</button>`) +
-    `<div class="card"><input id="q" placeholder="Tìm theo tên, SĐT, mã khách…" value="${esc(q)}" type="search"></div>
-    <div class="card"><div class="table-wrap"><table><thead><tr><th>Mã</th><th>Tên khách</th><th>SĐT</th><th class="num">Lượt</th><th>Lần gần nhất</th>${isMgr() ? '<th class="num">Tổng chi</th>' : ''}</tr></thead>
+    `<div class="card"><div class="row"><input id="q" placeholder="🔍 Tìm tên, SĐT, mã khách, công thức (vd: 7NB)…" value="${esc(q)}" type="search" style="flex:1;min-width:220px">
+      <select id="sf" style="width:auto"><option value="">Tất cả thợ</option><option value="mine" ${sf === 'mine' ? 'selected' : ''}>⭐ Khách của tôi</option>${activeStaff().map((u) => `<option value="${u.id}" ${String(u.id) === sf ? 'selected' : ''}>Khách của ${esc(u.full_name)}</option>`).join('')}<option value="none" ${sf === 'none' ? 'selected' : ''}>Chưa giao thợ</option></select></div></div>
+    <div class="card"><div class="table-wrap"><table><thead><tr><th>Mã</th><th>Tên khách</th><th>SĐT</th><th class="num">Lượt</th><th>Lần gần nhất</th><th>Thợ phụ trách</th><th>Công thức</th>${isMgr() ? '<th class="num">Tổng chi</th>' : ''}</tr></thead>
     <tbody>${r.rows.map((c) => `<tr class="click" data-c="${c.id}"><td class="muted">${esc(c.code)}</td><td><b>${esc(c.name)}</b></td><td>${esc(c.phone || '')}</td>
-      <td class="num">${c.visits}</td><td>${dmy(c.last_visit)}</td>${isMgr() ? `<td class="num">${money(c.spend)}</td>` : ''}</tr>`).join('')}</tbody></table></div>
+      <td class="num">${c.visits}</td><td>${dmy(c.last_visit)}</td><td>${c.staff_id ? esc(staffName(c.staff_id)) : '<span class="muted small">—</span>'}</td>
+      <td class="small formula-cell" title="${esc(c.formula || '')}">${c.formula ? esc(c.formula.length > 40 ? c.formula.slice(0, 40) + '…' : c.formula) : ''}</td>${isMgr() ? `<td class="num">${money(c.spend)}</td>` : ''}</tr>`).join('')}</tbody></table></div>
     ${r.total > r.rows.length ? `<div class="muted small" style="margin-top:8px">Đang hiện ${r.rows.length}/${r.total} — gõ tìm kiếm để lọc.</div>` : ''}</div>`;
-  let t; $('#q').oninput = (e) => { clearTimeout(t); t = setTimeout(() => go('customers', e.target.value ? { q: e.target.value } : {}), 350); };
+  const params = (over) => { const p = { q: $('#q').value, staff: $('#sf').value, ...over }; return Object.fromEntries(Object.entries(p).filter(([, v]) => v)); };
+  let t; $('#q').oninput = () => { clearTimeout(t); t = setTimeout(() => go('customers', params()), 350); };
+  $('#sf').onchange = () => go('customers', params());
   if (q) { const i = $('#q'); i.focus(); i.setSelectionRange(q.length, q.length); }
   $$('[data-c]', main).forEach((tr) => (tr.onclick = () => go('customer', { id: tr.dataset.c })));
   $('#newC').onclick = () => customerForm({}, (id) => go('customer', { id }));
@@ -613,7 +622,9 @@ function customerForm(c = {}, after) {
     <div><label>Sinh nhật</label><input type="date" name="birthday" value="${c.birthday && c.birthday.length === 10 ? c.birthday : ''}"></div>
     <div><label>Giới tính</label><select name="gender">${['', 'Nữ', 'Nam', 'Khác'].map((g) => `<option ${c.gender === g ? 'selected' : ''} value="${g}">${g || '—'}</option>`).join('')}</select></div>
     <div class="full"><label>Nguồn khách (Zalo, Facebook, giới thiệu…)</label><input name="source" value="${esc(c.source || '')}"></div>
+    <div><label>Thợ phụ trách</label>${isMgr() ? `<select name="staff_id">${staffOptions(c.staff_id || (isEdit ? null : S.me.role === 'staff' ? S.me.id : null), 'Chưa giao')}</select>` : `<input value="${esc(c.staff_name || staffName(c.staff_id) || 'Chưa giao')}" disabled>`}</div>
     <div class="full"><label>Lưu ý tóc, da đầu (nền tóc, % bạc, dị ứng…)</label><textarea name="hair_notes">${esc(c.hair_notes || '')}</textarea></div>
+    <div class="full"><label>🧪 Công thức chuẩn của khách (màu, tỷ lệ, oxy, thời gian ủ…)</label><textarea name="formula" rows="3" placeholder="VD: Milbon 7-NB 30g + 8-MT 30g, oxy 6% 1:1,5, ủ 30'">${esc(c.formula || '')}</textarea></div>
     <div class="full"><label>Ghi chú / sở thích</label><textarea name="notes">${esc(c.notes || '')}</textarea></div></div>
     ${c.birthday && c.birthday.length === 5 ? `<div class="small muted">Sinh nhật đang lưu: ${c.birthday.split('-').reverse().join('/')} (không có năm). Để trống ô trên nếu không đổi.</div>` : ''}
     <div class="err"></div><div class="modal-foot">${isEdit && isOwner() ? '<button type="button" class="btn danger" id="delC">Xóa khách</button><span class="spacer"></span>' : ''}<button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu</button></div></form>`);
@@ -644,6 +655,7 @@ VIEWS.customer = async (main) => {
   main.innerHTML = header(c.name, `${esc(c.code)} · ${telLinks(c.phone)}`,
     `<button class="btn" id="eC">Sửa</button><button class="btn" id="aC">Đặt lịch</button><button class="btn" id="sC">Bán thẻ</button><button class="btn primary" id="vC">+ Ghi lượt làm</button>`) +
     `<div class="grid two"><div class="card">
+      <div class="stat-line"><span class="muted">Thợ phụ trách</span><b>${c.staff_name ? esc(c.staff_name) : '<span class="badge warn">chưa giao</span>'}</b></div>
       <div class="stat-line"><span class="muted">Số lượt</span><b>${c.stats.visits}</b></div>
       ${c.stats.spend != null ? `<div class="stat-line"><span class="muted">Tổng chi tiêu</span><b>${money(c.stats.spend)}</b></div>` : ''}
       <div class="stat-line"><span class="muted">Lần gần nhất</span><b>${dmy(c.stats.last_visit) || '—'}</b></div>
@@ -652,12 +664,19 @@ VIEWS.customer = async (main) => {
       ${c.source ? `<div class="stat-line"><span class="muted">Nguồn</span><b>${esc(c.source)}</b></div>` : ''}
       ${activeCards.map((k) => `<div class="stat-line"><span class="muted">💳 ${esc(k.name)} (${esc(k.code)})</span><b>${money(k.balance)}</b></div>`).join('')}
     </div><div class="card"><h3>Lưu ý tóc</h3><div class="pre">${esc(c.hair_notes || '—')}</div>
-      ${(() => { const lv = c.visits.find((x) => x.formula); return lv ? `<h3 style="margin-top:12px">🧪 Công thức hóa chất gần nhất <span class="small muted">${dmy(lv.date)}</span></h3><div class="pre small">${esc(lv.formula)}</div>` : ''; })()}${c.notes ? `<h3 style="margin-top:12px">Ghi chú</h3><div class="pre">${esc(c.notes)}</div>` : ''}</div></div>
+      <h3 style="margin-top:12px">🧪 Công thức của khách <button class="btn sm" id="fEdit" style="margin-left:6px">Sửa</button></h3>
+      ${c.formula ? `<div class="pre formula-box">${esc(c.formula)}</div><div class="small muted">Cập nhật ${dmy(c.formula_at)}${c.formula_by_name ? ' · ' + esc(c.formula_by_name) : ''}</div>` : '<div class="small muted">Chưa có. Ghi ở phiếu thu (ô Công thức) là tự lưu vào đây.</div>'}
+      ${(() => { const hist = c.visits.filter((x) => x.formula); return hist.length > 1 || (hist.length && hist[0].formula !== c.formula) ? `<details class="small" style="margin-top:6px"><summary>Lịch sử công thức (${hist.length} lần)</summary>${hist.map((x) => `<div style="margin:6px 0"><b>${dmy(x.date)}</b> · ${esc(x.main_staff_name || '')} · ${esc(x.items.map((i) => i.name).join(' + '))}<div class="pre">${esc(x.formula)}</div></div>`).join('')}</details>` : ''; })()}${c.notes ? `<h3 style="margin-top:12px">Ghi chú</h3><div class="pre">${esc(c.notes)}</div>` : ''}</div></div>
     <div class="card"><div class="tabs">${[['visits', `Lượt làm (${c.visits.length})`], ['photos', `Ảnh (${c.photos.length})`], ['cards', `Thẻ (${c.cards.length})`], ['appts', `Lịch hẹn (${c.appointments.length})`]]
       .map(([k, l]) => `<button data-tab="${k}" class="${tab === k ? 'active' : ''}">${l}</button>`).join('')}</div><div id="tabBody"></div></div>`;
   const reload = () => VIEWS.customer(main);
   $$('[data-tab]').forEach((b) => (b.onclick = () => { history.replaceState({}, '', `#customer?id=${id}&tab=${b.dataset.tab}`); S.params.tab = b.dataset.tab; reload(); }));
   $('#eC').onclick = () => customerForm(c, reload);
+  $('#fEdit').onclick = () => {
+    openModal('Công thức · ' + c.name, `<form id="ff"><textarea name="formula" rows="6" placeholder="Màu, tỷ lệ pha, oxy, thời gian ủ, lưu ý…">${esc(c.formula || '')}</textarea>
+      <div class="small muted">Lần sau ghi lượt làm, phiếu thu hiện sẵn công thức này để thợ dùng lại.</div><div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu công thức</button></div></form>`);
+    $('#ff').onsubmit = (e) => { e.preventDefault(); guard($('#ff button'), async () => { await api('/customers/' + c.id, { method: 'PUT', body: { ...c, formula: $('#ff [name=formula]').value, staff_id: c.staff_id } }); closeModal(); toast('Đã lưu công thức'); reload(); }); };
+  };
   $('#aC').onclick = () => apptForm({ customer_id: c.id, customer_code: c.code, name: c.name }, reload);
   $('#sC').onclick = () => cardForm(c, reload);
   $('#vC').onclick = () => visitForm({ customer_id: c.id, customer: c }, reload);
@@ -744,7 +763,7 @@ async function visitForm(v = {}, after) {
     <div class="full"><div class="totals" id="tot"></div></div>
     <div class="full"><label>Tình trạng tóc trước khi làm</label><textarea name="hair_before">${esc(v.hair_before || '')}</textarea></div>
     <div class="full"><label>Mong muốn của khách</label><input name="wish" value="${esc(v.wish || '')}"></div>
-    <div class="full"><label>Công thức / tỷ lệ pha</label><textarea name="formula">${esc(v.formula || '')}</textarea></div>
+    <div class="full"><label>Công thức / tỷ lệ pha</label><div id="fHint"></div><textarea name="formula">${esc(v.formula || '')}</textarea></div>
     <div class="full"><label>Kết quả sau làm</label><input name="result" value="${esc(v.result || '')}"></div>
     <div><label>Hẹn chăm sóc lại</label><input type="date" name="next_visit_date" value="${v.next_visit_date || ''}"></div>
     <div><label>Ghi chú</label><input name="note" value="${esc(v.note || '')}"></div>
@@ -861,7 +880,19 @@ async function visitForm(v = {}, after) {
     });
     calc();
   };
-  bindPicker(f, loadCards);
+  // Chọn khách → hiện công thức chuẩn + lưu ý tóc, tự chọn thợ phụ trách nếu chưa chọn thợ
+  const showBrief = async (cid) => {
+    if (!cid) return;
+    let b; try { b = await api(`/customers/${cid}/brief`); } catch { return; }
+    if (!isEdit && !f.main_staff_id.value && b.staff_id) f.main_staff_id.value = b.staff_id;
+    $('#fHint').innerHTML = b.formula || b.hair_notes ? `<div class="totals small" style="margin-bottom:6px">${b.staff_name ? `<div>Thợ phụ trách: <b>${esc(b.staff_name)}</b></div>` : ''}
+      ${b.hair_notes ? `<div><span class="muted">Lưu ý tóc:</span> ${esc(b.hair_notes)}</div>` : ''}
+      ${b.formula ? `<div><span class="muted">Công thức khách (${dmy(b.formula_at)}${b.formula_by_name ? ', ' + esc(b.formula_by_name) : ''}):</span><div class="pre">${esc(b.formula)}</div>
+      ${!f.formula.value ? '<button type="button" class="btn sm" id="useF">↓ Dùng lại công thức này</button>' : ''}` : ''}</div>` : '';
+    const u = $('#useF'); if (u) u.onclick = () => { f.formula.value = b.formula; u.remove(); };
+  };
+  bindPicker(f, (cid) => { loadCards(cid); showBrief(cid); });
+  showBrief(custSel && custSel.id);
   $('#addItem').onclick = () => { items.push({ service_id: '', price: '' }); renderItems(); };
   if ($('#used')) {
     $('#used').addEventListener('input', () => { usedTouched = true; });

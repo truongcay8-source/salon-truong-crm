@@ -243,6 +243,20 @@ test('luồng chính và phân quyền', async () => {
   await mgr.del('/visits/' + vid, { reason: 'test' });
   assert.equal((await mgr.get('/materials')).data.find((m) => m.id === color).stock, 20);
 
+  // Thợ phụ trách + công thức khách: lượt có công thức → lưu vào hồ sơ; lọc "khách của tôi"; nhân viên không đổi được thợ phụ trách
+  r = await mgr.post('/visits', { customer_id: huong, date: d3, time: '16:00', main_staff_id: staff['Chị Thu'], payment_method: 'Tiền mặt', items: [{ service_id: dye.id }], formula: 'Milbon 7NB 30g + oxy 6% 1:1,5' });
+  assert.equal(r.status, 200);
+  let br = (await thu.get(`/customers/${huong}/brief`)).data;
+  assert.equal(br.formula, 'Milbon 7NB 30g + oxy 6% 1:1,5'); assert.equal(br.staff_id, staff['Chị Thu'], 'khách chưa có thợ → gán thợ làm lượt đầu');
+  assert.ok((await thu.get('/customers?staff_id=mine')).data.rows.some((c) => c.id === huong));
+  assert.ok((await thu.get('/customers?q=7NB')).data.rows.some((c) => c.id === huong), 'tìm khách theo công thức');
+  await thu.put('/customers/' + huong, { name: 'C Hương', phone: '0983059659', staff_id: staff['Trường'], formula: 'Milbon 7NB 40g' });
+  br = (await thu.get(`/customers/${huong}/brief`)).data;
+  assert.equal(br.staff_id, staff['Chị Thu'], 'nhân viên không đổi thợ phụ trách'); assert.equal(br.formula, 'Milbon 7NB 40g');
+  await mgr.put('/customers/' + huong, { name: 'C Hương', phone: '0983059659', staff_id: staff['Trường'] });
+  br = (await thu.get(`/customers/${huong}/brief`)).data;
+  assert.equal(br.staff_id, staff['Trường']); assert.equal(br.formula, 'Milbon 7NB 40g', 'không gửi công thức → giữ nguyên');
+
   // Tìm kiếm nhanh: theo tên, SĐT, mã thẻ
   r = await thu.get('/search?q=Hương');
   assert.ok(r.data.customers.some((c) => c.id === huong)); assert.ok(r.data.appointments.some((x) => x.id === apId));

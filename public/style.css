@@ -205,3 +205,5 @@ tfoot td { font-weight: 700; }
 }
 .list-item.click { cursor: pointer; }
 .list-item.click:hover { background: var(--surface-2); }
+.formula-box { background: var(--brand-soft); border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+.formula-cell { max-width: 220px; color: var(--muted); }
