@@ -429,3 +429,19 @@ test('lượt nhập từ Excel không có hình thức TT: chủ vẫn sửa đ
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(db.prepare('SELECT tip FROM visits WHERE id=?').get(v.id).tip, 77000);
 });
+
+test('sao lưu Excel về máy: nhắc mỗi tuần, nhân viên không tải được', async () => {
+  const vinh = client(); await vinh.post('/login', { username: 'vinh', password: 'moi-vinh' });
+  const thu = client(); await thu.post('/login', { username: 'thu', password: 'moi-thu' });
+  let r = await vinh.get('/reminders');
+  assert.equal(r.data.counts.backup, 1); assert.equal(r.data.backup.due, true);
+  assert.equal((await thu.get('/backup-pc/download')).status, 403);
+  assert.equal((await thu.get('/reminders')).data.counts.backup, undefined);
+  const res = await vinh.call('GET', '/backup-pc/download');
+  assert.equal(res.status, 200);
+  r = await vinh.get('/reminders');
+  assert.equal(r.data.counts.backup, 0); assert.equal(r.data.backup.days, 0);
+  // 8 ngày sau → nhắc lại
+  db.prepare("UPDATE settings SET value=datetime('now','localtime','-8 days') WHERE key='pc_backup_at'").run();
+  assert.equal((await vinh.get('/reminders')).data.counts.backup, 1);
+});

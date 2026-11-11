@@ -198,6 +198,24 @@ function svcSearch(id, onPick) {
   return { html: `<input id="${id}" list="${id}L" placeholder="🔍 Gõ tìm dịch vụ (vd: nhuộm, gội…)" autocomplete="off"><datalist id="${id}L">${S.services.filter((x) => x.active).map((x) => `<option value="${esc(x.name)}">${x.price ? kMoney(x.price) : ''}</option>`).join('')}</datalist>`,
     bind: () => { const el = $('#' + id); el.onchange = () => { const sv = findSvc(el.value); if (sv) { onPick(sv); el.value = ''; } }; } };
 }
+// Sao lưu Excel về máy cá nhân (quản lý trở lên, nhắc mỗi tuần)
+function backupBox(st) {
+  const when = st.last_at ? `Lần gần nhất: <b>${dmy(st.last_at.slice(0, 10))} ${esc(st.last_at.slice(11, 16))}</b> · ${esc(st.last_by || '')} (${st.days} ngày trước)` : '<b>Chưa sao lưu về máy lần nào</b>';
+  return `<h3>💾 Sao lưu về máy tính cá nhân ${st.due ? '<span class="badge bad">Đến hạn</span>' : '<span class="badge ok">Đã sao lưu tuần này</span>'}</h3>
+    <div class="small">${when}</div>
+    <div class="small muted" style="margin:6px 0 10px">1 file Excel gồm: khách hàng, lượt làm, lịch hẹn, thẻ + lịch sử thẻ, chi & quỹ, tồn kho, nhập xuất kho, dịch vụ, nhân viên. Mỗi tuần tải 1 lần, lưu vào máy tính hoặc Google Drive. Máy chủ hỏng vẫn còn dữ liệu.</div>
+    <button class="btn primary" data-bkpc>⬇️ Tải bản sao lưu Excel</button>`;
+}
+function bindBackupBox(root, after) {
+  $$('[data-bkpc]', root).forEach((b) => (b.onclick = () => guard(b, async () => {
+    const res = await api('/backup-pc/download', { raw: true });
+    if (!res.ok) throw new Error('Không tải được file sao lưu');
+    const blob = await res.blob();
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `SaoLuu-Salon-Nep-${S.today}.xlsx`; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast('Đã tải bản sao lưu về máy'); refreshReminderBadge(); after && after();
+  })));
+}
 async function refreshReminderBadge() {
   try {
     const r = await api('/reminders');
@@ -326,6 +344,13 @@ VIEWS.dashboard = async (main) => {
   $$('[data-goto2]', main).forEach((b) => (b.onclick = () => go(b.dataset.goto2)));
   $('#qVisit').onclick = () => visitForm({});
   bindApptList(main, () => VIEWS.dashboard(main));
+  // Nhắc quản lý tải bản sao lưu về máy mỗi tuần
+  if (isMgr()) api('/backup-pc').then((st) => {
+    if (!st.due || S.page !== 'dashboard') return;
+    const box = document.createElement('div'); box.className = 'card bk-due'; box.innerHTML = backupBox(st);
+    const h = main.querySelector('.top') || main.firstElementChild; h.after(box);
+    bindBackupBox(box, () => box.remove());
+  }).catch(() => {});
 };
 function apptList(rows, showDate) {
   if (!rows.length) return '<div class="empty">Không có lịch hẹn</div>';
@@ -1174,9 +1199,11 @@ VIEWS.reminders = async (main) => {
         <div class="small muted">Còn ${qtyFmt(m.stock)} ${esc(m.unit || '')}${m.min_qty != null ? ' · mức báo ' + qtyFmt(m.min_qty) : ''}${m.ordered_at ? ' · đã gọi ' + dmy(m.ordered_at.slice(0, 10)) + (m.ordered_by_name ? ' (' + esc(m.ordered_by_name) + ')' : '') : ''}</div></div>
         ${m.ordered_at ? '<span class="badge ok">Đã gọi</span>' : `<button class="btn sm" data-ord="${m.id}">📞 Đã gọi hàng</button>`}</div>`).join('') : '<div class="empty">Không có</div>'}
       <div style="margin-top:6px"><a href="#stock?tab=levels&st=need">Xem tồn kho →</a></div></div>` : ''}
+    ${r.backup && r.backup.due ? `<div class="card">${backupBox(r.backup)}</div>` : ''}
     ${r.expenses && r.expenses.pending_count ? `<div class="card"><h3>💸 Khoản chi chờ duyệt <span class="badge bad">${r.expenses.pending_count}</span></h3><div class="small muted">Tổng ${money(r.expenses.pending_amount)} · quỹ còn ${money(r.expenses.balance)}</div><div style="margin-top:8px"><a class="btn sm primary" href="#expenses">Mở để duyệt →</a></div></div>` : ''}
     ${sec('returns', '🔁 Khách đến hạn quay lại', 'Đã quá số ngày cài đặt kể từ lần làm gần nhất và chưa có lịch hẹn.', r.returns, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b>${who(c)} <span class="small muted">lần cuối ${dmy(c.last_date)} · ${c.days} ngày · ${c.n} lượt</span>`)}
     </div>`;
+  bindBackupBox(main, () => VIEWS.reminders(main));
   $$('[data-ord]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/stock/${b.dataset.ord}/ordered`, { method: 'POST', body: {} }); refreshReminderBadge(); VIEWS.reminders(main); })));
   $('#rsf').onchange = (e) => go('reminders', { staff: e.target.value });
   $$('[data-done]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api('/reminders/done', { method: 'POST', body: JSON.parse(b.dataset.done) }); refreshReminderBadge(); VIEWS.reminders(main); })));
@@ -1696,7 +1723,7 @@ VIEWS.excel = async (main) => {
 // ---------- Cài đặt ----------
 VIEWS.settings = async (main) => {
   const tabs = [['me', 'Tài khoản của tôi', true], ['services', 'Dịch vụ & giá', isMgr()], ['cardtypes', 'Gói thẻ', isMgr()], ['users', 'Nhân viên & mật khẩu', isOwner()],
-    ['params', 'Tham số', isOwner()], ['audit', 'Lịch sử chỉnh sửa', isOwner()], ['backup', 'Sao lưu', isOwner()]].filter((t) => t[2]);
+    ['params', 'Tham số', isOwner()], ['audit', 'Lịch sử chỉnh sửa', isOwner()], ['backup', 'Sao lưu', isMgr()]].filter((t) => t[2]);
   const tab = S.params.tab || tabs[0][0];
   main.innerHTML = header('Cài đặt') + `<div class="card"><div class="tabs">${tabs.map(([k, l]) => `<button data-st="${k}" class="${k === tab ? 'active' : ''}">${l}</button>`).join('')}</div><div id="sb"></div></div>`;
   $$('[data-st]').forEach((b) => (b.onclick = () => go('settings', { tab: b.dataset.st })));
@@ -1785,7 +1812,7 @@ VIEWS.settings = async (main) => {
     const from = P.from || addDays(S.today, -30), to = P.to || S.today, uid = P.u || '', only = P.only ?? 'edit';
     const rows = await api(`/audit?limit=1000&from=${from}&to=${to}${uid ? '&user_id=' + uid : ''}${only ? '&only=edit' : ''}`);
     const A = { login: 'Đăng nhập', create_visit: 'Ghi lượt', update_visit: 'SỬA lượt', delete_visit: 'XÓA lượt', create_customer: 'Thêm khách', update_customer: 'Sửa khách', delete_customer: 'XÓA khách',
-      sell_card: 'Bán thẻ', update_card: 'Sửa thẻ', adjust_card: 'Điều chỉnh số dư thẻ', import_excel: 'Nhập Excel', export_excel: 'Xuất Excel', upload_photo: 'Tải ảnh', delete_photo: 'Xóa ảnh',
+      sell_card: 'Bán thẻ', update_card: 'Sửa thẻ', adjust_card: 'Điều chỉnh số dư thẻ', import_excel: 'Nhập Excel', export_excel: 'Xuất Excel', backup_pc: 'Tải sao lưu về máy', upload_photo: 'Tải ảnh', delete_photo: 'Xóa ảnh',
       create_appointment: 'Đặt lịch', update_appointment: 'Sửa lịch hẹn', appointment_status: 'Đổi trạng thái lịch', change_password: 'Đổi mật khẩu', reset_password: 'Đặt lại MK',
       create_user: 'Tạo tài khoản', update_user: 'Sửa tài khoản', update_settings: 'Sửa tham số', create_service: 'Thêm dịch vụ', update_service: 'Sửa dịch vụ', backup: 'Sao lưu', download_backup: 'Tải bản sao lưu',
       create_off: 'Xin/ghi nghỉ', decide_off: 'Duyệt nghỉ', delete_off: 'Xóa đơn nghỉ', manual_attendance: 'Chấm công tay', delete_attendance: 'Xóa chấm công',
@@ -1825,11 +1852,13 @@ VIEWS.settings = async (main) => {
     ['#au', '#af', '#at', '#ao'].forEach((k) => ($(k).onchange = setA));
   }
   if (tab === 'backup') {
-    const files = await api('/backups');
-    sb.innerHTML = `<div class="small muted">Hệ thống tự sao lưu dữ liệu mỗi 6 giờ, giữ 30 bản gần nhất. Nên tải 1 bản về máy/Google Drive mỗi tuần. Ảnh khách lưu ở thư mục <code>data/photos</code> trên máy chủ.</div>
+    const st = await api('/backup-pc');
+    const files = isOwner() ? await api('/backups') : [];
+    sb.innerHTML = `<div class="card" style="margin:0 0 14px">${backupBox(st)}</div>` + (!isOwner() ? '' : `<h3>Bản sao lưu trên máy chủ (chỉ Lãnh đạo)</h3><div class="small muted">Hệ thống tự sao lưu dữ liệu mỗi 6 giờ, giữ 30 bản gần nhất. Nên tải 1 bản về máy/Google Drive mỗi tuần. Ảnh khách lưu ở thư mục <code>data/photos</code> trên máy chủ.</div>
       <div class="row" style="margin:12px 0"><button class="btn primary" id="bk">Sao lưu ngay</button></div>
-      <table><tbody>${files.map((f) => `<tr><td>${esc(f.file)}</td><td class="num">${(f.size / 1024).toFixed(0)} KB</td><td><a class="btn sm" href="/api/backups/${encodeURIComponent(f.file)}">Tải về</a></td></tr>`).join('') || '<tr><td class="empty">Chưa có</td></tr>'}</tbody></table>`;
-    $('#bk').onclick = (e) => guard(e.target, async () => { await api('/backups', { method: 'POST' }); toast('Đã sao lưu'); reload(); });
+      <table><tbody>${files.map((f) => `<tr><td>${esc(f.file)}</td><td class="num">${(f.size / 1024).toFixed(0)} KB</td><td><a class="btn sm" href="/api/backups/${encodeURIComponent(f.file)}">Tải về</a></td></tr>`).join('') || '<tr><td class="empty">Chưa có</td></tr>'}</tbody></table>`);
+    bindBackupBox(sb, reload);
+    if ($('#bk')) $('#bk').onclick = (e) => guard(e.target, async () => { await api('/backups', { method: 'POST' }); toast('Đã sao lưu'); reload(); });
   }
 };
 

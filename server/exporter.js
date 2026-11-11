@@ -14,7 +14,7 @@ function sheet(wb, name, columns, rows) {
 }
 const M = '#,##0';
 
-async function exportWorkbook({ from, to }) {
+async function exportWorkbook({ from, to, full }) {
   const wb = new ExcelJS.Workbook();
   wb.creator = 'CRM Salon Nếp';
   wb.created = new Date();
@@ -65,6 +65,37 @@ async function exportWorkbook({ from, to }) {
 
   sheet(wb, 'Dịch vụ', [['Dịch vụ', 'name', 28], ['Giá niêm yết', 'price', 13, M], ['Nhóm doanh số', 'grp', 16], ['% hoa hồng', 'rate', 11], ['Đang dùng', 'active_vi', 10]],
     db.prepare('SELECT * FROM services ORDER BY grp, name').all().map((s) => ({ ...s, rate: s.commission_rate, active_vi: s.active ? 'Có' : 'Không' })));
+
+  // Bản sao lưu đầy đủ (về máy cá nhân hàng tuần): thêm lịch sử thẻ, chi & quỹ, tồn kho, nhập/xuất kho, nhân viên
+  if (full) {
+    const has = (t) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t);
+    sheet(wb, 'Lịch sử thẻ', [['Mã thẻ', 'card_code', 9], ['Khách', 'customer_name', 24], ['Ngày', 'created_at', 17], ['Số tiền (+nạp / −trừ)', 'amount', 14, M],
+      ['Lượt làm', 'visit_code', 10], ['Ghi chú', 'note', 36], ['Người ghi', 'by_name', 14]],
+      db.prepare(`SELECT t.*, cd.code card_code, c.name customer_name, v.code visit_code, u.full_name by_name FROM card_txns t JOIN cards cd ON cd.id=t.card_id
+        JOIN customers c ON c.id=cd.customer_id LEFT JOIN visits v ON v.id=t.visit_id LEFT JOIN users u ON u.id=t.created_by ORDER BY t.id`).all());
+    if (has('expenses')) {
+      const ST = { pending: 'Chờ duyệt', approved: 'Đã duyệt', rejected: 'Không duyệt' };
+      sheet(wb, 'Chi & quỹ', [['Ngày', 'date', 11], ['Loại', 'kind_vi', 9], ['Số tiền', 'amount', 12, M], ['Nhóm', 'category', 22], ['Nội dung', 'note', 34],
+        ['Trạng thái', 'status_vi', 12], ['Lý do', 'reason', 24], ['Người ghi', 'by_name', 14], ['Người duyệt', 'decided_name', 14], ['Đã hoàn quỹ', 'refunded_vi', 10]],
+        db.prepare(`SELECT e.*, u.full_name by_name, d.full_name decided_name FROM expenses e LEFT JOIN users u ON u.id=e.created_by LEFT JOIN users d ON d.id=e.decided_by ORDER BY e.date, e.id`).all()
+          .map((e) => ({ ...e, kind_vi: e.kind === 'in' ? 'Nạp quỹ' : 'Chi', status_vi: e.kind === 'in' ? '' : ST[e.status], refunded_vi: e.refunded ? 'Có' : '' })));
+    }
+    if (has('materials')) {
+      sheet(wb, 'Tồn kho', [['Mã', 'code', 10], ['Tên', 'name', 34], ['Loại', 'kind_vi', 10], ['Nhóm', 'grp', 14], ['Đơn vị', 'unit', 8], ['Tồn', 'stock', 9], ['Mức báo', 'min_qty', 9],
+        ['Giá vốn BQ', 'avg_cost', 12, M], ['Giá trị tồn', 'stock_value', 13, M], ['Giá bán', 'sell_price', 12, M]],
+        db.prepare(`SELECT m.*, (SELECT COALESCE(SUM(qty),0) FROM stock_moves s WHERE s.material_id=m.id) stock,
+            (SELECT CASE WHEN SUM(qty)>0 THEN SUM(qty*unit_cost)/SUM(qty) ELSE 0 END FROM stock_moves s WHERE s.material_id=m.id AND s.kind='in') avg_cost
+          FROM materials m WHERE m.active=1 ORDER BY m.kind, m.grp, m.name`).all()
+          .map((m) => ({ ...m, kind_vi: m.kind === 'retail' ? 'Bán lẻ' : 'Hóa chất', stock: Math.round(m.stock * 100) / 100, avg_cost: Math.round(m.avg_cost), stock_value: Math.round(Math.max(0, m.stock) * m.avg_cost) })));
+      const MK = { in: 'Nhập', use: 'Dùng', sale: 'Bán', adjust: 'Điều chỉnh' };
+      sheet(wb, 'Nhập xuất kho', [['Ngày', 'date', 11], ['Hàng', 'name', 34], ['Loại', 'kind_vi', 11], ['SL', 'qty', 8], ['Đơn giá vốn', 'unit_cost', 12, M], ['NCC', 'supplier', 16], ['Lượt làm', 'visit_code', 10], ['Ghi chú', 'note', 30], ['Người ghi', 'by_name', 14]],
+        db.prepare(`SELECT s.*, m.name, v.code visit_code, u.full_name by_name FROM stock_moves s JOIN materials m ON m.id=s.material_id LEFT JOIN visits v ON v.id=s.visit_id
+          LEFT JOIN users u ON u.id=s.created_by ORDER BY s.date, s.id`).all().map((s) => ({ ...s, kind_vi: MK[s.kind] || s.kind, unit_cost: Math.round(s.unit_cost) })));
+    }
+    const RL = { owner: 'Lãnh đạo', manager: 'Quản lý', staff: 'Nhân viên' };
+    sheet(wb, 'Nhân viên', [['Tên', 'full_name', 18], ['Tài khoản', 'username', 14], ['Quyền', 'role_vi', 11], ['Đang làm', 'active_vi', 9], ['Tính hoa hồng', 'cm_vi', 12]],
+      db.prepare('SELECT * FROM users ORDER BY id').all().map((u) => ({ ...u, role_vi: RL[u.role] || u.role, active_vi: u.active ? 'Có' : 'Không', cm_vi: u.commission_enabled ? 'Có' : 'Không' })));
+  }
 
   return wb.xlsx.writeBuffer();
 }

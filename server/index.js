@@ -598,6 +598,7 @@ app.get('/api/reminders', (req, res) => {
   const r = L.reminders();
   if (stockMod.perm(req.user).stock_view) { r.stock = stockMod.stockAlerts(); r.counts.stock = r.stock.filter((m) => !m.ordered_at).length; }
   if (req.user.role !== 'staff') { const f = require('./expenses').fundState(); r.counts.expenses = f.pending_count; r.expenses = f; }
+  if (req.user.role !== 'staff') { r.backup = pcBackupState(); r.counts.backup = r.backup.due ? 1 : 0; }
   res.json(r);
 });
 // Khách phụ trách theo thợ: nhân viên chỉ xem dòng của mình, không có số tiền
@@ -663,6 +664,26 @@ app.post('/api/import', MGR, xlsxUpload.single('file'), async (req, res) => {
   const result = await importWorkbook(req.file.buffer, opts, req.user);
   if (!opts.dryRun) audit(req.user.id, 'import_excel', null, null, { file: req.file.originalname, ...result.summary });
   res.json(result);
+});
+// Sao lưu về máy cá nhân hàng tuần: 1 file Excel đầy đủ, ghi lại ai tải lúc nào để nhắc tuần sau
+const BACKUP_EVERY_DAYS = 7;
+function pcBackupState() {
+  const s = getSettings();
+  const last = s.pc_backup_at || null;
+  const days = last ? Math.floor((Date.now() - new Date(last.replace(' ', 'T')).getTime()) / 86400000) : null;
+  return { last_at: last, last_by: s.pc_backup_by || null, days, due: !last || days >= BACKUP_EVERY_DAYS, every: BACKUP_EVERY_DAYS };
+}
+app.get('/api/backup-pc', MGR, (req, res) => res.json(pcBackupState()));
+app.get('/api/backup-pc/download', MGR, async (req, res) => {
+  const t = today();
+  const buf = await exportWorkbook({ from: '2000-01-01', to: t, full: true });
+  const now = db.prepare("SELECT datetime('now','localtime') t").get().t;
+  const up = db.prepare('INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
+  up.run('pc_backup_at', now); up.run('pc_backup_by', req.user.full_name);
+  audit(req.user.id, 'backup_pc', null, null, { file: `SaoLuu-Salon-Nep-${t}.xlsx` });
+  res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.set('Content-Disposition', `attachment; filename="SaoLuu-Salon-Nep-${t}.xlsx"`);
+  res.send(Buffer.from(buf));
 });
 app.get('/api/export', MGR, async (req, res) => {
   const t = today();
