@@ -356,7 +356,7 @@ function apptList(rows, showDate) {
   if (!rows.length) return '<div class="empty">Không có lịch hẹn</div>';
   return rows.map((a) => `<div class="list-item"><div class="time-pill">${esc(a.time)}${showDate ? `<div class="small muted">${dmy(a.date).slice(0, 5)}</div>` : ''}</div>
     <div style="flex:1;min-width:0"><div class="t">${a.customer_id ? `<a href="#customer?id=${a.customer_id}">${esc(a.name)}</a>` : esc(a.name) + ' <span class="badge">khách mới</span>'}</div>
-      <div class="small muted">${a.visit_services ? esc(a.visit_services) : svcWithPrice(a.service)}${a.staff_name ? ' · ' + esc(a.staff_name) : ''} · ${telLinks(a.phone)}</div>
+      <div class="small muted">${a.visit_services ? esc(a.visit_services) : svcWithPrice(a.service)}${a.staff_name ? ' · ' + esc(a.staff_name) : ''}${a.assistant_id ? ' + phụ ' + esc(staffName(a.assistant_id)) : ''} · ${telLinks(a.phone)}</div>
       ${a.visit_id && a.visit_total != null ? `<div class="small"><b style="color:var(--ok)">✓ Đã thu ${money(a.visit_total)}</b> · <a href="#" data-rcpt="${a.visit_id}">Hóa đơn</a></div>`
         : a.service && estTotal(a.service) && !['cancelled', 'noshow'].includes(a.status) ? `<div class="small">Dự kiến: <b>${money(estTotal(a.service))}</b></div>` : ''}
       ${a.note ? `<div class="small">${esc(a.note)}</div>` : ''}
@@ -375,7 +375,7 @@ async function checkout(a, after) {
     c = await api(`/appointments/${a.id}/customer`, { method: 'POST' });
     toast(c.created ? `Đã tạo hồ sơ khách ${c.code} – ${c.name}` : `Nhận khách cũ ${c.code} – ${c.name} (trùng SĐT)`);
   }
-  visitForm({ customer_id: c.id, customer: c, main_staff_id: a.staff_id, appointment_id: a.id, service: a.service, date: a.date, time: a.time }, after);
+  visitForm({ customer_id: c.id, customer: c, main_staff_id: a.staff_id, assistant_id: a.assistant_id || null, appointment_id: a.id, service: a.service, date: a.date, time: a.time }, after);
 }
 function bindApptList(root, reload, rows) {
   $$('[data-ast]', root).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/appointments/${b.dataset.id}/status`, { method: 'POST', body: { status: b.dataset.ast } }); reload(); })));
@@ -1780,6 +1780,7 @@ VIEWS.excel = async (main) => {
         ${s.appointments_cancelled ? `<div class="stat-line"><span>🟥 Ô đỏ → khách hủy / thợ nghỉ</span><b>${s.appointments_cancelled}</b></div>` : ''}
         ${Object.entries(s.pay_colors || {}).map(([k, n]) => `<div class="stat-line"><span>${k === 'Tiền mặt' ? '🟩' : k === 'Chuyển khoản' ? '🟨' : '🩷'} ${esc(k)}</span><b>${n}</b></div>`).join('')}
         ${s.visits_paid_set ? `<div class="stat-line"><span>Lượt làm được ghi hình thức thanh toán</span><b>${s.visits_paid_set}</b></div>` : ''}
+        ${s.visits_assistant_set ? `<div class="stat-line"><span>Lượt làm được ghi người phụ (tên trong ngoặc)</span><b>${s.visits_assistant_set}</b></div>` : ''}
         ${s.cards_created || s.cards_skipped_existing ? `<div class="stat-line"><span>Thẻ voucher mới / đã có</span><b>${s.cards_created} / ${s.cards_skipped_existing}</b></div>` : ''}
         ${s.visits_updated ? `<div class="stat-line"><span>Lượt cũ được bổ sung công thức hóa chất</span><b>${s.visits_updated}</b></div>` : ''}
         <div class="stat-line"><span>Dịch vụ mới</span><b>${s.services_added}</b></div>
