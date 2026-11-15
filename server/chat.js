@@ -159,7 +159,7 @@ function parseBooking(text, ctx) {
     if (!mw || found.some((x) => fold(x.name).includes(fw))) continue;
     const pick = ctx.services.filter((x) => x.active && new RegExp(`\\b${fw}\\b`).test(fold(x.name)))
       .map((x) => { const n = fold(x.name); return { x, score: ((ctx.usage || {})[x.name] || 0) + 10 * ((ctx.staffUsage || {})[`${out.staff_id}|${x.name}`] || 0)
-        + (male && !female ? (/\bnam\b/.test(n) ? 1000 : /\bnu\b/.test(n) ? -1000 : 0) : 0) + (female && !male ? (/\bnu\b/.test(n) ? 1000 : /\bnam\b/.test(n) ? -1000 : 0) : 0) + (myLvl && n.includes(myLvl) ? 500 : 0) + (n.startsWith(fw) ? 2 : 0) + (fw === 'tay' && n.includes('nang sang') ? 100 : 0) - n.length / 100 }; })
+        + (male && !female ? (/\bnam\b/.test(n) ? 1000 : /\bnu\b/.test(n) ? -1000 : 0) : 0) + (female && !male ? (/\bnu\b/.test(n) ? 1000 : /\bnam\b/.test(n) ? -1000 : 0) : 0) + (myLvl && n.includes(myLvl) ? 500 : 0) + (n.startsWith(fw) ? 2 : 0) + (fw === 'tay' && n.includes('nang sang') ? 100 : 0) + (n.includes(' – m (') ? 1 : 0) - n.length / 100 }; })
       .sort((a, b) => b.score - a.score)[0];
     found.push({ name: pick ? pick.x.name : w.charAt(0).toUpperCase() + w.slice(1), at: mw.index });
   }

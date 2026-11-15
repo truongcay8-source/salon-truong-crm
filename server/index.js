@@ -665,6 +665,7 @@ app.get('/api/dashboard', (req, res) => {
 staffMod.mount(app, { MGR, OWNER });
 require('./tips').mount(app, { MGR, OWNER });
 require('./chat').mount(app, { MGR, OWNER });
+require('./pricelist').apply(); // bảng giá 15/11/2026 (chạy 1 lần)
 const expMod = require('./expenses');
 expMod.mount(app, { MGR, upload, sniffImage, PHOTO_DIR });
 stockMod.mount(app, { MGR, OWNER });

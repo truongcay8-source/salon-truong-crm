@@ -1030,7 +1030,7 @@ async function visitForm(v = {}, after) {
     <div><label>Phụ thu</label><input type="number" name="surcharge" min="0" step="1000" value="${v.surcharge || ''}"></div>
     <div><label>Giảm giá</label><input type="number" name="discount" min="0" step="1000" value="${v.discount || ''}"></div>
     <div class="full"><label>Lý do giảm (bắt buộc nếu có giảm)</label><input name="discount_reason" list="reasons" value="${esc(v.discount_reason || '')}">
-      <datalist id="reasons"><option value="Khách quen"><option value="Khách giới thiệu"><option value="Khuyến mãi"><option value="Bù lỗi dịch vụ"><option value="Người nhà / nhân viên"></datalist></div>
+      <datalist id="reasons"><option value="Khách quen"><option value="Khách giới thiệu"><option value="Khuyến mãi"><option value="Bù lỗi dịch vụ"><option value="Người nhà / nhân viên"><option value="Trẻ em dưới 13 tuổi (giảm 50%)"></datalist></div>
     <div id="cardBox" class="full"></div>
     <div><label>Hình thức thanh toán</label><select name="payment_method"><option value="">—</option>${methods.map((m) => `<option ${v.payment_method === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></div>
     <div><label>Tip chung (chia cả nhóm)</label><input type="number" name="tip" min="0" step="1000" value="${v.tip || ''}"></div>
@@ -1077,11 +1077,13 @@ async function visitForm(v = {}, after) {
       <div class="row"><span>Doanh số lượt này</span><span class="num big">${money(total)}</span></div>
       ${cardSel ? `<div class="row"><span>Trừ thẻ</span><span class="num">−${money(cardPaid)}</span></div>` : ''}
       <div class="row"><span><b>Khách trả thêm</b></span><span class="num big">${money(Math.max(0, total - cardPaid))}</span></div>
+      ${f.time.value >= '19:00' && sub && !Number(f.surcharge.value) ? `<div class="row small" style="color:var(--warn)"><span>Lịch sau 19:00: phụ thu 10% theo bảng giá</span><button type="button" class="btn sm" id="eveSur">+ ${money(Math.round(sub * 0.1 / 1000) * 1000)}</button></div>` : ''}
       ${isMgr() && (used.length || items.some((i) => i.material_id)) ? (() => {
         const cost = Math.round(used.reduce((t, u) => { const m = matById(u.material_id); return t + (m ? toUnits(m, u.amt || 0) * (m.avg_cost || 0) : 0); }, 0)
           + items.reduce((t, i) => { const m = i.material_id && matById(i.material_id); return t + (m ? (i.qty || 1) * (m.avg_cost || 0) : 0); }, 0));
         return `<div class="row small muted"><span>Giá cốt (hóa chất + giá vốn SP) · chỉ quản lý thấy</span><span class="num">${money(cost)} · lãi gộp ${money(total - cost)}${total ? ' (' + Math.round((total - cost) / total * 100) + '%)' : ''}</span></div>`;
       })() : ''}`;
+    const es = $('#eveSur'); if (es) es.onclick = () => { f.surcharge.value = Math.round(sub * 0.1 / 1000) * 1000; calc(); };
   };
   const renderUsed = () => {
     const box = $('#used'); if (!box) return;
@@ -1196,7 +1198,7 @@ async function visitForm(v = {}, after) {
   }
   const vss = svcSearch('vSvcQ', (sv) => { const empty = items.findIndex((i) => !i.service_id && !i.name); const it = { service_id: sv.id, price: sv.price }; if (empty >= 0) items[empty] = it; else items.push(it); renderItems(); });
   $('#vSvcS').innerHTML = vss.html; vss.bind();
-  for (const n of ['surcharge', 'discount']) f[n].oninput = calc;
+  for (const n of ['surcharge', 'discount', 'time']) f[n].addEventListener('input', calc);
   renderItems();
   if (!isEdit && !used.length) autoRecipe(); else renderUsed();
   loadCards(custSel && custSel.id);
@@ -1928,7 +1930,7 @@ VIEWS.settings = async (main) => {
       create_user: 'Tạo tài khoản', update_user: 'Sửa tài khoản', update_settings: 'Sửa tham số', create_service: 'Thêm dịch vụ', update_service: 'Sửa dịch vụ', backup: 'Sao lưu', download_backup: 'Tải bản sao lưu',
       create_off: 'Xin/ghi nghỉ', decide_off: 'Duyệt nghỉ', delete_off: 'Xóa đơn nghỉ', manual_attendance: 'Chấm công tay', delete_attendance: 'Xóa chấm công',
       stock_in: 'Nhập kho', stock_adjust: 'Điều chỉnh kho', stock_count: 'Kiểm kho', stock_ordered: 'Báo đã gọi hàng', stock_unordered: 'Bỏ báo gọi hàng', stock_perm: 'Phân quyền kho',
-      transfer_customers: 'Bàn giao khách', update_visit_notes: 'Sửa ghi chú lượt', tip_paid: 'Ghi trả tip', expense_create: 'Ghi khoản chi', petty_in: 'Nạp quỹ', expense_approved: 'Duyệt chi', expense_rejected: 'KHÔNG duyệt chi', expense_pending: 'Đưa chi về chờ duyệt', expense_delete: 'XÓA khoản chi', expense_refunded: 'Hoàn quỹ', petty_target: 'Đổi mức quỹ', chat_to_appointment: 'Tạo lịch từ chat', chat_auto: 'Bật/tắt tự tạo lịch', appointment_pay: 'Ghi đã thu (khách nợ)', set_ai_key: 'Đổi khóa AI', chat_summary: 'AI tóm tắt chat', delete_chat: 'Xóa tin chat', set_tip_pool: 'Sửa nhóm chia tip', create_card_type: 'Thêm gói thẻ', update_card_type: 'Sửa gói thẻ' };
+      transfer_customers: 'Bàn giao khách', update_visit_notes: 'Sửa ghi chú lượt', tip_paid: 'Ghi trả tip', expense_create: 'Ghi khoản chi', petty_in: 'Nạp quỹ', expense_approved: 'Duyệt chi', expense_rejected: 'KHÔNG duyệt chi', expense_pending: 'Đưa chi về chờ duyệt', expense_delete: 'XÓA khoản chi', expense_refunded: 'Hoàn quỹ', petty_target: 'Đổi mức quỹ', chat_to_appointment: 'Tạo lịch từ chat', chat_auto: 'Bật/tắt tự tạo lịch', price_list: 'Áp bảng giá mới', appointment_pay: 'Ghi đã thu (khách nợ)', set_ai_key: 'Đổi khóa AI', chat_summary: 'AI tóm tắt chat', delete_chat: 'Xóa tin chat', set_tip_pool: 'Sửa nhóm chia tip', create_card_type: 'Thêm gói thẻ', update_card_type: 'Sửa gói thẻ' };
     const hot = ['update_visit', 'delete_visit', 'adjust_card', 'delete_customer', 'export_excel', 'update_card', 'stock_adjust', 'delete_attendance', 'expense_delete', 'expense_rejected'];
     const LB = { date: 'Ngày', time: 'Giờ', customer_id: 'Khách', main_staff_id: 'Thợ chính', assistant_id: 'Người phụ', staff_id: 'Thợ', surcharge: 'Phụ thu', discount: 'Giảm giá', discount_reason: 'Lý do giảm',
       total: 'Tổng tiền', card_paid: 'Trừ thẻ', cash_paid: 'Tiền thu', payment_method: 'Hình thức TT', tip: 'Tip', formula: 'Công thức', result: 'Kết quả', note: 'Ghi chú', services: 'Dịch vụ', name: 'Tên', phone: 'SĐT',
