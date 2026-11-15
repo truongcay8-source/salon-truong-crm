@@ -19,6 +19,19 @@ function cellVal(v) {
   }
   return v;
 }
+// Màu nền ô (quy ước của tiệm): đỏ = khách hủy / thợ nghỉ; xanh lá = tiền mặt; vàng = chuyển khoản; hồng = chưa thanh toán
+function cellColor(cell) {
+  const f = cell.fill && cell.fill.type === 'pattern' && cell.fill.fgColor;
+  const argb = f && f.argb ? f.argb.slice(-6).toUpperCase() : null;
+  if (!argb) return null;
+  const n = parseInt(argb, 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+  if (r > 200 && g < 80 && b < 80) return 'red';
+  if (g > 200 && r < 120 && b < 120) return 'green';
+  if (r > 200 && g > 200 && b < 120) return 'yellow';
+  if (r > 200 && b > 150 && g < 190) return 'pink';
+  return null;
+}
+const PAY_COLOR = { green: 'Tiền mặt', yellow: 'Chuyển khoản', pink: 'Chưa thanh toán' };
 function asText(v) {
   v = cellVal(v);
   if (v == null) return null;
@@ -228,7 +241,7 @@ async function importWorkbook(buffer, opts, user) {
   const summary = {
     format: null, customers_created: 0, customers_merged: 0, matched_by_name: [], services_added: 0,
     visits_created: 0, visits_skipped_existing: 0, visits_skipped_duplicate: 0, visits_skipped_invalid: 0,
-    appointments_created: 0, appointments_linked: 0, appointments_skipped: 0, appointments_past_skipped: 0, cards_skipped_existing: 0, cards_created: 0, staff_created: [], warnings: [],
+    appointments_created: 0, appointments_linked: 0, appointments_skipped: 0, appointments_cancelled: 0, pay_colors: {}, visits_paid_set: 0, appointments_past_skipped: 0, cards_skipped_existing: 0, cards_created: 0, staff_created: [], warnings: [],
   };
   const importer = { ...user, role: 'owner' }; // bỏ giới hạn ngày của nhân viên khi nhập lịch sử
 
@@ -379,14 +392,35 @@ async function importWorkbook(buffer, opts, user) {
           const phone = extractPhone(e.text);
           const name = guessName(e.text);
           const hit = cust.find('APP', null, phone, name);
-          const status = b.date < t ? 'done' : 'booked';
-          const dup = db.prepare(`SELECT 1 FROM appointments WHERE date=? AND time=? AND IFNULL(staff_id,0)=IFNULL(?,0) AND (note=? OR service=?)`)
+          const cancelled = e.color === 'red';
+          const pay = cancelled ? null : PAY_COLOR[e.color] || null;
+          const status = cancelled ? 'cancelled' : b.date < t ? 'done' : 'booked';
+          const reason = cancelled ? 'Ô đỏ trong sổ Excel: khách hủy / thợ nghỉ' : null;
+          if (cancelled) summary.appointments_cancelled++;
+          if (pay) summary.pay_colors[pay] = (summary.pay_colors[pay] || 0) + 1;
+          const dup = db.prepare(`SELECT id, status, pay_note FROM appointments WHERE date=? AND time=? AND IFNULL(staff_id,0)=IFNULL(?,0) AND (note=? OR service=?)`)
             .get(b.date, e.time, e.staffId, e.text, e.text);
-          if (dup) { summary.appointments_skipped++; continue; }
-          db.prepare('INSERT INTO appointments(customer_id,guest_name,guest_phone,staff_id,date,time,service,status,note,created_by) VALUES (?,?,?,?,?,?,?,?,?,?)')
-            .run(hit ? hit.id : null, hit ? null : name, hit ? null : phone, e.staffId, b.date, e.time, null, status, e.text, user.id);
-          summary.appointments_created++;
-          if (hit) summary.appointments_linked++;
+          let apptId;
+          if (dup) {
+            // Nhập lại file: cập nhật theo màu ô (hủy / hình thức thanh toán), không tạo trùng
+            apptId = dup.id;
+            if (cancelled && dup.status !== 'cancelled') db.prepare("UPDATE appointments SET status='cancelled', cancel_reason=COALESCE(cancel_reason,?) WHERE id=?").run(reason, dup.id);
+            if (pay !== dup.pay_note && (pay || dup.pay_note)) db.prepare('UPDATE appointments SET pay_note=? WHERE id=?').run(pay, dup.id);
+            summary.appointments_skipped++;
+          } else {
+            apptId = db.prepare('INSERT INTO appointments(customer_id,guest_name,guest_phone,staff_id,date,time,service,status,note,created_by,cancel_reason,pay_note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+              .run(hit ? hit.id : null, hit ? null : name, hit ? null : phone, e.staffId, b.date, e.time, null, status, e.text, user.id, reason, pay).lastInsertRowid;
+            summary.appointments_created++;
+            if (hit) summary.appointments_linked++;
+          }
+          // Ghi hình thức thanh toán vào lượt làm đã nhập (chỉ khi khớp đúng 1 lượt chưa có hình thức)
+          if (pay && pay !== 'Chưa thanh toán' && b.date < t) {
+            const cands = db.prepare(`SELECT id FROM visits WHERE date=? AND status='done' AND cash_paid>0 AND payment_method IS NULL AND import_ref IS NOT NULL
+                AND (? IS NULL OR main_staff_id=?) AND (? IS NULL OR customer_id=?) AND (time IS NULL OR time=?)`)
+              .all(b.date, e.staffId, e.staffId, hit ? hit.id : null, hit ? hit.id : null, e.time);
+            if (cands.length === 1) { db.prepare('UPDATE visits SET payment_method=? WHERE id=?').run(pay, cands[0].id); summary.visits_paid_set++; }
+          }
+          void apptId;
         }
       }
       function findDayBlocks(ws) {
@@ -417,7 +451,7 @@ async function importWorkbook(buffer, opts, user) {
             if (!time) continue;
             for (const x of cols) {
               const text = asText(rr.getCell(x.c).value);
-              if (text && text.replace(/\s/g, '').length > 1) entries.push({ time, staffId: x.staffId, text: text.replace(/\s+/g, ' ').trim() });
+              if (text && text.replace(/\s/g, '').length > 1) entries.push({ time, staffId: x.staffId, text: text.replace(/\s+/g, ' ').trim(), color: cellColor(rr.getCell(x.c)) });
             }
           }
           out.push({ date, entries });

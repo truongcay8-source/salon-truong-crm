@@ -360,6 +360,7 @@ function apptList(rows, showDate) {
       ${a.visit_id && a.visit_total != null ? `<div class="small"><b style="color:var(--ok)">✓ Đã thu ${money(a.visit_total)}</b> · <a href="#" data-rcpt="${a.visit_id}">Hóa đơn</a></div>`
         : a.service && estTotal(a.service) && !['cancelled', 'noshow'].includes(a.status) ? `<div class="small">Dự kiến: <b>${money(estTotal(a.service))}</b></div>` : ''}
       ${a.note ? `<div class="small">${esc(a.note)}</div>` : ''}
+      ${a.pay_note && a.status !== 'cancelled' ? `<div class="small"><span class="badge ${a.pay_note === 'Chưa thanh toán' ? 'bad' : 'ok'}">${a.pay_note === 'Chưa thanh toán' ? '⚠ Chưa thanh toán' : '💵 ' + esc(a.pay_note)}</span></div>` : ''}
       ${a.cancel_reason && ['cancelled', 'noshow'].includes(a.status) ? `<div class="small" style="color:var(--bad)">Lý do: ${esc(a.cancel_reason)}</div>` : ''}</div>
     <div style="text-align:right"><span class="badge ${APPT[a.status][1]}">${APPT[a.status][0]}</span>
       <div class="row" style="justify-content:flex-end;margin-top:6px">
@@ -1270,6 +1271,10 @@ VIEWS.reminders = async (main) => {
         <div class="small muted">Còn ${qtyFmt(m.stock)} ${esc(m.unit || '')}${m.min_qty != null ? ' · mức báo ' + qtyFmt(m.min_qty) : ''}${m.ordered_at ? ' · đã gọi ' + dmy(m.ordered_at.slice(0, 10)) + (m.ordered_by_name ? ' (' + esc(m.ordered_by_name) + ')' : '') : ''}</div></div>
         ${m.ordered_at ? '<span class="badge ok">Đã gọi</span>' : `<button class="btn sm" data-ord="${m.id}">📞 Đã gọi hàng</button>`}</div>`).join('') : '<div class="empty">Không có</div>'}
       <div style="margin-top:6px"><a href="#stock?tab=levels&st=need">Xem tồn kho →</a></div></div>` : ''}
+    ${r.unpaid && r.unpaid.length ? `<div class="card"><h3>💰 Khách chưa thanh toán <span class="badge bad">${r.unpaid.length}</span></h3><div class="small muted">Từ ô màu hồng trong sổ đặt lịch Excel. Thu xong bấm hình thức đã thu.</div>
+      ${r.unpaid.map((a) => `<div class="list-item"><div style="flex:1;min-width:0"><b>${dmy(a.date)} ${esc(a.time)} · ${a.customer_id ? `<a href="#customer?id=${a.customer_id}">${esc(a.name || '')}</a>` : esc(a.name || '')}</b>
+        <div class="small muted">${esc(a.note || '')}${a.staff_name ? ' · ' + esc(a.staff_name) : ''} ${telLinks(a.phone)}</div></div>
+        <div class="row" style="justify-content:flex-end">${S.settings.payment_methods.slice(0, 3).map((m) => `<button class="btn sm" data-paid="${a.id}" data-m="${esc(m)}">Đã thu: ${esc(m)}</button>`).join('')}</div></div>`).join('')}</div>` : ''}
     ${r.backup && r.backup.due ? `<div class="card">${backupBox(r.backup)}</div>` : ''}
     ${r.expenses && r.expenses.pending_count ? `<div class="card"><h3>💸 Khoản chi chờ duyệt <span class="badge bad">${r.expenses.pending_count}</span></h3><div class="small muted">Tổng ${money(r.expenses.pending_amount)} · quỹ còn ${money(r.expenses.balance)}</div><div style="margin-top:8px"><a class="btn sm primary" href="#expenses">Mở để duyệt →</a></div></div>` : ''}
     ${sec('returns', '🔁 Khách đến hạn quay lại', 'Đã quá số ngày cài đặt kể từ lần làm gần nhất và chưa có lịch hẹn.', r.returns, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b>${who(c)} <span class="small muted">lần cuối ${dmy(c.last_date)} · ${c.days} ngày · ${c.n} lượt</span>`)}
@@ -1278,6 +1283,7 @@ VIEWS.reminders = async (main) => {
   $$('[data-ord]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/stock/${b.dataset.ord}/ordered`, { method: 'POST', body: {} }); refreshReminderBadge(); VIEWS.reminders(main); })));
   $('#rsf').onchange = (e) => go('reminders', { staff: e.target.value });
   $$('[data-done]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api('/reminders/done', { method: 'POST', body: JSON.parse(b.dataset.done) }); refreshReminderBadge(); VIEWS.reminders(main); })));
+  $$('[data-paid]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/appointments/${b.dataset.paid}/pay-note`, { method: 'POST', body: { pay_note: b.dataset.m } }); toast('Đã ghi thu: ' + b.dataset.m); VIEWS.reminders(main); refreshReminderBadge(); })));
   $$('[data-inv]', main).forEach((b) => (b.onclick = () => { const a = r.cancels.find((x) => x.id === Number(b.dataset.inv)); openModal('Mời đặt lại · ' + a.name, msgBox(msgRebook(a), a.phone)); bindMsgBox(); }));
   $$('[data-fu]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/appointments/${b.dataset.fu}/followup`, { method: 'POST', body: {} }); refreshReminderBadge(); VIEWS.reminders(main); })));
 };
@@ -1770,7 +1776,10 @@ VIEWS.excel = async (main) => {
         <div class="stat-line"><span>Lượt trùng khách + ngày (bỏ qua)</span><b>${s.visits_skipped_duplicate}</b></div><div class="stat-line"><span>Lịch hẹn mới</span><b>${s.appointments_created}</b></div>
         ${s.appointments_linked ? `<div class="stat-line"><span>…trong đó gắn được với khách có sẵn</span><b>${s.appointments_linked}</b></div>` : ''}
         ${s.appointments_past_skipped ? `<div class="stat-line"><span>Lịch ngày đã qua (bỏ qua)</span><b>${s.appointments_past_skipped}</b></div>` : ''}
-        ${s.appointments_skipped ? `<div class="stat-line"><span>Lịch đã có (bỏ qua)</span><b>${s.appointments_skipped}</b></div>` : ''}
+        ${s.appointments_skipped ? `<div class="stat-line"><span>Lịch đã có (cập nhật theo màu ô)</span><b>${s.appointments_skipped}</b></div>` : ''}
+        ${s.appointments_cancelled ? `<div class="stat-line"><span>🟥 Ô đỏ → khách hủy / thợ nghỉ</span><b>${s.appointments_cancelled}</b></div>` : ''}
+        ${Object.entries(s.pay_colors || {}).map(([k, n]) => `<div class="stat-line"><span>${k === 'Tiền mặt' ? '🟩' : k === 'Chuyển khoản' ? '🟨' : '🩷'} ${esc(k)}</span><b>${n}</b></div>`).join('')}
+        ${s.visits_paid_set ? `<div class="stat-line"><span>Lượt làm được ghi hình thức thanh toán</span><b>${s.visits_paid_set}</b></div>` : ''}
         ${s.cards_created || s.cards_skipped_existing ? `<div class="stat-line"><span>Thẻ voucher mới / đã có</span><b>${s.cards_created} / ${s.cards_skipped_existing}</b></div>` : ''}
         ${s.visits_updated ? `<div class="stat-line"><span>Lượt cũ được bổ sung công thức hóa chất</span><b>${s.visits_updated}</b></div>` : ''}
         <div class="stat-line"><span>Dịch vụ mới</span><b>${s.services_added}</b></div>
@@ -1897,7 +1906,7 @@ VIEWS.settings = async (main) => {
       create_user: 'Tạo tài khoản', update_user: 'Sửa tài khoản', update_settings: 'Sửa tham số', create_service: 'Thêm dịch vụ', update_service: 'Sửa dịch vụ', backup: 'Sao lưu', download_backup: 'Tải bản sao lưu',
       create_off: 'Xin/ghi nghỉ', decide_off: 'Duyệt nghỉ', delete_off: 'Xóa đơn nghỉ', manual_attendance: 'Chấm công tay', delete_attendance: 'Xóa chấm công',
       stock_in: 'Nhập kho', stock_adjust: 'Điều chỉnh kho', stock_count: 'Kiểm kho', stock_ordered: 'Báo đã gọi hàng', stock_unordered: 'Bỏ báo gọi hàng', stock_perm: 'Phân quyền kho',
-      transfer_customers: 'Bàn giao khách', update_visit_notes: 'Sửa ghi chú lượt', tip_paid: 'Ghi trả tip', expense_create: 'Ghi khoản chi', petty_in: 'Nạp quỹ', expense_approved: 'Duyệt chi', expense_rejected: 'KHÔNG duyệt chi', expense_pending: 'Đưa chi về chờ duyệt', expense_delete: 'XÓA khoản chi', expense_refunded: 'Hoàn quỹ', petty_target: 'Đổi mức quỹ', chat_to_appointment: 'Tạo lịch từ chat', chat_auto: 'Bật/tắt tự tạo lịch', set_ai_key: 'Đổi khóa AI', chat_summary: 'AI tóm tắt chat', delete_chat: 'Xóa tin chat', set_tip_pool: 'Sửa nhóm chia tip', create_card_type: 'Thêm gói thẻ', update_card_type: 'Sửa gói thẻ' };
+      transfer_customers: 'Bàn giao khách', update_visit_notes: 'Sửa ghi chú lượt', tip_paid: 'Ghi trả tip', expense_create: 'Ghi khoản chi', petty_in: 'Nạp quỹ', expense_approved: 'Duyệt chi', expense_rejected: 'KHÔNG duyệt chi', expense_pending: 'Đưa chi về chờ duyệt', expense_delete: 'XÓA khoản chi', expense_refunded: 'Hoàn quỹ', petty_target: 'Đổi mức quỹ', chat_to_appointment: 'Tạo lịch từ chat', chat_auto: 'Bật/tắt tự tạo lịch', appointment_pay: 'Ghi đã thu (khách nợ)', set_ai_key: 'Đổi khóa AI', chat_summary: 'AI tóm tắt chat', delete_chat: 'Xóa tin chat', set_tip_pool: 'Sửa nhóm chia tip', create_card_type: 'Thêm gói thẻ', update_card_type: 'Sửa gói thẻ' };
     const hot = ['update_visit', 'delete_visit', 'adjust_card', 'delete_customer', 'export_excel', 'update_card', 'stock_adjust', 'delete_attendance', 'expense_delete', 'expense_rejected'];
     const LB = { date: 'Ngày', time: 'Giờ', customer_id: 'Khách', main_staff_id: 'Thợ chính', assistant_id: 'Người phụ', staff_id: 'Thợ', surcharge: 'Phụ thu', discount: 'Giảm giá', discount_reason: 'Lý do giảm',
       total: 'Tổng tiền', card_paid: 'Trừ thẻ', cash_paid: 'Tiền thu', payment_method: 'Hình thức TT', tip: 'Tip', formula: 'Công thức', result: 'Kết quả', note: 'Ghi chú', services: 'Dịch vụ', name: 'Tên', phone: 'SĐT',
