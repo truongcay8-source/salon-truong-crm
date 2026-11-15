@@ -807,21 +807,42 @@ VIEWS.expenses = async (main) => {
 VIEWS.customers = async (main) => {
   const q = S.params.q || '';
   const sf = S.params.staff || '';
-  const r = await api('/customers?limit=200&q=' + encodeURIComponent(q) + (sf ? '&staff_id=' + sf : ''));
+  const fetchList = (qq) => api('/customers?limit=200&q=' + encodeURIComponent(qq) + (sf ? '&staff_id=' + sf : ''));
+  let r = await fetchList(q);
   const canMove = isMgr() && sf && sf !== 'mine' && r.total > 0;
-  main.innerHTML = header('Khách hàng', `${r.total} khách`, `${canMove ? '<button class="btn" id="moveC">🔄 Bàn giao khách</button>' : ''}<button class="btn primary" id="newC">+ Khách mới</button>`) +
-    `<div class="card"><div class="row"><input id="q" placeholder="🔍 Tìm tên, SĐT, mã khách, công thức (vd: 7NB)…" value="${esc(q)}" type="search" style="flex:1;min-width:220px">
+  const rowsHtml = () => r.rows.length ? r.rows.map((c) => `<tr class="click" data-c="${c.id}"><td class="muted">${esc(c.code)}</td><td><b>${esc(c.name)}</b></td><td>${esc(c.phone || '')}</td>
+      <td class="num">${c.visits}</td><td>${dmy(c.last_visit)}</td><td>${c.staff_id ? esc(staffName(c.staff_id)) : '<span class="muted small">—</span>'}</td>
+      <td class="small formula-cell" title="${esc(c.formula || '')}">${c.formula ? esc(c.formula.length > 40 ? c.formula.slice(0, 40) + '…' : c.formula) : ''}</td>${isMgr() ? `<td class="num">${money(c.spend)}</td>` : ''}</tr>`).join('')
+    : `<tr><td colspan="8" class="muted">Không thấy khách nào. Thử gõ ít chữ hơn, không cần dấu (vd: “huyen”) hoặc 4 số cuối SĐT.</td></tr>`;
+  const moreHtml = () => r.total > r.rows.length ? `Đang hiện ${r.rows.length}/${r.total} — gõ tìm kiếm để lọc.` : '';
+  main.innerHTML = header('Khách hàng', `<span id="cTotal">${r.total}</span> khách`, `${canMove ? '<button class="btn" id="moveC">🔄 Bàn giao khách</button>' : ''}<button class="btn primary" id="newC">+ Khách mới</button>`) +
+    `<div class="card"><div class="row"><input id="q" placeholder="🔍 Tìm tên (không cần dấu), SĐT, mã khách, công thức…" value="${esc(q)}" type="search" autocomplete="off" autocorrect="off" style="flex:1;min-width:220px">
       <select id="sf" style="width:auto"><option value="">Tất cả thợ</option><option value="mine" ${sf === 'mine' ? 'selected' : ''}>⭐ Khách của tôi</option>${activeStaff().map((u) => `<option value="${u.id}" ${String(u.id) === sf ? 'selected' : ''}>Khách của ${esc(u.full_name)}</option>`).join('')}<option value="none" ${sf === 'none' ? 'selected' : ''}>Chưa giao thợ</option></select></div></div>
     <div class="card"><div class="table-wrap"><table><thead><tr><th>Mã</th><th>Tên khách</th><th>SĐT</th><th class="num">Lượt</th><th>Lần gần nhất</th><th>Thợ phụ trách</th><th>Công thức</th>${isMgr() ? '<th class="num">Tổng chi</th>' : ''}</tr></thead>
-    <tbody>${r.rows.map((c) => `<tr class="click" data-c="${c.id}"><td class="muted">${esc(c.code)}</td><td><b>${esc(c.name)}</b></td><td>${esc(c.phone || '')}</td>
-      <td class="num">${c.visits}</td><td>${dmy(c.last_visit)}</td><td>${c.staff_id ? esc(staffName(c.staff_id)) : '<span class="muted small">—</span>'}</td>
-      <td class="small formula-cell" title="${esc(c.formula || '')}">${c.formula ? esc(c.formula.length > 40 ? c.formula.slice(0, 40) + '…' : c.formula) : ''}</td>${isMgr() ? `<td class="num">${money(c.spend)}</td>` : ''}</tr>`).join('')}</tbody></table></div>
-    ${r.total > r.rows.length ? `<div class="muted small" style="margin-top:8px">Đang hiện ${r.rows.length}/${r.total} — gõ tìm kiếm để lọc.</div>` : ''}</div>`;
-  const params = (over) => { const p = { q: $('#q').value, staff: $('#sf').value, ...over }; return Object.fromEntries(Object.entries(p).filter(([, v]) => v)); };
-  let t; $('#q').oninput = () => { clearTimeout(t); t = setTimeout(() => go('customers', params()), 350); };
+    <tbody id="cBody">${rowsHtml()}</tbody></table></div>
+    <div class="muted small" id="cMore" style="margin-top:8px">${moreHtml()}</div></div>`;
+  const params = (over) => { const p = { q: $('#q').value.trim(), staff: $('#sf').value, ...over }; return Object.fromEntries(Object.entries(p).filter(([, v]) => v)); };
+  const bindRows = () => $$('[data-c]', main).forEach((tr) => (tr.onclick = () => go('customer', { id: tr.dataset.c })));
+  const qi = $('#q');
+  let t, seq = 0, composing = false;
+  const refresh = () => {
+    clearTimeout(t);
+    t = setTimeout(async () => {
+      const v = qi.value.trim(), my = ++seq;
+      const p = new URLSearchParams(params()).toString();
+      history.replaceState({}, '', '#customers' + (p ? '?' + p : ''));
+      const nr = await fetchList(v); if (my !== seq || !document.body.contains(qi)) return; // bỏ kết quả cũ về muộn
+      r = nr; $('#cBody').innerHTML = rowsHtml(); $('#cMore').textContent = moreHtml(); $('#cTotal').textContent = r.total; bindRows();
+    }, 400);
+  };
+  // Bàn phím tiếng Việt (Telex) đang ghép chữ thì chưa tìm, gõ xong mới tìm
+  qi.addEventListener('compositionstart', () => { composing = true; clearTimeout(t); });
+  qi.addEventListener('compositionend', () => { composing = false; refresh(); });
+  qi.oninput = (e) => { if (composing || e.isComposing) return; refresh(); };
+  qi.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); qi.blur(); } };
   $('#sf').onchange = () => go('customers', params());
-  if (q) { const i = $('#q'); i.focus(); i.setSelectionRange(q.length, q.length); }
-  $$('[data-c]', main).forEach((tr) => (tr.onclick = () => go('customer', { id: tr.dataset.c })));
+  if (q && window.innerWidth > 820) { qi.focus(); qi.setSelectionRange(q.length, q.length); }
+  bindRows();
   $('#newC').onclick = () => customerForm({}, (id) => go('customer', { id }));
   if (canMove) $('#moveC').onclick = () => {
     const fromName = sf === 'none' ? 'chưa giao thợ' : 'của ' + staffName(Number(sf));

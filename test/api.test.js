@@ -319,6 +319,13 @@ test('luồng chính và phân quyền', async () => {
   assert.equal(r.data.count, 1, 'chuyển từng khách được chọn');
   assert.equal((await thu.get(`/customers/${huong}/brief`)).data.staff_id, staff['Trường']);
 
+  // Tìm khách không dấu, tên đúng lên đầu
+  await mgr.post('/customers', { name: 'Triệu Minh Hương' }); await mgr.post('/customers', { name: 'Minh Huyền' }); await mgr.post('/customers', { name: 'A Minh' });
+  let fs = (await thu.get('/customers?q=' + encodeURIComponent('minh huyen'))).data.rows;
+  assert.equal(fs[0].name, 'Minh Huyền'); assert.equal(fs.length, 1, 'loại tên không đúng');
+  fs = (await thu.get('/customers?q=Minh')).data.rows.map((x) => x.name);
+  assert.ok(fs.indexOf('Minh Huyền') < fs.indexOf('A Minh') && fs.indexOf('A Minh') >= 0 && fs.includes('Triệu Minh Hương'));
+  assert.equal((await thu.get('/search?q=' + encodeURIComponent('huyền'))).data.customers[0].name, 'Minh Huyền');
   // Chat nội bộ: tin đặt lịch → gợi ý; tạo lịch rồi gắn vào tin; tin thường không gợi ý; xóa là xóa hẳn
   let cm = (await thu.post('/chat', { body: 'chị Lan 0912 345 678 mai 9h30 nhuộm với Dương' })).data;
   assert.equal(cm.draft.phone, '0912345678'); assert.equal(cm.draft.time, '09:30'); assert.equal(cm.draft.staff_id, staff['Dương']);
