@@ -8,7 +8,7 @@ function amounts(text) {
   let s = fold(text)
     .replace(/(?:\+?84|0)[\d.\s]{8,12}\d/g, ' ') // SĐT
     .replace(/\b\d{1,2}[:h]\d{2}\b/g, ' ') // giờ
-    .replace(/\d+(?:[.,]\d+)?\s*%/g, ' ').replace(/\b(nap|nap the|tra truoc)\b.*$/, ' ').replace(/\b(voucher|the|phieu)\s*\d+(?:[.,]\d+)?\s*(tr|trieu|k)?\w*/g, ' ')
+    .replace(/\d+(?:[.,]\d+)?\s*%/g, ' ').replace(/\b(nap|nap the|tra truoc)\b.*$/, ' ').replace(/\b(voucher|vocher|voch|vc|the|phieu)\s*\d+(?:[.,]\d+)?\s*(tr|trieu|k)?\w*/g, ' ')
     .replace(/\b(lv|level|kh|cm|ml|g|so)\s*\d+/g, ' ').replace(/\d+\s*(cm|ml|phut|%|lan|buoi|nam)\b/g, ' ');
   const out = [];
   const re = /(\d+(?:[.,]\d+)?)\s*(tr|trieu|m)\s*(\d{1,3})?\s*k?|(\d{2,4}(?:[.,]\d{3})*)\s*(k|nghin|ngan|d|đ)?/g;
@@ -106,9 +106,13 @@ function parseEntry(text, staff, svcByName, services, hint) {
     const byPos = [...items].sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
     byPos.forEach((it, i) => { it.price = pairNums[i].v; it.fixed = true; });
   }
+  // Trừ thẻ tri ân / voucher: "sử dụng voucher 1tr", "trừ voucher 1000", "dung vocher 1trieu"
+  const vm = fold(text).match(/(tru|su dung|dung|sd)\s*(the tri an|the|voucher|vocher|voch|vc)\s*(\d+(?:[.,]\d+)?)?\s*(tr|trieu|k)?/);
+  let voucher = 0;
+  if (vm) { const n = vm[3] ? Number(vm[3].replace(',', '.')) : 0; voucher = !n ? 1000000 : vm[4] === 'k' ? n * 1000 : vm[4] ? n * 1e6 : n >= 30 ? n * 1000 : n * 1e6; }
   let explicit = nums.reduce((t, a) => t + a.v, 0);
   if (eq) { const tot = nums.find((a) => a.at >= eq.index); if (tot) explicit = tot.v; }
-  return { items, explicit, surcharge };
+  return { items, explicit, surcharge, voucher };
 }
 
 // Đặt tiền từng mục cho đủ đúng số tiền của ô (dư/thiếu dồn vào mục cuối)
@@ -131,7 +135,13 @@ function splitRow(row) {
   let extraTip = 0;
   const R = row.amount || 0;
   const knownSum = known.reduce((t, e) => t + e.amount + e.parsed.surcharge, 0);
-  if (R > 0 && knownSum > R) {
+  const vTotal = es.reduce((t, e) => t + (e.parsed.voucher || 0), 0);
+  if (R > 0 && knownSum > R && vTotal && knownSum - R <= vTotal + 1000 && !unknown.length) {
+    // Trừ thẻ tri ân: doanh số vẫn đủ giá dịch vụ, phần thẻ trả = chênh lệch (giao cho ô ghi dùng thẻ)
+    let gap = knownSum - R;
+    for (const e of es.filter((x) => x.parsed.voucher).sort((a, b) => b.amount - a.amount)) { const v = Math.min(gap, e.parsed.voucher, e.amount); e.voucher = v; gap -= v; }
+    if (gap > 0) { const big = [...es].sort((a, b) => b.amount - a.amount)[0]; big.voucher = (big.voucher || 0) + gap; }
+  } else if (R > 0 && knownSum > R) {
     // Ghi giá cao hơn tiền thu (trả bằng thẻ/voucher, nạp thẻ…): lấy đúng tiền sổ thu, chia theo tỷ lệ
     let left = R;
     es.forEach((e, i) => { const base = e.parsed.explicit || e.est; const v = i === es.length - 1 ? left : Math.round(R * base / (knownSum + unknown.reduce((t, x) => t + x.est, 0)) / 1000) * 1000; e.amount = Math.max(0, v - e.parsed.surcharge); left -= v; e.check = true; });
@@ -164,7 +174,7 @@ function cleanName(text) {
   let s = String(text).replace(/^\s*\d{1,2}[:h]\d{2}\s*/, '').split(/\s[–-]\s/)[0];
   s = s.replace(/\([^)]*\)?/g, ' ').replace(/[|/]/g, ' ').replace(/(?:\+?84|0)[\d.\s]{8,12}\d/g, ' ');
   const f = fold(s);
-  const stop = f.search(/\b(cat|ct|nhuom|uon|duoi|goi|tk|tao kieu|ep|tay|massage|masage|u lanh|hap|phuc hoi|mai|rua mat|cham chan|highlight|su dung|ck|off|tra|chuyen|tm|voucher)\b|\d/);
+  const stop = f.search(/[-=]|\b(phu|cat|ct|nhuom|uon|duoi|goi|tk|tao kieu|ep|tay|massage|masage|u lanh|hap|phuc hoi|mai|rua mat|cham chan|highlight|su dung|ck|off|tra|chuyen|tm|voucher)\b|\d/);
   if (stop > 0) s = s.slice(0, stop);
   s = s.replace(/[+,.:;]+$/, '').replace(/\s+/g, ' ').trim();
   return s.length >= 2 ? s.slice(0, 60) : null;
