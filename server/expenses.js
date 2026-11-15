@@ -29,6 +29,45 @@ CREATE TABLE IF NOT EXISTS expenses (
 CREATE INDEX IF NOT EXISTS idx_exp_date ON expenses(date);
 `);
 db.prepare("INSERT OR IGNORE INTO settings(key,value) VALUES ('petty_target','1000000')").run();
+// Khoản chi nhập từ sổ đặt lịch (cột Chi + Ghi chú) → không nhân đôi khi nhập lại file
+if (!db.prepare('PRAGMA table_info(expenses)').all().some((c) => c.name === 'import_ref')) db.exec('ALTER TABLE expenses ADD COLUMN import_ref TEXT');
+
+// Đoán nhóm chi theo nội dung ghi tay
+function guessCat(note) {
+  const f = String(note || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').toLowerCase();
+  if (/hoa chat|tap de|lo |lo$|chai|bat|choi quet|gang tay|giay bac|mang boc|dao lam|luoc|kep/.test(f)) return 'Hóa chất / vật tư lặt vặt';
+  if (/rac|lau|khan|ve sinh|giat|tham|xa phong|nuoc rua|gat nuoc|phoi|nha vs/.test(f)) return 'Vệ sinh, giặt khăn';
+  if (/nuoc|tra|banh|keo|cafe|ca phe|hoa qua|trai cay|tiep khach|da\b/.test(f)) return 'Nước uống, tiếp khách';
+  if (/sua|thay|bong den|o dien|khoa/.test(f)) return 'Sửa chữa nhỏ';
+  if (/but|giay|so |in an|bang dinh/.test(f)) return 'Văn phòng phẩm';
+  if (/ship|grab|xe|gui|van chuyen|xang/.test(f)) return 'Ship, gửi xe, đi lại';
+  return 'Khác';
+}
+// days: [{date, items:[{amount, note}]}]; ngày trước hôm nay: Vinh đã thanh toán → ghi khoản nạp hoàn quỹ đúng bằng tổng chi ngày đó
+function importFromBook(days, user, summary) {
+  const t = today();
+  const st = summary.expenses || (summary.expenses = { created: 0, skipped: 0, amount: 0, settled: 0, days: 0 });
+  for (const d of days) {
+    if (!d.items.length) continue;
+    st.days++;
+    let dayNew = 0;
+    d.items.forEach((x, i) => {
+      const ref = `SO:${d.date}:${i}:${x.amount}:${String(x.note || '').slice(0, 40)}`;
+      if (db.prepare('SELECT 1 FROM expenses WHERE import_ref=?').get(ref)) { st.skipped++; return; }
+      db.prepare(`INSERT INTO expenses(date,kind,amount,category,note,status,created_by,decided_by,decided_at,import_ref) VALUES (?,?,?,?,?,'approved',?,?,datetime('now','localtime'),?)`)
+        .run(d.date, 'out', x.amount, guessCat(x.note), (x.note || 'Chi (không ghi nội dung)') + ' · từ sổ đặt lịch', user.id, user.id, ref);
+      st.created++; st.amount += x.amount; dayNew += x.amount;
+    });
+    if (d.date < t && dayNew) {
+      const ref = `SO-HOAN:${d.date}:${dayNew}`;
+      if (!db.prepare('SELECT 1 FROM expenses WHERE import_ref=?').get(ref)) {
+        db.prepare(`INSERT INTO expenses(date,kind,amount,note,status,created_by,decided_by,decided_at,import_ref) VALUES (?,'in',?,?,'approved',?,?,datetime('now','localtime'),?)`)
+          .run(d.date, dayNew, 'Đã thanh toán / hoàn quỹ các khoản chi ngày ' + d.date.split('-').reverse().join('/'), user.id, user.id, ref);
+        st.settled += dayNew;
+      }
+    }
+  }
+}
 
 const CATS = ['Hóa chất / vật tư lặt vặt', 'Nước uống, tiếp khách', 'Vệ sinh, giặt khăn', 'Sửa chữa nhỏ', 'Văn phòng phẩm', 'Ship, gửi xe, đi lại', 'Khác'];
 const isMgr = (u) => u.role !== 'staff';
@@ -124,6 +163,47 @@ function mount(app, { MGR, upload, sniffImage, PHOTO_DIR }) {
     res.set('Cache-Control', 'private, max-age=86400');
     res.sendFile(file);
   });
+  // Xuất Excel quỹ tiền mặt: từng khoản chi / nạp + tổng theo ngày, theo nhóm
+  app.get('/api/expenses/export', MGR, async (req, res) => {
+    const ExcelJS = require('exceljs');
+    const t = today();
+    const from = isDate(req.query.from) ? req.query.from : t.slice(0, 8) + '01';
+    const to = isDate(req.query.to) ? req.query.to : t;
+    const rows = db.prepare(`${rowsSql} WHERE e.date BETWEEN ? AND ? ORDER BY e.date, e.id`).all(from, to);
+    const before = db.prepare(`SELECT COALESCE(SUM(CASE WHEN kind='in' THEN amount WHEN status<>'rejected' THEN -amount ELSE 0 END),0) b FROM expenses WHERE date < ?`).get(from).b;
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Quỹ tiền mặt');
+    ws.columns = [{ header: 'Ngày', key: 'date', width: 12 }, { header: 'Loại', key: 'kind', width: 10 }, { header: 'Nhóm', key: 'category', width: 24 },
+      { header: 'Nội dung', key: 'note', width: 46 }, { header: 'Chi', key: 'out', width: 13 }, { header: 'Nạp / hoàn quỹ', key: 'in', width: 14 },
+      { header: 'Số dư quỹ', key: 'bal', width: 13 }, { header: 'Trạng thái', key: 'status', width: 12 }, { header: 'Người ghi', key: 'by', width: 14 }, { header: 'Người duyệt', key: 'dec', width: 14 }];
+    ws.addRow({ date: '', note: 'Số dư đầu kỳ (trước ' + from.split('-').reverse().join('/') + ')', bal: before });
+    let bal = before;
+    const ST = { approved: 'Đã duyệt', pending: 'Chờ duyệt', rejected: 'Không duyệt' };
+    for (const e of rows) {
+      if (e.kind === 'in') bal += e.amount; else if (e.status !== 'rejected') bal -= e.amount;
+      ws.addRow({ date: e.date.split('-').reverse().join('/'), kind: e.kind === 'in' ? 'Nạp quỹ' : 'Chi', category: e.category || '', note: e.note + (e.reason ? ' · Lý do: ' + e.reason : ''),
+        out: e.kind === 'out' ? e.amount : null, in: e.kind === 'in' ? e.amount : null, bal, status: ST[e.status] || e.status, by: e.by_name || '', dec: e.decided_by_name || '' });
+    }
+    const outs = rows.filter((e) => e.kind === 'out' && e.status !== 'rejected');
+    ws.addRow({});
+    ws.addRow({ note: 'TỔNG CHI (không tính khoản không duyệt)', out: outs.reduce((s2, e) => s2 + e.amount, 0), in: rows.filter((e) => e.kind === 'in').reduce((s2, e) => s2 + e.amount, 0), bal }).font = { bold: true };
+    for (const c of ['out', 'in', 'bal']) ws.getColumn(c).numFmt = '#,##0';
+    ws.getRow(1).font = { bold: true }; ws.views = [{ state: 'frozen', ySplit: 1 }];
+    const ws2 = wb.addWorksheet('Theo ngày');
+    ws2.columns = [{ header: 'Ngày', key: 'd', width: 12 }, { header: 'Tổng chi', key: 'v', width: 14, style: { numFmt: '#,##0' } }, { header: 'Số khoản', key: 'n', width: 10 }];
+    const byDay = {}; for (const e of outs) { byDay[e.date] = byDay[e.date] || { v: 0, n: 0 }; byDay[e.date].v += e.amount; byDay[e.date].n++; }
+    for (const [d, x] of Object.entries(byDay)) ws2.addRow({ d: d.split('-').reverse().join('/'), ...x });
+    ws2.getRow(1).font = { bold: true };
+    const ws3 = wb.addWorksheet('Theo nhóm');
+    ws3.columns = [{ header: 'Nhóm chi', key: 'c', width: 28 }, { header: 'Tổng', key: 'v', width: 14, style: { numFmt: '#,##0' } }];
+    const byCat = {}; for (const e of outs) byCat[e.category || 'Khác'] = (byCat[e.category || 'Khác'] || 0) + e.amount;
+    for (const [c, v] of Object.entries(byCat).sort((a, b) => b[1] - a[1])) ws3.addRow({ c, v });
+    ws3.getRow(1).font = { bold: true };
+    audit(req.user.id, 'expense_export', null, null, { from, to, rows: rows.length });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="quy-tien-mat-${from}-${to}.xlsx"`);
+    res.send(Buffer.from(await wb.xlsx.writeBuffer()));
+  });
   app.put('/api/expenses/target', MGR, (req, res) => {
     const v = int(req.body.target);
     if (!(v > 0)) throw bad('Nhập mức quỹ');
@@ -133,4 +213,4 @@ function mount(app, { MGR, upload, sniffImage, PHOTO_DIR }) {
   });
 }
 
-module.exports = { mount, fundState };
+module.exports = { mount, fundState, importFromBook, guessCat };

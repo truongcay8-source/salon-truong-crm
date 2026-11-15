@@ -784,7 +784,7 @@ VIEWS.expenses = async (main) => {
       ${r.refund_due.length ? `<div class="kpi"><div class="l">Phải hoàn lại quỹ</div><div class="v bad-text">${money(r.refund_due.reduce((a, x) => a + x.amount, 0))}</div><div class="s">${r.refund_due.map((x) => esc(x.name) + ' ' + money(x.amount)).join(', ')}</div></div>` : ''}</div>
     <div class="card"><div class="row"><input type="date" id="ef" value="${from}" style="width:auto"> → <input type="date" id="et" value="${to}" style="width:auto">
       <button class="btn sm" data-p="today">Hôm nay</button><button class="btn sm" data-p="yest">Hôm qua</button><button class="btn sm" data-p="month">Tháng này</button>
-      ${r.can_decide ? '<span class="spacer"></span><button class="btn sm" id="tgE">Đổi mức quỹ</button>' : ''}</div></div>
+      ${r.can_decide ? `<span class="spacer"></span><a class="btn sm" href="/api/expenses/export?from=${from}&to=${to}" download>📥 Xuất Excel</a><button class="btn sm" id="tgE">Đổi mức quỹ</button>` : ''}</div></div>
     ${r.older_pending.length ? `<div class="card"><h3>⏳ Khoản chờ duyệt từ ngày khác (${r.older_pending.length})</h3>${r.older_pending.map(row).join('')}</div>` : ''}
     <div class="grid two"><div class="card"><h3>Các khoản</h3>${r.rows.map(row).join('') || '<div class="empty">Chưa có khoản chi nào</div>'}</div>
       <div class="card"><h3>Theo loại</h3>${Object.entries(r.by_category).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="stat-line"><span>${esc(k)}</span><b>${money(v)}</b></div>`).join('') || '<div class="empty">—</div>'}
@@ -1851,6 +1851,8 @@ VIEWS.excel = async (main) => {
           ${s.book.unpaid ? `<div class="stat-line"><span>🩷 Đã làm chưa thanh toán (giá theo bảng giá)</span><b>${money(s.book.unpaid)}</b></div>` : ''}
           ${s.book.rows_check.length ? `<details class="small"><summary>⚠ ${s.book.rows_check.length} dòng tiền thu khác giá ghi trong ô (thẻ/voucher, sản phẩm…) — nên kiểm tra</summary>${s.book.rows_check.map((x) => `<div>${esc(x)}</div>`).join('')}</details>` : ''}
           ${s.book.no_money.length ? `<details class="small"><summary>${s.book.no_money.length} ô không có tiền thu → chưa tạo lượt làm</summary>${s.book.no_money.map((x) => `<div>${esc(x)}</div>`).join('')}</details>` : ''}` : ''}
+        ${s.expenses ? `<div class="stat-line"><span>💸 Khoản chi đưa vào quỹ tiền mặt (${s.expenses.days} ngày)</span><b>${s.expenses.created} · ${money(s.expenses.amount)}</b></div>
+          <div class="stat-line"><span>…ngày trước đã thanh toán → ghi hoàn quỹ</span><b>${money(s.expenses.settled)}</b></div>` : ''}
         ${s.visits_updated ? `<div class="stat-line"><span>Lượt cũ được bổ sung công thức hóa chất</span><b>${s.visits_updated}</b></div>` : ''}
         <div class="stat-line"><span>Dịch vụ mới</span><b>${s.services_added}</b></div>
         ${s.purchases_created != null ? `<div class="stat-line"><span>Hóa chất / sản phẩm mới trong kho</span><b>${s.materials_created}</b></div>

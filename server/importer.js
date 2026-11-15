@@ -439,6 +439,7 @@ async function importWorkbook(buffer, opts, user) {
       if (!blocks.length) continue;
       recognised = true; summary.format = summary.format || 'Sổ đặt lịch theo ngày';
       const t = L.today();
+      if (opts.bookMoney !== false) require('./expenses').importFromBook(blocks.filter((b) => b.date <= t).map((b) => ({ date: b.date, items: b.spend })), user, summary);
       for (const b of blocks) {
         const money = opts.bookMoney && b.date >= BOOK_FROM && b.date < t;
         if (b.date < t && !opts.includeHistory && !money) { summary.appointments_past_skipped += b.entries.length; continue; }
@@ -624,11 +625,16 @@ async function importWorkbook(buffer, opts, user) {
           }
           const entries = [], rows = [];
           let amtCol = null, tipCol = null;
-          for (let c = 2; c <= 20; c++) { const h = norm(asText(row.getCell(c).value)); if (h === 'thu tiền') amtCol = c; else if (/^tiền tip|^tip$/.test(h)) tipCol = c; }
+          let chiCol = null, noteCol = null;
+          for (let c = 2; c <= 20; c++) { const h = norm(asText(row.getCell(c).value)); if (h === 'thu tiền') amtCol = c; else if (/^tiền tip|^tip$/.test(h)) tipCol = c; else if (h === 'chi') chiCol = c; else if (h === 'ghi chú' && chiCol && !noteCol) noteCol = c; }
+          if (chiCol && !noteCol) noteCol = chiCol + 1;
+          const spend = [];
           for (let i = r + 1; i <= Math.min(ws.rowCount, r + 40); i++) {
             const rr = ws.getRow(i);
             if (norm(asText(rr.getCell(1).value)) === 'giờ') break;
-            if (cols.some((x) => norm(asText(rr.getCell(x.c).value)) === 'tổng ngày')) break;
+            if (norm(asText(rr.getCell(1).value)) === 'tổng ngày' || cols.some((x) => norm(asText(rr.getCell(x.c).value)) === 'tổng ngày')) break;
+            // Cột Chi + Ghi chú (khoản chi trong ngày, có thể nằm ở dòng không có giờ)
+            if (chiCol) { const v = asNum(rr.getCell(chiCol).value); if (v > 0 && v < 50000000) spend.push({ amount: v, note: asText(rr.getCell(noteCol).value) }); }
             const time = asTime(rr.getCell(1).value);
             if (!time) continue;
             const rowE = [];
@@ -638,7 +644,7 @@ async function importWorkbook(buffer, opts, user) {
             }
             if (rowE.length) rows.push({ time, entries: rowE, amount: amtCol ? asNum(rr.getCell(amtCol).value) : 0, tip: tipCol ? asNum(rr.getCell(tipCol).value) : 0 });
           }
-          out.push({ date, entries, rows });
+          out.push({ date, entries, rows, spend });
         }
         return out;
       }
