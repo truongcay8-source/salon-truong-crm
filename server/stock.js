@@ -53,6 +53,31 @@ for (const c of ['material_id INTEGER', 'qty REAL']) {
 for (const c of ['min_qty REAL', 'ordered_at TEXT', 'ordered_by INTEGER']) {
   if (!db.prepare('PRAGMA table_info(materials)').all().some((x) => x.name === c.split(' ')[0])) db.exec('ALTER TABLE materials ADD COLUMN ' + c);
 }
+// Công thức → hóa chất: mỗi hóa chất có "mã viết trong công thức" (formula_keys); 1 màu mặc định khi công thức chỉ ghi số tông (9nb, 7glca…)
+if (!db.prepare('PRAGMA table_info(materials)').all().some((x) => x.name === 'formula_keys')) {
+  db.exec('ALTER TABLE materials ADD COLUMN formula_keys TEXT; ALTER TABLE materials ADD COLUMN formula_default INTEGER NOT NULL DEFAULT 0');
+}
+function seedFormulaKeys() {
+  const SEED = [
+    [/^màu milbon addicthy/i, 'addicthy,graypearl,gray pearl,cobalt,colbalt,blue,silver,moonstone,sapphire,amethyst,ocean,purple,pink,red'],
+    [/^màu milbon ordeve/i, 'ordeve'], [/^màu guytang/i, 'guytang,guy tang'], [/^màu jaas/i, 'jaas'], [/^màu davines mask$/i, 'davines'],
+    [/high bleach/i, 'high bleach,highbleach'], [/low bleach/i, 'low bleach,lowbleach'], [/tint clear/i, 'clear'], [/^bột tẩy$/i, 'bot tay,bleach,tay'],
+    [/color remover/i, 'remover'],
+  ];
+  const up = db.prepare("UPDATE materials SET formula_keys=? WHERE id=? AND (formula_keys IS NULL OR formula_keys='')");
+  for (const m of db.prepare("SELECT id, name FROM materials WHERE kind='service'").all()) {
+    const s = SEED.find(([re]) => re.test(m.name));
+    const shade = m.name.match(/vibrachrom số\s*([\d.]+)/i);
+    if (s) up.run(s[1], m.id); else if (shade) up.run('mask ' + shade[1] + ',' + shade[1], m.id);
+  }
+  // Tuýp màu Milbon (Ordeve, Addicthy) là 80g; chỉ điền khi đang để trống, quản lý sửa được ở Kho
+  db.prepare("UPDATE materials SET size=80, size_unit='g' WHERE kind='service' AND size IS NULL AND (name LIKE 'Màu Milbon Ordeve%' OR name LIKE 'Màu Milbon Addicthy%')").run();
+  if (!db.prepare('SELECT 1 FROM materials WHERE formula_default=1').get()) {
+    const d = db.prepare("SELECT id FROM materials WHERE kind='service' AND active=1 AND name LIKE 'Màu Milbon Ordeve%'").get();
+    if (d) db.prepare('UPDATE materials SET formula_default=1 WHERE id=?').run(d.id);
+  }
+}
+seedFormulaKeys();
 
 const isMgr = (u) => u.role !== 'staff';
 // Quyền kho cho nhân viên: xem tồn + báo hàng hết (mặc định Chị Thu, Dương), kiểm kho đếm hàng (mặc định Dương)
@@ -110,7 +135,8 @@ function parseSize(...texts) {
 function materialRows(user, opts = {}) {
   const rows = db.prepare(`SELECT * FROM materials ${opts.all ? '' : 'WHERE active=1'} ORDER BY kind, grp, name`).all();
   return rows.map((m) => {
-    const base = { id: m.id, code: m.code, name: m.name, kind: m.kind, grp: m.grp, unit: m.unit, size: m.size, size_unit: m.size_unit, sell_price: m.sell_price, active: m.active };
+    const base = { id: m.id, code: m.code, name: m.name, kind: m.kind, grp: m.grp, unit: m.unit, size: m.size, size_unit: m.size_unit, sell_price: m.sell_price, active: m.active,
+      formula_keys: m.formula_keys, formula_default: m.formula_default };
     if (!isMgr(user)) return base;
     const cost = avgCost(m.id), stock = stockOf(m.id);
     return { ...base, note: m.note, avg_cost: Math.round(cost), cost_per_size: m.size ? cost / m.size : null, stock: r2(stock), stock_value: Math.round(stock * cost) };
@@ -239,12 +265,15 @@ function mount(app, { MGR }) {
     const name = str(b.name); if (!name) throw bad('Nhập tên vật tư');
     const sz = Number(b.size) > 0 ? Number(b.size) : null;
     return { name, kind: b.kind === 'retail' ? 'retail' : 'service', grp: str(b.grp), unit: str(b.unit), size: sz, size_unit: sz ? (b.size_unit === 'g' ? 'g' : 'ml') : null,
-      sell_price: b.sell_price === '' || b.sell_price == null ? null : Math.max(0, int(b.sell_price)), active: b.active === false || b.active === 0 || b.active === '0' ? 0 : 1, note: str(b.note) };
+      sell_price: b.sell_price === '' || b.sell_price == null ? null : Math.max(0, int(b.sell_price)), active: b.active === false || b.active === 0 || b.active === '0' ? 0 : 1, note: str(b.note),
+      formula_keys: str(b.formula_keys), formula_default: b.formula_default === '1' || b.formula_default === 1 || b.formula_default === true ? 1 : 0 };
   };
+  const oneDefault = (id, m) => { if (m.formula_default) db.prepare('UPDATE materials SET formula_default=0 WHERE id<>?').run(id); };
   app.post('/api/materials', MGR, (req, res) => {
     const m = matInput(req.body);
     const cols = Object.keys(m);
     const id = db.prepare(`INSERT INTO materials(code,${cols.join(',')}) VALUES (?,${cols.map(() => '?').join(',')})`).run(nextCode('materials', 'VT', 4), ...cols.map((k) => m[k])).lastInsertRowid;
+    oneDefault(id, m);
     res.json({ id });
   });
   app.put('/api/materials/:id', MGR, (req, res) => {
@@ -252,6 +281,7 @@ function mount(app, { MGR }) {
     if (!db.prepare('SELECT 1 FROM materials WHERE id=?').get(id)) throw new HttpError(404, 'Không tìm thấy vật tư');
     const m = matInput(req.body); const cols = Object.keys(m);
     db.prepare(`UPDATE materials SET ${cols.map((k) => k + '=?').join(',')} WHERE id=?`).run(...cols.map((k) => m[k]), id);
+    oneDefault(id, m);
     res.json({ ok: true });
   });
   // Nhập thêm hàng / kiểm kho điều chỉnh
@@ -322,4 +352,4 @@ function mount(app, { MGR }) {
 }
 
 module.exports = {
-  perm, stockAlerts, mount, applyVisit, clearVisit, visitMaterials, importPurchases, avgCost, parseSize };
+  perm, stockAlerts, mount, applyVisit, clearVisit, visitMaterials, importPurchases: (...a) => { const r = importPurchases(...a); seedFormulaKeys(); return r; }, avgCost, parseSize, seedFormulaKeys };

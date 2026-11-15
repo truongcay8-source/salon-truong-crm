@@ -241,7 +241,7 @@ async function importWorkbook(buffer, opts, user) {
   const summary = {
     format: null, customers_created: 0, customers_merged: 0, matched_by_name: [], services_added: 0,
     visits_created: 0, visits_skipped_existing: 0, visits_skipped_duplicate: 0, visits_skipped_invalid: 0,
-    appointments_created: 0, appointments_linked: 0, appointments_skipped: 0, appointments_cancelled: 0, pay_colors: {}, visits_paid_set: 0, appointments_past_skipped: 0, cards_skipped_existing: 0, cards_created: 0, staff_created: [], warnings: [],
+    appointments_created: 0, appointments_linked: 0, appointments_skipped: 0, appointments_cancelled: 0, pay_colors: {}, visits_paid_set: 0, assistants_found: 0, visits_assistant_set: 0, appointments_past_skipped: 0, cards_skipped_existing: 0, cards_created: 0, staff_created: [], warnings: [],
   };
   const importer = { ...user, role: 'owner' }; // bỏ giới hạn ngày của nhân viên khi nhập lịch sử
 
@@ -398,6 +398,9 @@ async function importWorkbook(buffer, opts, user) {
           const reason = cancelled ? 'Ô đỏ trong sổ Excel: khách hủy / thợ nghỉ' : null;
           if (cancelled) summary.appointments_cancelled++;
           if (pay) summary.pay_colors[pay] = (summary.pay_colors[pay] || 0) + 1;
+          // Người phụ ghi trong ngoặc: "C Điệp(Thu)", "E Ly (300)(Thoại phụ)"
+          const asst = assistantIn(e.text, e.staffId);
+          if (asst) summary.assistants_found++;
           const dup = db.prepare(`SELECT id, status, pay_note FROM appointments WHERE date=? AND time=? AND IFNULL(staff_id,0)=IFNULL(?,0) AND (note=? OR service=?)`)
             .get(b.date, e.time, e.staffId, e.text, e.text);
           let apptId;
@@ -406,22 +409,52 @@ async function importWorkbook(buffer, opts, user) {
             apptId = dup.id;
             if (cancelled && dup.status !== 'cancelled') db.prepare("UPDATE appointments SET status='cancelled', cancel_reason=COALESCE(cancel_reason,?) WHERE id=?").run(reason, dup.id);
             if (pay !== dup.pay_note && (pay || dup.pay_note)) db.prepare('UPDATE appointments SET pay_note=? WHERE id=?').run(pay, dup.id);
+            if (asst) db.prepare('UPDATE appointments SET assistant_id=? WHERE id=? AND assistant_id IS NULL').run(asst, dup.id);
             summary.appointments_skipped++;
           } else {
-            apptId = db.prepare('INSERT INTO appointments(customer_id,guest_name,guest_phone,staff_id,date,time,service,status,note,created_by,cancel_reason,pay_note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-              .run(hit ? hit.id : null, hit ? null : name, hit ? null : phone, e.staffId, b.date, e.time, null, status, e.text, user.id, reason, pay).lastInsertRowid;
+            apptId = db.prepare('INSERT INTO appointments(customer_id,guest_name,guest_phone,staff_id,date,time,service,status,note,created_by,cancel_reason,pay_note,assistant_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+              .run(hit ? hit.id : null, hit ? null : name, hit ? null : phone, e.staffId, b.date, e.time, null, status, e.text, user.id, reason, pay, asst).lastInsertRowid;
             summary.appointments_created++;
             if (hit) summary.appointments_linked++;
           }
-          // Ghi hình thức thanh toán vào lượt làm đã nhập (chỉ khi khớp đúng 1 lượt chưa có hình thức)
-          if (pay && pay !== 'Chưa thanh toán' && b.date < t) {
-            const cands = db.prepare(`SELECT id FROM visits WHERE date=? AND status='done' AND cash_paid>0 AND payment_method IS NULL AND import_ref IS NOT NULL
-                AND (? IS NULL OR main_staff_id=?) AND (? IS NULL OR customer_id=?) AND (time IS NULL OR time=?)`)
+          // Cập nhật lượt làm đã nhập cùng ngày/giờ/thợ/khách (chỉ khi khớp đúng 1 lượt)
+          if (b.date < t && !cancelled && ((pay && pay !== 'Chưa thanh toán') || asst)) {
+            let cands = db.prepare(`SELECT v.id, v.payment_method, v.assistant_id, v.cash_paid, v.total, v.time, c.name cname FROM visits v LEFT JOIN customers c ON c.id=v.customer_id
+                WHERE v.date=? AND v.status='done' AND v.import_ref IS NOT NULL AND (? IS NULL OR v.main_staff_id=?) AND (? IS NULL OR v.customer_id=?) AND (v.time IS NULL OR v.time=?)`)
               .all(b.date, e.staffId, e.staffId, hit ? hit.id : null, hit ? hit.id : null, e.time);
-            if (cands.length === 1) { db.prepare('UPDATE visits SET payment_method=? WHERE id=?').run(pay, cands[0].id); summary.visits_paid_set++; }
+            // Nhiều lượt cùng ngày: ưu tiên lượt đúng giờ, rồi lượt có tên khách khớp với chữ trong ô
+            if (cands.length > 1 && cands.some((x) => x.time === e.time)) cands = cands.filter((x) => x.time === e.time);
+            if (cands.length > 1 && name) {
+              const toks = stripAccents(name).replace(/^(chi|anh|em|c|a|e|b|ban)\s+/, '').split(/\s+/).filter((w) => w.length > 1);
+              if (toks.length) cands = cands.filter((x) => { const cn = stripAccents(x.cname || '').split(/[^a-z0-9]+/); return toks.every((w) => cn.includes(w)); });
+            }
+            const v = cands.length === 1 ? cands[0] : null;
+            if (v && pay && pay !== 'Chưa thanh toán' && !v.payment_method && v.cash_paid > 0) { db.prepare('UPDATE visits SET payment_method=? WHERE id=?').run(pay, v.id); summary.visits_paid_set++; }
+            if (v && asst && !v.assistant_id) {
+              const u = db.prepare('SELECT commission_enabled FROM users WHERE id=?').get(asst);
+              const rate = Number(db.prepare("SELECT value FROM settings WHERE key='assistant_rate'").pluck().get()) || 0;
+              db.prepare('UPDATE visits SET assistant_id=?, assistant_commission=? WHERE id=?').run(asst, u && u.commission_enabled ? Math.round(v.total * rate) : 0, v.id);
+              summary.visits_assistant_set++;
+            }
           }
           void apptId;
         }
+      }
+      // Chỉ nhận đúng tên nhân viên đang có (không tự tạo người mới từ chữ trong ngoặc)
+      function assistantIn(text, mainId) {
+        const staff = db.prepare('SELECT id, full_name, aliases FROM users').all();
+        const key = (x) => stripAccents(x).replace(/^(chi|anh|em|c|a|e)\s+/, '').trim();
+        const names = (x) => [x.full_name, ...String(x.aliases || '').split(',')].map((a) => a.trim() && key(a)).filter(Boolean);
+        // "(Thu)", "(Thoại phụ)", cả ngoặc quên đóng "Vợ Hạnh 785(Thu"
+        for (const m of String(text).matchAll(/\(([^()]{2,25})(?:\)|$)/g)) {
+          const k = key(m[1]).replace(/\s*phu$/, '').replace(/^phu\s*/, '').trim();
+          const u = staff.find((x) => names(x).includes(k));
+          if (u && u.id !== mainId) return u.id;
+        }
+        // Không có ngoặc nhưng ghi "Thoai phu"
+        const f = ' ' + stripAccents(text).replace(/[^a-z0-9]+/g, ' ') + ' ';
+        const u = staff.find((x) => x.id !== mainId && names(x).some((k) => f.includes(' ' + k + ' phu ')));
+        return u ? u.id : null;
       }
       function findDayBlocks(ws) {
         const out = [];

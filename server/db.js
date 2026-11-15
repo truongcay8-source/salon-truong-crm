@@ -229,6 +229,8 @@ const DEFAULT_SETTINGS = {
   if (!db.prepare('PRAGMA table_info(card_types)').all().some((c) => c.name === 'fixed_expiry')) db.exec('ALTER TABLE card_types ADD COLUMN fixed_expiry TEXT');
   // Màu ô trong sổ đặt lịch Excel: xanh lá = tiền mặt, vàng = chuyển khoản, hồng = chưa thanh toán
   if (!db.prepare('PRAGMA table_info(appointments)').all().some((c) => c.name === 'pay_note')) db.exec('ALTER TABLE appointments ADD COLUMN pay_note TEXT');
+  // Người phụ ghi trong ngoặc ở sổ đặt lịch, vd "C Điệp(Thu)" → điền sẵn khi thu tiền
+  if (!db.prepare('PRAGMA table_info(appointments)').all().some((c) => c.name === 'assistant_id')) db.exec('ALTER TABLE appointments ADD COLUMN assistant_id INTEGER REFERENCES users(id)');
   // Tip riêng: khách tặng riêng 1 người (không đưa vào quỹ tip chung)
   if (!db.prepare('PRAGMA table_info(visits)').all().some((c) => c.name === 'tip_private')) {
     db.exec('ALTER TABLE visits ADD COLUMN tip_private INTEGER NOT NULL DEFAULT 0; ALTER TABLE visits ADD COLUMN tip_private_to INTEGER REFERENCES users(id)');

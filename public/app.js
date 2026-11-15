@@ -356,7 +356,7 @@ function apptList(rows, showDate) {
   if (!rows.length) return '<div class="empty">Không có lịch hẹn</div>';
   return rows.map((a) => `<div class="list-item"><div class="time-pill">${esc(a.time)}${showDate ? `<div class="small muted">${dmy(a.date).slice(0, 5)}</div>` : ''}</div>
     <div style="flex:1;min-width:0"><div class="t">${a.customer_id ? `<a href="#customer?id=${a.customer_id}">${esc(a.name)}</a>` : esc(a.name) + ' <span class="badge">khách mới</span>'}</div>
-      <div class="small muted">${a.visit_services ? esc(a.visit_services) : svcWithPrice(a.service)}${a.staff_name ? ' · ' + esc(a.staff_name) : ''} · ${telLinks(a.phone)}</div>
+      <div class="small muted">${a.visit_services ? esc(a.visit_services) : svcWithPrice(a.service)}${a.staff_name ? ' · ' + esc(a.staff_name) : ''}${a.assistant_id ? ' + phụ ' + esc(staffName(a.assistant_id)) : ''} · ${telLinks(a.phone)}</div>
       ${a.visit_id && a.visit_total != null ? `<div class="small"><b style="color:var(--ok)">✓ Đã thu ${money(a.visit_total)}</b> · <a href="#" data-rcpt="${a.visit_id}">Hóa đơn</a></div>`
         : a.service && estTotal(a.service) && !['cancelled', 'noshow'].includes(a.status) ? `<div class="small">Dự kiến: <b>${money(estTotal(a.service))}</b></div>` : ''}
       ${a.note ? `<div class="small">${esc(a.note)}</div>` : ''}
@@ -375,7 +375,7 @@ async function checkout(a, after) {
     c = await api(`/appointments/${a.id}/customer`, { method: 'POST' });
     toast(c.created ? `Đã tạo hồ sơ khách ${c.code} – ${c.name}` : `Nhận khách cũ ${c.code} – ${c.name} (trùng SĐT)`);
   }
-  visitForm({ customer_id: c.id, customer: c, main_staff_id: a.staff_id, appointment_id: a.id, service: a.service, date: a.date, time: a.time }, after);
+  visitForm({ customer_id: c.id, customer: c, main_staff_id: a.staff_id, assistant_id: a.assistant_id || null, appointment_id: a.id, service: a.service, date: a.date, time: a.time }, after);
 }
 function bindApptList(root, reload, rows) {
   $$('[data-ast]', root).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/appointments/${b.dataset.id}/status`, { method: 'POST', body: { status: b.dataset.ast } }); reload(); })));
@@ -1026,7 +1026,7 @@ async function visitForm(v = {}, after) {
     <div><label>Người phụ</label><select name="assistant_id">${staffOptions(v.assistant_id, 'Không có')}</select></div>
     <div class="full"><label>Dịch vụ / sản phẩm bán (giá sửa được)</label><div id="items"></div><div class="row"><div style="flex:1;min-width:200px" id="vSvcS"></div><button type="button" class="btn sm" id="addItem">+ Thêm dòng</button></div></div>
     ${S.materials.some((m) => m.kind === 'service') ? `<div class="full"><label>🧪 Hóa chất đã dùng (ghi để tính giá cốt, trừ kho)</label><div id="used"></div>
-      <div class="row"><button type="button" class="btn sm" id="addUsed">+ Thêm hóa chất</button><button type="button" class="btn sm" id="recipeFill">↻ Lấy theo định mức dịch vụ</button></div></div>` : ''}
+      <div class="row"><button type="button" class="btn sm" id="addUsed">+ Thêm hóa chất</button><button type="button" class="btn sm" id="recipeFill">↻ Lấy theo định mức dịch vụ</button><button type="button" class="btn sm" id="formulaFill">🧪 Tính từ công thức</button></div></div>` : ''}
     <div><label>Phụ thu</label><input type="number" name="surcharge" min="0" step="1000" value="${v.surcharge || ''}"></div>
     <div><label>Giảm giá</label><input type="number" name="discount" min="0" step="1000" value="${v.discount || ''}"></div>
     <div class="full"><label>Lý do giảm (bắt buộc nếu có giảm)</label><input name="discount_reason" list="reasons" value="${esc(v.discount_reason || '')}">
@@ -1039,7 +1039,7 @@ async function visitForm(v = {}, after) {
     <div class="full"><div class="totals" id="tot"></div></div>
     <div class="full"><label>Tình trạng tóc trước khi làm</label><textarea name="hair_before">${esc(v.hair_before || '')}</textarea></div>
     <div class="full"><label>Mong muốn của khách</label><input name="wish" value="${esc(v.wish || '')}"></div>
-    <div class="full"><label>Công thức / tỷ lệ pha</label><div id="fHint"></div><textarea name="formula">${esc(v.formula || '')}</textarea></div>
+    <div class="full"><label>Công thức / tỷ lệ pha</label><div id="fHint"></div><textarea name="formula" placeholder="VD: 9nb 35ml + 7glca 25ml, oxi 20 (gõ lượng ml/g để app tự tính hóa chất & giá cốt)">${esc(v.formula || '')}</textarea><div id="fCost" class="small"></div></div>
     <div class="full"><label>Kết quả sau làm</label><input name="result" value="${esc(v.result || '')}"></div>
     <div><label>Hẹn chăm sóc lại</label><input type="date" name="next_visit_date" value="${v.next_visit_date || ''}"></div>
     <div><label>Ghi chú</label><input name="note" value="${esc(v.note || '')}"></div>
@@ -1093,8 +1093,23 @@ async function visitForm(v = {}, after) {
     $$('[data-urm]', box).forEach((b) => (b.onclick = () => { used.splice(Number(b.dataset.urm), 1); renderUsed(); }));
     calc();
   };
-  let usedTouched = isEdit;
-  const autoRecipe = () => { if (usedTouched) return; const r = recipeFor(items); if (r.length) { used = r; renderUsed(); } };
+  let usedTouched = isEdit, fromFormula = false;
+  // Gõ công thức → tự nhận hóa chất + lượng (9nb 35ml, oxi 20…) để tính giá cốt từng đầu
+  const applyFormula = (force) => {
+    const box = $('#fCost'); if (!box || !window.parseFormula) return;
+    const text = f.formula.value.trim();
+    if (!text) { box.innerHTML = ''; return; }
+    const r = window.parseFormula(text, S.materials);
+    box.innerHTML = (r.lines.length ? `<div style="margin-top:4px">🧪 App đọc được: ${r.lines.map((l) => `<b>${esc(l.name)}</b> ${l.amt}${esc(l.unit || '')}${l.guessed ? ' <span class="muted">(đoán)</span>' : ''}`).join(' · ')}</div>` : '')
+      + (r.unknown.length ? `<div style="color:var(--warn)">Chưa nhận ra: ${r.unknown.map(esc).join(', ')}</div>` : '')
+      + (r.warn.length ? `<div style="color:var(--warn)">${r.warn.map(esc).join('<br>')}</div>` : '')
+      + (isMgr() && (r.unknown.length || r.lines.some((l) => l.guessed)) ? '<div class="muted">Dạy app mã màu: Kho › Sửa hóa chất › ô “Mã viết trong công thức”.</div>' : '');
+    if (!$('#used') || !r.lines.length) return;
+    if (force || fromFormula || !usedTouched || !used.some((u) => u.material_id)) {
+      used = r.lines.map((l) => ({ material_id: l.material_id, amt: l.amt })); fromFormula = true; renderUsed();
+    }
+  };
+  const autoRecipe = () => { if (usedTouched || fromFormula) return; const r = recipeFor(items); if (r.length) { used = r; renderUsed(); } };
   let extraCards = [];
   const loadCards = async (customerId, pick) => {
     const own = customerId ? (await api('/cards?status=active&customer_id=' + customerId)).filter((c) => c.balance > 0 || c.id === v.card_id) : [];
@@ -1167,12 +1182,15 @@ async function visitForm(v = {}, after) {
       ${!f.formula.value ? '<button type="button" class="btn sm" id="useF">↓ Dùng lại công thức này</button>' : ''}` : ''}</div>` : '';
     const u = $('#useF'); if (u) u.onclick = () => { f.formula.value = b.formula; u.remove(); };
   };
+  { let ft; f.formula.addEventListener('input', () => { clearTimeout(ft); ft = setTimeout(() => applyFormula(false), 500); }); }
+  if (f.formula.value.trim()) applyFormula(false);
   bindPicker(f, (cid) => { loadCards(cid); showBrief(cid); });
   showBrief(custSel && custSel.id);
   $('#addItem').onclick = () => { items.push({ service_id: '', price: '' }); renderItems(); };
   if ($('#used')) {
-    $('#used').addEventListener('input', () => { usedTouched = true; });
-    $('#used').addEventListener('change', () => { usedTouched = true; });
+    $('#used').addEventListener('input', () => { usedTouched = true; fromFormula = false; });
+    $('#used').addEventListener('change', () => { usedTouched = true; fromFormula = false; });
+    $('#formulaFill').onclick = () => { if (!f.formula.value.trim()) return toast('Gõ công thức trước, vd: 9nb 35ml + 7glca 25ml, oxi 20'); applyFormula(true); if (!fromFormula) toast('Chưa đọc được hóa chất nào, xem dòng gợi ý dưới ô công thức'); };
     $('#addUsed').onclick = () => { usedTouched = true; used.push({ material_id: '', amt: '' }); renderUsed(); };
     $('#recipeFill').onclick = () => { const r = recipeFor(items); if (!r.length) return toast('Dịch vụ đã chọn chưa có định mức. Quản lý cài ở Kho & giá cốt → Định mức'); used = r; usedTouched = true; renderUsed(); };
   }
@@ -1580,7 +1598,10 @@ VIEWS.stock = async (main) => {
         <div><label>Dung tích 1 đơn vị</label><div class="row"><input type="number" name="size" step="any" min="0" value="${m.size || ''}" style="flex:1"><select name="size_unit" style="width:auto"><option ${m.size_unit !== 'g' ? 'selected' : ''}>ml</option><option ${m.size_unit === 'g' ? 'selected' : ''}>g</option></select></div></div>
         <div><label>Giá bán cho khách (sản phẩm)</label><input type="number" name="sell_price" min="0" step="1000" value="${m.sell_price ?? ''}"></div>
         <div><label>Trạng thái</label><select name="active"><option value="1">Đang dùng</option><option value="0" ${m.active ? '' : 'selected'}>Ngừng</option></select></div>
-        <div class="full"><label>Ghi chú</label><input name="note" value="${esc(m.note || '')}"></div></div>
+        <div class="full"><label>Ghi chú</label><input name="note" value="${esc(m.note || '')}"></div>
+        ${m.kind !== 'retail' ? `<div class="full"><label>🧪 Mã viết trong công thức (cách nhau dấu phẩy)</label><input name="formula_keys" value="${esc(m.formula_keys || '')}" placeholder="VD: graypearl, cobalt, addicthy">
+          <label class="small" style="font-weight:normal;margin-top:6px"><input type="checkbox" name="formula_default" value="1" style="width:auto" ${m.formula_default ? 'checked' : ''}> Màu mặc định khi công thức chỉ ghi số tông (9nb, 7glca…)</label>
+          <div class="small muted">Thợ gõ “9graypearl 15ml” ở lượt làm → app tự ghi hóa chất này 15${esc(m.size_unit || 'ml')} và tính giá cốt. Cần điền “Dung tích 1 đơn vị”.</div></div>` : ''}</div>
         <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu</button></div></form>`);
       $('#mf').onsubmit = (e) => { e.preventDefault(); guard($('#mf button.primary'), async () => {
         await api(m.id ? '/materials/' + m.id : '/materials', { method: m.id ? 'PUT' : 'POST', body: formData($('#mf')) }); closeModal(); toast('Đã lưu'); reload(); }); };
@@ -1780,6 +1801,7 @@ VIEWS.excel = async (main) => {
         ${s.appointments_cancelled ? `<div class="stat-line"><span>🟥 Ô đỏ → khách hủy / thợ nghỉ</span><b>${s.appointments_cancelled}</b></div>` : ''}
         ${Object.entries(s.pay_colors || {}).map(([k, n]) => `<div class="stat-line"><span>${k === 'Tiền mặt' ? '🟩' : k === 'Chuyển khoản' ? '🟨' : '🩷'} ${esc(k)}</span><b>${n}</b></div>`).join('')}
         ${s.visits_paid_set ? `<div class="stat-line"><span>Lượt làm được ghi hình thức thanh toán</span><b>${s.visits_paid_set}</b></div>` : ''}
+        ${s.visits_assistant_set ? `<div class="stat-line"><span>Lượt làm được ghi người phụ (tên trong ngoặc)</span><b>${s.visits_assistant_set}</b></div>` : ''}
         ${s.cards_created || s.cards_skipped_existing ? `<div class="stat-line"><span>Thẻ voucher mới / đã có</span><b>${s.cards_created} / ${s.cards_skipped_existing}</b></div>` : ''}
         ${s.visits_updated ? `<div class="stat-line"><span>Lượt cũ được bổ sung công thức hóa chất</span><b>${s.visits_updated}</b></div>` : ''}
         <div class="stat-line"><span>Dịch vụ mới</span><b>${s.services_added}</b></div>
