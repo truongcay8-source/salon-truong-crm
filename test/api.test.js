@@ -333,6 +333,37 @@ test('luồng chính và phân quyền', async () => {
   assert.equal((await duong.del('/chat/' + plain.id)).status, 200);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM chat_messages WHERE id=?').get(plain.id).n, 0, 'xóa hẳn');
   assert.equal((await duong.get('/chat')).data.length, 1);
+  // Tên không có "anh/chị" vẫn nhận ra; tên ở tin ngắn ngay trước cũng lấy được
+  let c2 = (await duong.post('/chat', { body: 'mai 11h trưa Thảo cắt tóc' })).data;
+  assert.equal(c2.draft.name, 'Thảo'); assert.equal(c2.draft.time, '11:00');
+  const hasUse = db.prepare("SELECT 1 FROM visits WHERE main_staff_id=? AND status='done'").get(staff['Dương']);
+  if (hasUse) { assert.equal(c2.draft.staff_id, staff['Dương']); assert.equal(c2.draft.staff_from_sender, true); }
+  await duong.post('/chat', { body: 'A Định' });
+  c2 = (await duong.post('/chat', { body: 'mai 14h cắt tóc' })).data;
+  assert.equal(c2.draft.name, 'Anh Định'); assert.equal(c2.draft.name_from_prev, true);
+  // Chế độ tự tạo lịch: chỉ quản lý bật; tin đủ tên + ngày + giờ thì tự có lịch
+  assert.equal((await thu.put('/chat/settings', { auto: true })).status, 403);
+  assert.equal((await mgr.put('/chat/settings', { auto: true })).status, 200);
+  c2 = (await thu.post('/chat', { body: 'chị Hồng mai 16h gội' })).data;
+  assert.equal(c2.auto_created, true); assert.ok(c2.appointment_id);
+  assert.equal(db.prepare('SELECT guest_name FROM appointments WHERE id=?').get(c2.appointment_id).guest_name, 'Chị Hồng');
+  c2 = (await thu.post('/chat', { body: 'chị Hoa 17h gội' })).data;
+  assert.equal(c2.auto_created, false, 'ngày chỉ đoán thì không tự tạo');
+  await mgr.put('/chat/settings', { auto: false });
+  // Chủ đề theo ngày + tóm tắt AI (chưa có khóa → báo lỗi rõ, không lộ khóa)
+  const dd = (await thu.get('/chat/days')).data;
+  assert.ok(dd.days.length >= 1 && dd.days[0].n >= 5); assert.equal(dd.auto, false); assert.equal(dd.ai, false);
+  assert.equal((await thu.get('/chat?date=' + dd.days[0].date)).data.length, dd.days[0].n);
+  assert.equal((await thu.get('/chat?date=2000-01-01')).data.length, 0);
+  const sumR = await thu.post('/chat/summary', { date: dd.days[0].date });
+  assert.equal(sumR.status, 400); assert.match(sumR.data.error, /khóa API/);
+  assert.equal((await mgr.put('/chat/ai-key', { key: 'sk-ant-test-123456789012345678901' })).status, 403, 'chỉ Lãnh đạo nhập khóa');
+  assert.equal((await owner.put('/chat/ai-key', { key: 'abc' })).status, 400);
+  assert.equal((await owner.put('/chat/ai-key', { key: 'sk-ant-test-123456789012345678901' })).status, 200);
+  assert.equal((await thu.get('/chat/days')).data.ai, true);
+  assert.equal('anthropic_api_key' in (await mgr.get('/settings')).data, false, 'không trả khóa về trình duyệt');
+  await owner.put('/chat/ai-key', { key: '' });
+  assert.equal(require('../server/chat').maskPhone('gọi 0912 345 678 nhé'), 'gọi [SĐT] nhé');
 
   // Chi & quỹ: quản lý nạp 1tr; nhân viên ghi chi → chờ duyệt; không duyệt thì không trừ quỹ, phải hoàn
   assert.equal((await thu.post('/expenses', { kind: 'in', amount: 1000000 })).status, 403, 'nhân viên không nạp quỹ');
