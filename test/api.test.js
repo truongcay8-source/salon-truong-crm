@@ -319,6 +319,13 @@ test('luồng chính và phân quyền', async () => {
   assert.equal(r.data.count, 1, 'chuyển từng khách được chọn');
   assert.equal((await thu.get(`/customers/${huong}/brief`)).data.staff_id, staff['Trường']);
 
+  // Bảng giá 15/11/2026
+  const sv = (await mgr.get('/services')).data;
+  const price = (n) => (sv.find((x) => x.name === n) || {}).price;
+  assert.equal(price('Cắt tóc nam – Stylist'), 240000); assert.equal(price('Cắt tóc nữ – Junior'), 280000); assert.equal(price('Cắt mái – Director'), 150000);
+  assert.equal(price('Balayage – XL (qua lưng)'), 5100000); assert.equal(price('Tẩy da chết da đầu'), 100000);
+  assert.equal(sv.find((x) => x.name === 'Nhuộm').active, 0, 'nhuộm chung đã tách theo độ dài');
+  assert.equal(require('../server/pricelist').apply(), null, 'chỉ chạy 1 lần');
   // Tìm khách không dấu, tên đúng lên đầu
   await mgr.post('/customers', { name: 'Triệu Minh Hương' }); await mgr.post('/customers', { name: 'Minh Huyền' }); await mgr.post('/customers', { name: 'A Minh' });
   let fs = (await thu.get('/customers?q=' + encodeURIComponent('minh huyen'))).data.rows;
@@ -329,7 +336,7 @@ test('luồng chính và phân quyền', async () => {
   // Chat nội bộ: tin đặt lịch → gợi ý; tạo lịch rồi gắn vào tin; tin thường không gợi ý; xóa là xóa hẳn
   let cm = (await thu.post('/chat', { body: 'chị Lan 0912 345 678 mai 9h30 nhuộm với Dương' })).data;
   assert.equal(cm.draft.phone, '0912345678'); assert.equal(cm.draft.time, '09:30'); assert.equal(cm.draft.staff_id, staff['Dương']);
-  assert.equal(cm.draft.name, 'Chị Lan'); assert.equal(cm.draft.service, 'Nhuộm'); assert.ok(cm.draft.date > '2000');
+  assert.equal(cm.draft.name, 'Chị Lan'); assert.equal(cm.draft.service, 'Nhuộm tóc – M (ngang vai)', 'bảng giá mới: nhuộm theo độ dài, mặc định M'); assert.ok(cm.draft.date > '2000');
   assert.equal((await duong.get('/chat/unread')).data.unread >= 1, true);
   const apC = (await thu.post('/appointments', { guest_name: cm.draft.name, guest_phone: cm.draft.phone, date: cm.draft.date, time: cm.draft.time, staff_id: cm.draft.staff_id, service: cm.draft.service, force: true })).data;
   cm = (await duong.post(`/chat/${cm.id}/link`, { appointment_id: apC.id })).data;
