@@ -16,8 +16,22 @@ function addDays(d, n) { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDat
 function staffName(id) { const s = S.staff.find((x) => x.id === id); return s ? s.full_name : ''; }
 function activeStaff() { return S.staff.filter((s) => s.active); }
 function staffOptions(sel, withEmpty = '— Chọn —') {
-  return (withEmpty ? `<option value="">${withEmpty}</option>` : '') + activeStaff().map((s) => `<option value="${s.id}" ${s.id === sel ? 'selected' : ''}>${esc(s.full_name)}</option>`).join('');
+  return (withEmpty ? `<option value="">${withEmpty}</option>` : '') + activeStaff().map((s) => `<option value="${s.id}" ${s.id === sel ? 'selected' : ''}>${esc(s.full_name)}${s.level ? ' · ' + s.level : ''}</option>`).join('');
 }
+const LEVELS = ['Director', 'Senior', 'Stylist', 'Junior'];
+// Dịch vụ cắt có cấp (vd "Cắt tóc nữ – Senior") → đổi sang đúng cấp của thợ chính, kèm giá
+function levelSwap(it, staffId) {
+  const st = S.staff.find((x) => x.id === Number(staffId));
+  if (!st || !st.level || !it.service_id) return false;
+  const sv = S.services.find((x) => x.id === Number(it.service_id));
+  const m = sv && sv.name.match(/^(.*) – (Director|Senior|Stylist|Junior)$/);
+  if (!m || m[2] === st.level) return false;
+  const alt = S.services.find((x) => x.active && x.name === `${m[1]} – ${st.level}`);
+  if (!alt) return false;
+  it.service_id = alt.id; it.price = alt.price; return true;
+}
+const WARRANTY_EXCLUDE = 'Không bảo hành khi tóc đã chỉnh sửa ở nơi khác, không chăm sóc đúng hướng dẫn, hoặc do tác động bên ngoài.';
+function warrantyLines(ws) { return (ws || []).map((w) => `🛡 ${w.label}: đến ${dmy(w.until)}. ${w.note}`); }
 function telLinks(phone) {
   if (!phone) return '<span class="muted small">Chưa có SĐT</span>';
   return `<a href="tel:${esc(phone)}">${esc(phone)}</a> · <a href="https://zalo.me/${esc(phone)}" target="_blank" rel="noopener">Zalo</a>`;
@@ -453,12 +467,14 @@ async function showReceipt(id) {
     ${v.tip_private ? line('Tip riêng · ' + esc(staffName(v.tip_private_to)), money(v.tip_private)) : ''}
     ${r.card_balance != null ? line(`Số dư thẻ còn lại`, money(r.card_balance), true) : ''}
     ${s.bank_info && paid ? `<hr><div class="rc-c small">${esc(s.bank_info)}</div>` : ''}
+    ${v.warranties && v.warranties.length ? `<hr><div class="small"><b>BẢO HÀNH</b>${warrantyLines(v.warranties).map((l) => `<div>${esc(l)}</div>`).join('')}<div class="muted">${esc(WARRANTY_EXCLUDE)}</div></div>` : ''}
     <hr><div class="rc-c">${esc(s.footer || 'Cảm ơn quý khách!')}</div></div>`;
   const text = [`${s.name} – HÓA ĐƠN ${v.code}`, `Ngày: ${dmy(v.date)} ${v.time || ''}`, `Khách: ${v.customer_name}`, '',
     ...v.items.map((i) => `• ${i.name}: ${money(i.price)}`),
     v.surcharge ? `• Phụ thu: ${money(v.surcharge)}` : '', v.discount ? `• Giảm giá: −${money(v.discount)}` : '',
     `Tổng dịch vụ: ${money(v.total)}`, v.card_paid ? `Trừ thẻ: −${money(v.card_paid)}` : '', `Thanh toán: ${money(paid)}${v.payment_method && paid ? ' (' + v.payment_method + ')' : ''}`,
-    r.card_balance != null ? `Số dư thẻ còn lại: ${money(r.card_balance)}` : '', '', s.footer || ''].filter((x, i, arr) => x !== '' || (arr[i - 1] !== '' && i > 0)).join('\n');
+    r.card_balance != null ? `Số dư thẻ còn lại: ${money(r.card_balance)}` : '',
+    ...(v.warranties && v.warranties.length ? ['', 'BẢO HÀNH:', ...warrantyLines(v.warranties), WARRANTY_EXCLUDE] : []), '', s.footer || ''].filter((x, i, arr) => x !== '' || (arr[i - 1] !== '' && i > 0)).join('\n');
   openModal('Hóa đơn ' + v.code, html + `<div class="modal-foot"><button class="btn" id="rcPrint">🖨 In</button><button class="btn primary" id="rcCopy">📋 Copy gửi Zalo</button>
     ${v.customer_phone ? `<a class="btn" href="https://zalo.me/${esc(v.customer_phone)}" target="_blank" rel="noopener">Mở Zalo khách</a>` : ''}</div>`);
   $('#rcPrint').onclick = () => window.print();
@@ -1055,6 +1071,7 @@ async function visitForm(v = {}, after) {
     $$('.isvc', f).forEach((s) => (s.onchange = () => {
       const o = s.selectedOptions[0], price = o && o.dataset.price ? Number(o.dataset.price) : '';
       items[s.dataset.i] = s.value.startsWith('m') ? { material_id: Number(s.value.slice(1)), qty: 1, price } : { service_id: Number(s.value) || '', price };
+      if (levelSwap(items[s.dataset.i], f.main_staff_id.value)) toast('Đã đổi sang giá cắt đúng cấp của thợ chính');
       renderItems(); autoRecipe();
     }));
     $$('.iqty', f).forEach((q) => (q.oninput = () => { const it = items[q.dataset.i]; const m = matById(it.material_id); it.qty = Math.max(1, Number(q.value) || 1); if (m && m.sell_price) { it.price = m.sell_price * it.qty; $(`.iprice[data-i="${q.dataset.i}"]`, f).value = it.price; } calc(); }));
@@ -1077,6 +1094,8 @@ async function visitForm(v = {}, after) {
       <div class="row"><span>Doanh số lượt này</span><span class="num big">${money(total)}</span></div>
       ${cardSel ? `<div class="row"><span>Trừ thẻ</span><span class="num">−${money(cardPaid)}</span></div>` : ''}
       <div class="row"><span><b>Khách trả thêm</b></span><span class="num big">${money(Math.max(0, total - cardPaid))}</span></div>
+      ${Number(f.surcharge.value) > 0 ? (() => { const sc = Number(f.surcharge.value), r = S.settings.surcharge_salon_rate ?? 0.33, st = sc - Math.round(sc * r), as = f.assistant_id.value ? Math.floor(st / 2) : 0;
+        return `<div class="row small muted"><span>Phụ thu chia: cửa hàng ${money(sc - st)} (${Math.round(r * 100)}%) · thợ chính ${money(st - as)}${as ? ' · người phụ ' + money(as) : ''}</span></div>`; })() : ''}
       ${f.time.value >= '19:00' && sub && !Number(f.surcharge.value) ? `<div class="row small" style="color:var(--warn)"><span>Lịch sau 19:00: phụ thu 10% theo bảng giá</span><button type="button" class="btn sm" id="eveSur">+ ${money(Math.round(sub * 0.1 / 1000) * 1000)}</button></div>` : ''}
       ${isMgr() && (used.length || items.some((i) => i.material_id)) ? (() => {
         const cost = Math.round(used.reduce((t, u) => { const m = matById(u.material_id); return t + (m ? toUnits(m, u.amt || 0) * (m.avg_cost || 0) : 0); }, 0)
@@ -1178,10 +1197,12 @@ async function visitForm(v = {}, after) {
     if (!cid) return;
     let b; try { b = await api(`/customers/${cid}/brief`); } catch { return; }
     if (!isEdit && !f.main_staff_id.value && b.staff_id) f.main_staff_id.value = b.staff_id;
-    $('#fHint').innerHTML = b.formula || b.hair_notes ? `<div class="totals small" style="margin-bottom:6px">${b.staff_name ? `<div>Thợ phụ trách: <b>${esc(b.staff_name)}</b></div>` : ''}
+    const wb = (b.warranties || []).map((x) => `<div class="totals small" style="margin-bottom:6px;border-left:3px solid var(--warn)"><b>🛡 Khách đang trong hạn bảo hành</b> · lượt ${esc(x.code)} ngày ${dmy(x.date)}${x.staff_name ? ' (' + esc(x.staff_name) + ')' : ''}
+      ${warrantyLines(x.warranties).map((l) => `<div>${esc(l)}</div>`).join('')}<div class="muted">Nếu làm lại do lỗi kỹ thuật: ghi giảm giá với lý do "Bảo hành lượt ${esc(x.code)}".</div></div>`).join('');
+    $('#fHint').innerHTML = wb + (b.formula || b.hair_notes ? `<div class="totals small" style="margin-bottom:6px">${b.staff_name ? `<div>Thợ phụ trách: <b>${esc(b.staff_name)}</b></div>` : ''}
       ${b.hair_notes ? `<div><span class="muted">Lưu ý tóc:</span> ${esc(b.hair_notes)}</div>` : ''}
       ${b.formula ? `<div><span class="muted">Công thức khách (${dmy(b.formula_at)}${b.formula_by_name ? ', ' + esc(b.formula_by_name) : ''}):</span><div class="pre">${esc(b.formula)}</div>
-      ${!f.formula.value ? '<button type="button" class="btn sm" id="useF">↓ Dùng lại công thức này</button>' : ''}` : ''}</div>` : '';
+      ${!f.formula.value ? '<button type="button" class="btn sm" id="useF">↓ Dùng lại công thức này</button>' : ''}` : ''}</div>` : '');
     const u = $('#useF'); if (u) u.onclick = () => { f.formula.value = b.formula; u.remove(); };
   };
   { let ft; f.formula.addEventListener('input', () => { clearTimeout(ft); ft = setTimeout(() => applyFormula(false), 500); }); }
@@ -1196,9 +1217,11 @@ async function visitForm(v = {}, after) {
     $('#addUsed').onclick = () => { usedTouched = true; used.push({ material_id: '', amt: '' }); renderUsed(); };
     $('#recipeFill').onclick = () => { const r = recipeFor(items); if (!r.length) return toast('Dịch vụ đã chọn chưa có định mức. Quản lý cài ở Kho & giá cốt → Định mức'); used = r; usedTouched = true; renderUsed(); };
   }
-  const vss = svcSearch('vSvcQ', (sv) => { const empty = items.findIndex((i) => !i.service_id && !i.name); const it = { service_id: sv.id, price: sv.price }; if (empty >= 0) items[empty] = it; else items.push(it); renderItems(); });
+  const vss = svcSearch('vSvcQ', (sv) => { const empty = items.findIndex((i) => !i.service_id && !i.name); const it = { service_id: sv.id, price: sv.price }; levelSwap(it, f.main_staff_id.value); if (empty >= 0) items[empty] = it; else items.push(it); renderItems(); });
   $('#vSvcS').innerHTML = vss.html; vss.bind();
   for (const n of ['surcharge', 'discount', 'time']) f[n].addEventListener('input', calc);
+  f.assistant_id.addEventListener('change', calc);
+  f.main_staff_id.addEventListener('change', () => { if (items.map((it) => levelSwap(it, f.main_staff_id.value)).some(Boolean)) { renderItems(); toast('Đã đổi giá cắt theo cấp của thợ chính'); } });
   renderItems();
   if (!isEdit && !used.length) autoRecipe(); else renderUsed();
   loadCards(custSel && custSel.id);
@@ -1296,6 +1319,9 @@ VIEWS.reminders = async (main) => {
         <div class="small muted">${esc(a.note || '')}${a.staff_name ? ' · ' + esc(a.staff_name) : ''} ${telLinks(a.phone)}</div></div>
         <div class="row" style="justify-content:flex-end">${S.settings.payment_methods.slice(0, 3).map((m) => `<button class="btn sm" data-paid="${a.id}" data-m="${esc(m)}">Đã thu: ${esc(m)}</button>`).join('')}</div></div>`).join('')}</div>` : ''}
     ${r.backup && r.backup.due ? `<div class="card">${backupBox(r.backup)}</div>` : ''}
+    ${r.warranty && r.warranty.length ? `<div class="card"><h3>🛡 Khách đang trong hạn bảo hành <span class="badge">${r.warranty.length}</span></h3><div class="small muted">Khách quay lại báo lỗi trong hạn: sửa miễn phí theo chính sách. ${esc(WARRANTY_EXCLUDE)}</div>
+      ${r.warranty.map((x) => `<div class="list-item"><div style="flex:1;min-width:0"><b>${x.customer_id ? `<a href="#customer?id=${x.customer_id}">${esc(x.customer_name || '')}</a>` : ''}</b> <span class="small muted">lượt ${esc(x.code)} · ${dmy(x.date)}${x.staff_name ? ' · ' + esc(x.staff_name) : ''}</span>
+        ${x.warranties.map((w) => `<div class="small">${esc(w.label)}: <b>đến ${dmy(w.until)}</b></div>`).join('')}</div></div>`).join('')}</div>` : ''}
     ${r.expenses && r.expenses.pending_count ? `<div class="card"><h3>💸 Khoản chi chờ duyệt <span class="badge bad">${r.expenses.pending_count}</span></h3><div class="small muted">Tổng ${money(r.expenses.pending_amount)} · quỹ còn ${money(r.expenses.balance)}</div><div style="margin-top:8px"><a class="btn sm primary" href="#expenses">Mở để duyệt →</a></div></div>` : ''}
     ${sec('returns', '🔁 Khách đến hạn quay lại', 'Đã quá số ngày cài đặt kể từ lần làm gần nhất và chưa có lịch hẹn.', r.returns, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b>${who(c)} <span class="small muted">lần cuối ${dmy(c.last_date)} · ${c.days} ngày · ${c.n} lượt</span>`)}
     </div>`;
@@ -1685,14 +1711,15 @@ VIEWS.sales = async (main) => {
       <div class="stat-line"><span class="muted">HH dịch vụ</span><b>${money(x.main_commission)}</b></div>
       <div class="stat-line"><span class="muted">HH làm phụ</span><b>${money(x.assistant_commission)}</b></div>
       <div class="stat-line"><span class="muted">HH bán thẻ (${x.cards_count} thẻ)</span><b>${money(x.card_commission)}</b></div>
+      ${x.surcharge_share ? `<div class="stat-line"><span class="muted">Phần phụ thu được chia</span><b>${money(x.surcharge_share)}</b></div>` : ''}
       <div class="stat-line"><span>Tổng hoa hồng (tạm tính)</span><b>${money(x.total_commission)}</b></div>
       <div class="stat-line"><span class="muted">Tip khách ghi ở lượt</span><b>${money(x.tip)}</b></div></div>`).join('') : ''}
     <div class="card ${!isMgr() ? 'hidden' : ''}"><h3>Theo nhân viên</h3><div class="table-wrap"><table><thead><tr><th>Nhân viên</th><th class="num">Lượt chính</th><th class="num">Lượt phụ</th>${G.map((g) => `<th class="num">${esc(g)}</th>`).join('')}<th class="num">Tổng DS</th>
-      <th class="num">HH dịch vụ</th><th class="num">HH phụ</th><th class="num">Thẻ bán</th><th class="num">HH thẻ</th><th class="num">Tổng HH</th><th class="num">Tip</th></tr></thead>
+      <th class="num">HH dịch vụ</th><th class="num">HH phụ</th><th class="num">Thẻ bán</th><th class="num">HH thẻ</th><th class="num">Phụ thu</th><th class="num">Tổng HH</th><th class="num">Tip</th></tr></thead>
       <tbody>${r.rows.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td class="num">${x.main_count}</td><td class="num">${x.assist_count}</td>${G.map((g) => `<td class="num">${money(x.by_group[g])}</td>`).join('')}
       <td class="num"><b>${money(x.sales)}</b></td><td class="num">${money(x.main_commission)}</td><td class="num">${money(x.assistant_commission)}</td><td class="num">${x.cards_count} · ${money(x.cards_amount)}</td>
-      <td class="num">${money(x.card_commission)}</td><td class="num"><b>${money(x.total_commission)}</b></td><td class="num">${money(x.tip)}</td></tr>`).join('')}</tbody></table></div>
-      <div class="small muted" style="margin-top:8px">Hoa hồng tạm tính theo % từng dịch vụ (Cài đặt › Dịch vụ) và % người phụ, bán thẻ (Cài đặt › Tham số). Chưa gồm lương cứng, thưởng mốc doanh số. Tip được chia chung ở trang <a href="#tips">Chia tip</a>.</div></div>
+      <td class="num">${money(x.card_commission)}</td><td class="num">${money(x.surcharge_share)}</td><td class="num"><b>${money(x.total_commission)}</b></td><td class="num">${money(x.tip)}</td></tr>`).join('')}</tbody></table></div>
+      <div class="small muted" style="margin-top:8px">Hoa hồng tạm tính theo % từng dịch vụ (Cài đặt › Dịch vụ) và % người phụ, bán thẻ (Cài đặt › Tham số). Phụ thu: cửa hàng giữ ${Math.round((S.settings.surcharge_salon_rate ?? 0.33) * 100)}%, còn lại chia thợ chính / người phụ của lượt đó. Chưa gồm lương cứng, thưởng mốc doanh số. Tip được chia chung ở trang <a href="#tips">Chia tip</a>.</div></div>
     ${staffCustomerCard(sc)}`;
   const set = (a, b) => go('sales', { from: a, to: b });
   $('#f').onchange = (e) => set(e.target.value, to); $('#t').onchange = (e) => set(from, e.target.value);
@@ -1879,14 +1906,15 @@ VIEWS.settings = async (main) => {
   if (tab === 'users') {
     const users = await api('/users');
     sb.innerHTML = `<div class="row" style="margin-bottom:10px"><span class="small muted">Mỗi người 1 tài khoản riêng. Nhân viên nghỉ việc: bỏ tick "Đang làm" để khóa ngay.</span><span class="spacer"></span><button class="btn primary sm" id="nu">+ Tài khoản</button></div>
-      <div class="table-wrap"><table><thead><tr><th>Họ tên</th><th>Đăng nhập</th><th>Vai trò</th><th>Trạng thái</th><th>Hoa hồng</th><th></th></tr></thead><tbody>
-      ${users.map((u) => `<tr style="${u.active ? '' : 'opacity:.5'}"><td><b>${esc(u.full_name)}</b>${u.aliases ? `<div class="small muted">tên khác: ${esc(u.aliases)}</div>` : ''}</td><td>${u.can_login ? esc(u.username) : '<span class="muted">không đăng nhập</span>'}</td><td>${ROLE[u.role]}</td>
+      <div class="table-wrap"><table><thead><tr><th>Họ tên</th><th>Đăng nhập</th><th>Vai trò</th><th>Cấp</th><th>Trạng thái</th><th>Hoa hồng</th><th></th></tr></thead><tbody>
+      ${users.map((u) => `<tr style="${u.active ? '' : 'opacity:.5'}"><td><b>${esc(u.full_name)}</b>${u.aliases ? `<div class="small muted">tên khác: ${esc(u.aliases)}</div>` : ''}</td><td>${u.can_login ? esc(u.username) : '<span class="muted">không đăng nhập</span>'}</td><td>${ROLE[u.role]}</td><td>${esc(u.level || '')}</td>
       <td>${u.active ? (u.must_change_pw && u.can_login ? '<span class="badge warn">chưa đổi MK</span>' : '<span class="badge ok">đang làm</span>') : '<span class="badge">đã khóa</span>'}</td><td>${u.commission_enabled ? 'Có' : 'Không'}</td>
       <td class="row"><button class="btn sm" data-eu="${u.id}">Sửa</button>${u.can_login ? `<button class="btn sm" data-pw="${u.id}">Đặt lại MK</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
     const form = (u = {}) => {
       openModal(u.id ? 'Sửa tài khoản' : 'Tài khoản mới', `<form id="uf"><label>Họ tên (hiển thị)</label><input name="full_name" value="${esc(u.full_name || '')}" required>
         ${u.id ? '' : '<label>Tên đăng nhập (không dấu)</label><input name="username" autocapitalize="none" required><label>Mật khẩu tạm (≥6 ký tự)</label><input name="password" required minlength="6">'}
         <label>Vai trò</label><select name="role">${Object.entries(ROLE).map(([k, l]) => `<option value="${k}" ${u.role === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <label>Cấp thợ (theo bảng giá cắt)</label><select name="level"><option value="">— Không áp dụng —</option>${LEVELS.map((l) => `<option ${u.level === l ? 'selected' : ''}>${l}</option>`).join('')}</select>
         <label>Tên khác trong sổ Excel (cách nhau dấu phẩy)</label><input name="aliases" value="${esc(u.aliases || '')}">
         <label style="display:flex;gap:8px;color:var(--text)"><input type="checkbox" name="active" ${u.active !== 0 ? 'checked' : ''}> Đang làm (bỏ tick = khóa tài khoản)</label>
         <label style="display:flex;gap:8px;color:var(--text)"><input type="checkbox" name="can_login" ${u.can_login !== 0 ? 'checked' : ''}> Được đăng nhập</label>
@@ -1909,7 +1937,7 @@ VIEWS.settings = async (main) => {
       ['bank_info', 'Thông tin chuyển khoản (in trên hóa đơn)', 'text'], ['receipt_footer', 'Lời cảm ơn cuối hóa đơn', 'text'], ['return_days', 'Nhắc khách quay lại sau (ngày)', 'number'], ['birthday_days', 'Nhắc sinh nhật trước (ngày)', 'number'],
       ['card_expiry_days', 'Nhắc thẻ sắp hết hạn trước (ngày)', 'number'], ['card_low_balance', 'Nhắc khi số dư thẻ ≤ (đồng)', 'number'],
       ['assistant_rate', 'Hoa hồng người phụ (tỷ lệ, 0.03 = 3%)', 'number'], ['card_new_rate', 'HH bán thẻ mới (0.05 = 5%)', 'number'],
-      ['card_renewal_rate', 'HH khách mua lại thẻ (0.03 = 3%)', 'number'], ['payment_methods', 'Hình thức thanh toán (cách nhau dấu phẩy)', 'text']];
+      ['card_renewal_rate', 'HH khách mua lại thẻ (0.03 = 3%)', 'number'], ['surcharge_salon_rate', 'Phụ thu: phần cửa hàng giữ (0.33 = 33%, còn lại chia thợ)', 'number'], ['payment_methods', 'Hình thức thanh toán (cách nhau dấu phẩy)', 'text']];
     sb.innerHTML = `<form id="pf"><div class="form-grid">${F.map(([k, l, t]) => `<div><label>${l}</label><input name="${k}" type="${t}" step="any" value="${esc(s[k])}"></div>`).join('')}</div>
       <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu tham số</button></div></form>`;
     $('#pf').onsubmit = (e) => { e.preventDefault(); guard($('#pf button'), async () => { await api('/settings', { method: 'PUT', body: formData($('#pf')) }); toast('Đã lưu'); boot(); }); };
