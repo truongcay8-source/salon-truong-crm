@@ -327,6 +327,17 @@ app.get('/api/search', (req, res) => {
 });
 
 // ---------- Lịch hẹn ----------
+// Khách chưa thanh toán (ô hồng): quản lý ghi đã thu bằng hình thức nào
+app.post('/api/appointments/:id/pay-note', MGR, (req, res) => {
+  const a = db.prepare('SELECT id, pay_note FROM appointments WHERE id=?').get(int(req.params.id));
+  if (!a) throw new HttpError(404, 'Không tìm thấy lịch hẹn');
+  const methods = getSettings().payment_methods.split(',').map((s) => s.trim());
+  const v = str(req.body.pay_note);
+  if (v && v !== 'Chưa thanh toán' && !methods.includes(v)) throw bad('Hình thức thanh toán không hợp lệ');
+  db.prepare('UPDATE appointments SET pay_note=? WHERE id=?').run(v, a.id);
+  audit(req.user.id, 'appointment_pay', 'appointment', a.id, { pay_note: [a.pay_note, v] });
+  res.json({ ok: true });
+});
 app.get('/api/appointments', (req, res) => {
   const from = L.isDate(req.query.from) ? req.query.from : today();
   const to = L.isDate(req.query.to) ? req.query.to : from;
@@ -596,6 +607,11 @@ app.get('/api/reminders', (req, res) => {
   if (stockMod.perm(req.user).stock_view) { r.stock = stockMod.stockAlerts(); r.counts.stock = r.stock.filter((m) => !m.ordered_at).length; }
   if (req.user.role !== 'staff') { const f = require('./expenses').fundState(); r.counts.expenses = f.pending_count; r.expenses = f; }
   if (req.user.role !== 'staff') { r.backup = pcBackupState(); r.counts.backup = r.backup.due ? 1 : 0; }
+  if (req.user.role !== 'staff') {
+    r.unpaid = db.prepare(`SELECT a.id, a.date, a.time, a.note, a.customer_id, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, u.full_name staff_name
+      FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id WHERE a.pay_note='Chưa thanh toán' AND a.status<>'cancelled' ORDER BY a.date, a.time`).all();
+    r.counts.unpaid = r.unpaid.length;
+  }
   res.json(r);
 });
 // Khách phụ trách theo thợ: nhân viên chỉ xem dòng của mình, không có số tiền
