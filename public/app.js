@@ -1807,31 +1807,9 @@ function staffCustomerCard(sc) {
 }
 
 // ---------- Nhập / xuất Excel ----------
-VIEWS.excel = async (main) => {
-  main.innerHTML = header('Nhập / Xuất Excel') + `<div class="grid two">
-    <div class="card"><h3>📥 Nhập từ Excel</h3>
-      <div class="small muted">Nhận các mẫu: <b>Salon Nếp – Nhật ký</b> (khách, nhật ký dịch vụ, danh mục), <b>CRM Nếp Hair</b> (CRM Khách, lịch hẹn đã đặt), <b>Sổ đặt lịch</b> (tab Tháng 10, Tháng 11… + Quản lý Thẻ 1Tr) , <b>sổ nhập mỹ phẩm/hóa chất</b> (file theo dõi chi phí, tab "Nhập mỹ phẩm" → vào Kho) và file <b>xuất từ phần mềm này</b>.
-      Khách trùng được ghép theo mã cũ → SĐT → tên. Nhập lại cùng file không bị nhân đôi.</div>
-      <form id="imp"><label>File .xlsx</label><input type="file" name="file" accept=".xlsx" required>
-      <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="include_history"> Nhập cả lịch sử cũ (lượt "Hoàn thành" ở tab Lịch sử của CRM Nếp Hair / lịch các ngày đã qua trong Sổ đặt lịch)</label>
-      <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="book_money" checked> Sổ đặt lịch: lấy <b>số tiền từ 01/11</b> theo cột Thu tiền / Tiền Tip → tạo lượt làm, thay các lượt nhập từ Nhật ký cùng ngày (lượt nhân viên tự ghi trong app giữ nguyên). Khách trả dư → tip chung.</label>
-      <div class="small muted">Không nên tick nếu đã nhập file Nhật ký: 2 file ghi cùng các lượt 25/10–6/11 → doanh số bị cộng 2 lần (đã có chặn trùng theo khách + ngày).</div>
-      <div class="err"></div><div class="row" style="margin-top:12px"><button class="btn" data-mode="1">Xem trước</button><button class="btn primary" data-mode="0">Nhập vào hệ thống</button></div></form>
-      <div id="impRes"></div></div>
-    <div class="card"><h3>📤 Xuất ra Excel</h3><div class="small muted">Gồm các tab: Khách hàng, Lượt làm, Lịch hẹn, Thẻ trả trước, Dịch vụ.</div>
-      <label>Lượt làm từ ngày</label><input type="date" id="ef" value="${S.today.slice(0, 8)}01"><label>đến ngày</label><input type="date" id="et" value="${S.today}">
-      <div class="row" style="margin-top:12px"><button class="btn primary" id="exp">Tải file Excel</button><button class="btn" id="expAll">Xuất toàn bộ</button></div></div></div>`;
-  $$('#imp [data-mode]').forEach((b) => (b.onclick = (e) => {
-    e.preventDefault();
-    const f = $('#imp');
-    if (!f.file.files.length) { $('#imp .err').textContent = 'Chọn file Excel'; return; }
-    guard(b, async () => {
-      const fd = new FormData();
-      fd.append('file', f.file.files[0]); fd.append('dry_run', b.dataset.mode); fd.append('include_history', f.include_history.checked ? '1' : '0'); fd.append('book_money', f.book_money.checked ? '1' : '0');
-      if (b.dataset.mode === '0' && !confirm('Nhập dữ liệu vào hệ thống?')) return;
-      const r = await api('/import', { method: 'POST', body: fd });
+function showImport(r, sel) {
       const s = r.summary;
-      $('#impRes').innerHTML = `<div class="totals" style="margin-top:12px"><b>${r.dry_run ? 'XEM TRƯỚC (chưa lưu)' : '✅ ĐÃ NHẬP'}</b> · ${esc(s.format)}
+      $(sel).innerHTML = `<div class="totals" style="margin-top:12px"><b>${r.dry_run ? 'XEM TRƯỚC (chưa lưu)' : '✅ ĐÃ NHẬP'}</b> · ${esc(s.format)}
         <div class="stat-line"><span>Khách mới</span><b>${s.customers_created}</b></div><div class="stat-line"><span>Khách ghép với khách có sẵn</span><b>${s.customers_merged}</b></div>
         <div class="stat-line"><span>Lượt làm thêm mới</span><b>${s.visits_created}</b></div><div class="stat-line"><span>Lượt đã có (bỏ qua)</span><b>${s.visits_skipped_existing}</b></div>
         <div class="stat-line"><span>Lượt trùng khách + ngày (bỏ qua)</span><b>${s.visits_skipped_duplicate}</b></div><div class="stat-line"><span>Lịch hẹn mới</span><b>${s.appointments_created}</b></div>
@@ -1861,9 +1839,54 @@ VIEWS.excel = async (main) => {
         ${s.staff_created.length ? `<div class="small">Nhân viên lạ được tạo (không đăng nhập được): ${s.staff_created.map(esc).join(', ')}</div>` : ''}
         ${s.matched_by_name.length ? `<details class="small"><summary>${s.matched_by_name.length} khách ghép theo TÊN — nên kiểm tra</summary>${s.matched_by_name.map(esc).join(', ')}</details>` : ''}
         ${s.warnings.map((w) => `<div class="small" style="color:var(--warn)">⚠ ${esc(w)}</div>`).join('')}</div>`;
+}
+VIEWS.excel = async (main) => {
+  const gs = await api('/gsync').catch(() => null);
+  main.innerHTML = header('Nhập / Xuất Excel') + (gs ? `<div class="card" id="gsCard"><h3>🔄 Đồng bộ sổ đặt lịch từ Google Sheet</h3>
+      <div class="small muted">Dán link Google Sheet "Đặt lịch – Ghi sổ tiền" một lần. Sheet cần chia sẻ <b>"Bất kỳ ai có đường liên kết – Người xem"</b>.
+      Máy chủ tự lấy số liệu mỗi ${gs.every_min} phút (lịch hẹn, tiền từ 01/11, tip, khoản chi quỹ, thẻ tri ân) — không cần tải file về.</div>
+      <label>Link Google Sheet</label><input id="gsUrl" placeholder="https://docs.google.com/spreadsheets/d/…" value="${esc(gs.url)}">
+      <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" id="gsAuto" ${gs.auto ? 'checked' : ''}> Tự đồng bộ mỗi ${gs.every_min} phút</label>
+      <div class="small" style="margin-top:6px">${gs.last_at ? `Lần đồng bộ gần nhất: <b>${esc(gs.last_at)}</b>${gs.last ? ` · ${gs.last.days} ngày · ${money(gs.last.total)} · tip ${money(gs.last.tip)} · ${gs.last.expenses} khoản chi${gs.last.check ? ` · ⚠ ${gs.last.check} dòng cần kiểm tra` : ''}` : ''}` : '<span class="muted">Chưa đồng bộ lần nào</span>'}
+        ${gs.last_error ? `<div style="color:var(--warn)">⚠ Lần trước lỗi: ${esc(gs.last_error)}</div>` : ''}</div>
+      <div class="err"></div><div class="row" style="margin-top:12px"><button class="btn" id="gsSave">Lưu link</button><button class="btn" id="gsPrev">Xem trước</button><button class="btn primary" id="gsRun">🔄 Đồng bộ ngay</button></div>
+      <div id="gsRes"></div></div>` : '') + `<div class="grid two">
+    <div class="card"><h3>📥 Nhập từ Excel</h3>
+      <div class="small muted">Nhận các mẫu: <b>Salon Nếp – Nhật ký</b> (khách, nhật ký dịch vụ, danh mục), <b>CRM Nếp Hair</b> (CRM Khách, lịch hẹn đã đặt), <b>Sổ đặt lịch</b> (tab Tháng 10, Tháng 11… + Quản lý Thẻ 1Tr) , <b>sổ nhập mỹ phẩm/hóa chất</b> (file theo dõi chi phí, tab "Nhập mỹ phẩm" → vào Kho) và file <b>xuất từ phần mềm này</b>.
+      Khách trùng được ghép theo mã cũ → SĐT → tên. Nhập lại cùng file không bị nhân đôi.</div>
+      <form id="imp"><label>File .xlsx</label><input type="file" name="file" accept=".xlsx" required>
+      <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="include_history"> Nhập cả lịch sử cũ (lượt "Hoàn thành" ở tab Lịch sử của CRM Nếp Hair / lịch các ngày đã qua trong Sổ đặt lịch)</label>
+      <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="book_money" checked> Sổ đặt lịch: lấy <b>số tiền từ 01/11</b> theo cột Thu tiền / Tiền Tip → tạo lượt làm, thay các lượt nhập từ Nhật ký cùng ngày (lượt nhân viên tự ghi trong app giữ nguyên). Khách trả dư → tip chung.</label>
+      <div class="small muted">Không nên tick nếu đã nhập file Nhật ký: 2 file ghi cùng các lượt 25/10–6/11 → doanh số bị cộng 2 lần (đã có chặn trùng theo khách + ngày).</div>
+      <div class="err"></div><div class="row" style="margin-top:12px"><button class="btn" data-mode="1">Xem trước</button><button class="btn primary" data-mode="0">Nhập vào hệ thống</button></div></form>
+      <div id="impRes"></div></div>
+    <div class="card"><h3>📤 Xuất ra Excel</h3><div class="small muted">Gồm các tab: Khách hàng, Lượt làm, Lịch hẹn, Thẻ trả trước, Dịch vụ.</div>
+      <label>Lượt làm từ ngày</label><input type="date" id="ef" value="${S.today.slice(0, 8)}01"><label>đến ngày</label><input type="date" id="et" value="${S.today}">
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="exp">Tải file Excel</button><button class="btn" id="expAll">Xuất toàn bộ</button></div></div></div>`;
+  $$('#imp [data-mode]').forEach((b) => (b.onclick = (e) => {
+    e.preventDefault();
+    const f = $('#imp');
+    if (!f.file.files.length) { $('#imp .err').textContent = 'Chọn file Excel'; return; }
+    guard(b, async () => {
+      const fd = new FormData();
+      fd.append('file', f.file.files[0]); fd.append('dry_run', b.dataset.mode); fd.append('include_history', f.include_history.checked ? '1' : '0'); fd.append('book_money', f.book_money.checked ? '1' : '0');
+      if (b.dataset.mode === '0' && !confirm('Nhập dữ liệu vào hệ thống?')) return;
+      const r = await api('/import', { method: 'POST', body: fd });
+      showImport(r, '#impRes');
       if (!r.dry_run) { S.services = await api('/services'); S.staff = await api('/staff'); S.materials = await api('/materials'); refreshReminderBadge(); }
     });
   }));
+  if (gs) {
+    const saveGs = () => api('/gsync', { method: 'PUT', body: { url: $('#gsUrl').value, auto: $('#gsAuto').checked } });
+    $('#gsSave').onclick = () => guard($('#gsSave'), async () => { await saveGs(); toast('Đã lưu link'); });
+    $('#gsAuto').onchange = () => saveGs().catch((e) => toast(e.message));
+    $('#gsPrev').onclick = () => guard($('#gsPrev'), async () => { await saveGs(); showImport(await api('/gsync/run', { method: 'POST', body: { dry_run: true } }), '#gsRes'); });
+    $('#gsRun').onclick = () => guard($('#gsRun'), async () => {
+      await saveGs();
+      showImport(await api('/gsync/run', { method: 'POST', body: { dry_run: false } }), '#gsRes');
+      S.services = await api('/services'); S.staff = await api('/staff'); refreshReminderBadge(); toast('Đã đồng bộ từ Google Sheet');
+    });
+  }
   const dl = async (from, to) => {
     const res = await api(`/export?from=${from}&to=${to}`, { raw: true });
     if (!res.ok) return toast('Không xuất được file');

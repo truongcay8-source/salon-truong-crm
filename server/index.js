@@ -686,6 +686,21 @@ app.post('/api/import', MGR, xlsxUpload.single('file'), async (req, res) => {
   if (!opts.dryRun) audit(req.user.id, 'import_excel', null, null, { file: req.file.originalname, ...result.summary });
   res.json(result);
 });
+// Đồng bộ sổ đặt lịch từ Google Sheet
+const gsync = require('./gsync');
+app.get('/api/gsync', MGR, (req, res) => res.json(gsync.state()));
+app.put('/api/gsync', MGR, (req, res) => {
+  try { res.json(gsync.save({ url: req.body.url, auto: req.body.auto == null ? null : !!req.body.auto })); }
+  catch (e) { throw bad(e.message); }
+});
+app.post('/api/gsync/run', MGR, async (req, res) => {
+  const dryRun = req.body.dry_run === true || req.body.dry_run === '1';
+  try {
+    const r = await gsync.run({ user: req.user, dryRun, force: true });
+    if (!dryRun) audit(req.user.id, 'import_excel', null, null, { file: 'Google Sheet', ...(r.summary || {}) });
+    res.json(r);
+  } catch (e) { throw bad(e.message); }
+});
 // Sao lưu về máy cá nhân hàng tuần: 1 file Excel đầy đủ, ghi lại ai tải lúc nào để nhắc tuần sau
 const BACKUP_EVERY_DAYS = 7;
 function pcBackupState() {
@@ -770,6 +785,7 @@ if (require.main === module) {
   const port = Number(process.env.PORT || 3000);
   app.listen(port, () => console.log(`CRM Salon Nếp chạy tại http://localhost:${port}`));
   startBackups();
+  gsync.startAutoSync();
 }
 
 module.exports = { app };
