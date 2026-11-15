@@ -235,6 +235,13 @@ const DEFAULT_SETTINGS = {
   // Cấp bậc thợ theo bảng giá (Director / Senior / Stylist / Junior) → chọn đúng giá cắt
   if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'level')) {
     db.exec('ALTER TABLE users ADD COLUMN level TEXT');
+  }
+}
+// Cấp thợ ban đầu (Vinh 15/11/2026): chạy 1 lần, sau khi đã có tài khoản
+function seedLevels() {
+  if (db.prepare("SELECT 1 FROM settings WHERE key='levels_seeded'").get()) return;
+  if (!db.prepare('SELECT COUNT(*) c FROM users').get().c) return;
+  {
     const f = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase();
     const LV = [['truong', 'Director'], ['duong', 'Stylist'], ['thoai', 'Junior']];
     for (const u of db.prepare('SELECT id, full_name FROM users').all()) {
@@ -243,6 +250,9 @@ const DEFAULT_SETTINGS = {
       if (hit) db.prepare('UPDATE users SET level=? WHERE id=? AND level IS NULL').run(hit[1], u.id);
     }
   }
+  db.prepare("INSERT OR REPLACE INTO settings(key,value) VALUES ('levels_seeded','1')").run();
+}
+{
   // Phụ thu (sau 19h…): cửa hàng giữ 33%, phần còn lại chia cho thợ làm lượt đó
   if (!db.prepare('PRAGMA table_info(visits)').all().some((c) => c.name === 'surcharge_main')) {
     db.exec('ALTER TABLE visits ADD COLUMN surcharge_main INTEGER NOT NULL DEFAULT 0; ALTER TABLE visits ADD COLUMN surcharge_assist INTEGER NOT NULL DEFAULT 0');
@@ -333,6 +343,7 @@ function seed() {
   }
 }
 seed();
+seedLevels();
 
 function audit(userId, action, entity, entityId, detail) {
   db.prepare('INSERT INTO audit_log(user_id,action,entity,entity_id,detail) VALUES (?,?,?,?,?)')

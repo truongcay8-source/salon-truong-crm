@@ -32,6 +32,9 @@ function cellColor(cell) {
   return null;
 }
 const PAY_COLOR = { green: 'Tiền mặt', yellow: 'Chuyển khoản', pink: 'Chưa thanh toán' };
+const pay_ = (c) => (c === 'red' ? null : PAY_COLOR[c] || null);
+const BM = require('./bookmoney');
+const BOOK_FROM = '2026-11-01'; // Vinh 15/11: số tiền từ tháng 11 lấy theo sổ đặt lịch
 function asText(v) {
   v = cellVal(v);
   if (v == null) return null;
@@ -241,7 +244,7 @@ async function importWorkbook(buffer, opts, user) {
   const summary = {
     format: null, customers_created: 0, customers_merged: 0, matched_by_name: [], services_added: 0,
     visits_created: 0, visits_skipped_existing: 0, visits_skipped_duplicate: 0, visits_skipped_invalid: 0,
-    appointments_created: 0, appointments_linked: 0, appointments_skipped: 0, appointments_cancelled: 0, pay_colors: {}, visits_paid_set: 0, assistants_found: 0, visits_assistant_set: 0, appointments_past_skipped: 0, cards_skipped_existing: 0, cards_created: 0, staff_created: [], warnings: [],
+    appointments_created: 0, appointments_linked: 0, appointments_skipped: 0, appointments_cancelled: 0, pay_colors: {}, visits_paid_set: 0, assistants_found: 0, visits_assistant_set: 0, appointments_past_skipped: 0, book: null, cards_skipped_existing: 0, cards_created: 0, staff_created: [], warnings: [],
   };
   const importer = { ...user, role: 'owner' }; // bỏ giới hạn ngày của nhân viên khi nhập lịch sử
 
@@ -387,12 +390,16 @@ async function importWorkbook(buffer, opts, user) {
       recognised = true; summary.format = summary.format || 'Sổ đặt lịch theo ngày';
       const t = L.today();
       for (const b of blocks) {
-        if (b.date < t && !opts.includeHistory) { summary.appointments_past_skipped += b.entries.length; continue; }
+        const money = opts.bookMoney && b.date >= BOOK_FROM && b.date < t;
+        if (b.date < t && !opts.includeHistory && !money) { summary.appointments_past_skipped += b.entries.length; continue; }
         for (const e of b.entries) {
           const phone = extractPhone(e.text);
-          const name = guessName(e.text);
-          const hit = cust.find('APP', null, phone, name);
+          const name = (money && BM.cleanName(e.text)) || guessName(e.text);
+          let hit = cust.find('APP', null, phone, name);
           const cancelled = e.color === 'red';
+          // Sổ có SĐT/tên khách → tạo hoặc bổ sung hồ sơ khách (điền SĐT còn thiếu)
+          if (money && !cancelled && (phone || name)) { const id = cust.upsert('APP', { name, phone }, false); if (id) hit = { id }; }
+          e.customerId = hit ? hit.id : null; e.cancelled = cancelled; e.pay = pay_(e.color);
           const pay = cancelled ? null : PAY_COLOR[e.color] || null;
           const status = cancelled ? 'cancelled' : b.date < t ? 'done' : 'booked';
           const reason = cancelled ? 'Ô đỏ trong sổ Excel: khách hủy / thợ nghỉ' : null;
@@ -404,6 +411,7 @@ async function importWorkbook(buffer, opts, user) {
           const dup = db.prepare(`SELECT id, status, pay_note FROM appointments WHERE date=? AND time=? AND IFNULL(staff_id,0)=IFNULL(?,0) AND (note=? OR service=?)`)
             .get(b.date, e.time, e.staffId, e.text, e.text);
           let apptId;
+          if (dup && hit) db.prepare('UPDATE appointments SET customer_id=COALESCE(customer_id,?) WHERE id=?').run(hit.id, dup.id);
           if (dup) {
             // Nhập lại file: cập nhật theo màu ô (hủy / hình thức thanh toán), không tạo trùng
             apptId = dup.id;
@@ -437,8 +445,67 @@ async function importWorkbook(buffer, opts, user) {
               summary.visits_assistant_set++;
             }
           }
-          void apptId;
+          e.apptId = apptId;
         }
+        if (money) bookVisits(b);
+      }
+      // ===== Tiền theo sổ (từ 01/11): mỗi ô = 1 lượt làm, tiền dòng chia theo ô, khách trả dư → tip chung =====
+      function bookVisits(b) {
+        const st = summary.book || (summary.book = { days: 0, visits: 0, updated: 0, replaced_nk: 0, kept_manual: 0, extra_tip: 0, tip: 0, total: 0, unpaid: 0, rows_check: [], no_money: [] });
+        st.days++;
+        // Lượt nhập từ Nhật ký/CRM cùng ngày → thay bằng số liệu sổ (lượt nhân viên tự ghi trong app giữ nguyên)
+        st.replaced_nk += db.prepare(`UPDATE visits SET status='deleted', delete_reason='Thay bằng số liệu sổ đặt lịch' WHERE date=? AND status='done' AND (import_ref LIKE 'NK:%' OR import_ref LIKE 'CRM:%')`).run(b.date).changes;
+        const services = db.prepare('SELECT id, name, price, active FROM services').all();
+        const byName = (n) => services.find((x) => x.name === n && x.active) || services.find((x) => x.name === n);
+        const staffRows = new Map(db.prepare('SELECT id, full_name, level FROM users').all().map((u) => [u.id, u]));
+        const mins = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+        const dayLabel = `${b.date.slice(8)}/${b.date.slice(5, 7)}`;
+        let carry = [];
+        const flush = (upTo) => { for (const e of carry.filter((x) => upTo == null || mins(upTo) - mins(x.time) > 60)) st.no_money.push(`${dayLabel} ${e.time}: ${e.text.slice(0, 60)}`); carry = upTo == null ? [] : carry.filter((x) => mins(upTo) - mins(x.time) <= 60); };
+        for (const row of b.rows) {
+          let es = row.entries.filter((e) => !e.cancelled && e.staffId);
+          flush(row.time);
+          // Dòng không ghi tiền: ô hồng = đã làm chưa thanh toán (tạo lượt); ô khác thường được cộng tiền ở dòng ngay dưới (≤ 60 phút)
+          if (!row.amount && !row.tip) {
+            carry.push(...es.filter((x) => x.pay !== 'Chưa thanh toán'));
+            es = es.filter((x) => x.pay === 'Chưa thanh toán');
+          } else if (carry.length && row.amount) {
+            const own = es.reduce((t, e) => t + (BM.parseEntry(e.text, staffRows.get(e.staffId), byName, services).explicit || 0), 0);
+            if (own && row.amount > own && es.every((e) => BM.parseEntry(e.text, staffRows.get(e.staffId), byName, services).explicit)) { es = [...carry, ...es]; carry = []; }
+            else if (!own && es.length) { /* không có giá ghi: không đoán được, giữ nguyên */ }
+          }
+          // Ô chỉ ghi chú cho khách cùng dòng ("huyen dung vocher…", "… ck sau") → không tính là lượt riêng
+          if (es.length > 1) {
+            const k = (e) => BM.fold(BM.cleanName(e.text) || '').replace(/^(chi|anh|em|c|a|e|b)\s+/, '').split(/\s+/)[0];
+            es = es.filter((e) => !(/voucher|vocher|voch|\bvc\b|dung the|con thua|con lai/.test(BM.fold(e.text)) && !BM.amounts(e.text).list.length && es.some((o) => o !== e && k(o) && k(o) === k(e))));
+          }
+          if (!es.length) continue;
+          for (const e of es) e.parsed = BM.parseEntry(e.text, staffRows.get(e.staffId), byName, services, es.length === 1 ? row.amount : 0);
+          BM.splitRow({ amount: row.amount, tip: row.tip, entries: es });
+          const sum = es.reduce((t, e) => t + e.amount + e.parsed.surcharge, 0);
+          if (es.some((e) => e.check) || (row.amount && Math.abs(row.amount - sum - es.reduce((t, e) => t + e.extraTip, 0)) >= 1000)) st.rows_check.push(`${b.date.slice(8)}/${b.date.slice(5, 7)} ${row.time}: sổ thu ${row.amount.toLocaleString('vi-VN')}, giá ghi trong ô ${es.reduce((t, e) => t + (e.parsed.explicit || e.est) + e.parsed.surcharge, 0).toLocaleString('vi-VN')} (${es.map((e) => e.text).join(' | ').slice(0, 90)})`);
+          for (const e of es) {
+            if (!e.customerId) { const id = cust.upsert('APP', { name: BM.cleanName(e.text) || ('Khách ' + e.time), phone: null }, false); e.customerId = id; }
+            const ref = 'SO:' + crypto.createHash('sha1').update([b.date, e.time, e.staffId, e.text].join('|')).digest('hex').slice(0, 16);
+            const manual = db.prepare(`SELECT 1 FROM visits WHERE date=? AND status='done' AND import_ref IS NULL AND main_staff_id=? AND (customer_id=? OR time=?)`).get(b.date, e.staffId, e.customerId, e.time);
+            if (manual) { st.kept_manual++; continue; }
+            const items = BM.fitItems(e.parsed.items.map((i) => ({ service_id: i.service_id, name: i.name, price: i.price, grp: i.grp })), e.amount);
+            if (!items.length) items.push({ name: e.text.slice(0, 60), price: e.amount });
+            const prodSvc = services.find((x) => x.name === 'Bán sản phẩm') || services.find((x) => /sản phẩm/i.test(x.name));
+            if (e.extraProduct) items.push(prodSvc ? { service_id: prodSvc.id, name: 'Sản phẩm (theo sổ)', price: e.extraProduct } : { name: 'Sản phẩm (theo sổ)', grp: 'Bán sản phẩm', price: e.extraProduct });
+            if (e.extraOther) items.push({ name: 'Chưa rõ dịch vụ (sổ thu thêm)', grp: 'Khác', price: e.extraOther });
+            const input = { customer_id: e.customerId, date: b.date, time: e.time, main_staff_id: e.staffId, assistant_id: assistantIn(e.text, e.staffId), items,
+              surcharge: e.parsed.surcharge, tip: e.tip, payment_method: e.pay && e.pay !== 'Chưa thanh toán' ? e.pay : null,
+              note: 'Sổ đặt lịch: ' + e.text + (e.extraTip ? ` · khách trả dư ${e.extraTip.toLocaleString('vi-VN')} → tip chung` : '') + (e.pay === 'Chưa thanh toán' ? ' · CHƯA THANH TOÁN (ô hồng), giá theo bảng giá' : '') + (!row.amount && e.pay !== 'Chưa thanh toán' ? ' · sổ không ghi tiền thu (trả bằng thẻ?), giá theo bảng giá' : '') + (e.check === 'more' ? ' · ⚠ sổ thu nhiều hơn giá dịch vụ, chưa rõ khoản thêm – kiểm tra lại' : e.check ? ' · ⚠ giá ghi cao hơn tiền thu (thẻ/voucher?) – kiểm tra lại' : ''), import_ref: ref, appointment_id: e.apptId };
+            const ex = db.prepare('SELECT * FROM visits WHERE import_ref=?').get(ref);
+            if (ex && ex.status === 'deleted') continue; // quản lý đã xóa lượt này → không tạo lại
+            L.saveVisit(input, importer, ex || null, { imported: true });
+            if (ex) st.updated++; else st.visits++;
+            if (e.pay === 'Chưa thanh toán') st.unpaid += e.amount;
+            st.total += e.amount + e.parsed.surcharge + e.extraProduct + e.extraOther; st.tip += e.tip; st.extra_tip += e.extraTip;
+          }
+        }
+        flush(null);
       }
       // Chỉ nhận đúng tên nhân viên đang có (không tự tạo người mới từ chữ trong ngoặc)
       function assistantIn(text, mainId) {
@@ -475,19 +542,23 @@ async function importWorkbook(buffer, opts, user) {
             if (/thu tiền|tip|chi|ghi chú/.test(norm(h))) break;
             cols.push({ c, staffId: staffOf(h) });
           }
-          const entries = [];
+          const entries = [], rows = [];
+          let amtCol = null, tipCol = null;
+          for (let c = 2; c <= 20; c++) { const h = norm(asText(row.getCell(c).value)); if (h === 'thu tiền') amtCol = c; else if (/^tiền tip|^tip$/.test(h)) tipCol = c; }
           for (let i = r + 1; i <= Math.min(ws.rowCount, r + 40); i++) {
             const rr = ws.getRow(i);
             if (norm(asText(rr.getCell(1).value)) === 'giờ') break;
             if (cols.some((x) => norm(asText(rr.getCell(x.c).value)) === 'tổng ngày')) break;
             const time = asTime(rr.getCell(1).value);
             if (!time) continue;
+            const rowE = [];
             for (const x of cols) {
               const text = asText(rr.getCell(x.c).value);
-              if (text && text.replace(/\s/g, '').length > 1) entries.push({ time, staffId: x.staffId, text: text.replace(/\s+/g, ' ').trim(), color: cellColor(rr.getCell(x.c)) });
+              if (text && text.replace(/\s/g, '').length > 1) { const en = { time, staffId: x.staffId, text: text.replace(/\s+/g, ' ').trim(), color: cellColor(rr.getCell(x.c)) }; entries.push(en); rowE.push(en); }
             }
+            if (rowE.length) rows.push({ time, entries: rowE, amount: amtCol ? asNum(rr.getCell(amtCol).value) : 0, tip: tipCol ? asNum(rr.getCell(tipCol).value) : 0 });
           }
-          out.push({ date, entries });
+          out.push({ date, entries, rows });
         }
         return out;
       }
@@ -569,6 +640,7 @@ async function importWorkbook(buffer, opts, user) {
   } catch (e) {
     if (e !== ROLLBACK) throw e;
   }
+  if (!opts.dryRun) try { require('./datafix').apply(); } catch (e) { summary.warnings.push('Bổ sung công thức: ' + e.message); }
   if (ws('Lịch sử') && !opts.includeHistory) summary.warnings.push('Chưa nhập lượt làm "Hoàn thành" từ tab "Lịch sử" (CRM Nếp Hair) vì trùng với Nhật ký dịch vụ. Tick "Nhập cả lịch sử" nếu cần.');
   return { dry_run: opts.dryRun, summary };
 }
