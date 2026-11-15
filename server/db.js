@@ -10,6 +10,23 @@ fs.mkdirSync(path.join(DATA_DIR, 'photos'), { recursive: true });
 fs.mkdirSync(path.join(DATA_DIR, 'backups'), { recursive: true });
 
 const db = new Database(process.env.DB_FILE || path.join(DATA_DIR, 'salon.db'));
+// Tìm khách không dấu: "minh huyen" = "Minh Huyền"; xếp hạng: tên trùng khớp → tên bắt đầu bằng → có từ bắt đầu bằng → chứa → đủ các từ → SĐT/mã → công thức/ghi chú
+const foldVi = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase().replace(/\s+/g, ' ').trim();
+function custRank(name, code, phone, extra, q) {
+  const f = foldVi(q); if (!f) return 0;
+  const n = foldVi(name), c = foldVi(code), digits = String(q).replace(/\D/g, ''), ph = String(phone || '');
+  if (n === f || c === f || (digits.length >= 9 && ph === digits)) return 0;
+  if (n.startsWith(f)) return 1;
+  if ((' ' + n).includes(' ' + f)) return 2;
+  if (n.includes(f)) return 3;
+  const toks = f.split(' ');
+  if (toks.every((t) => n.includes(t))) return 4;
+  if ((digits.length >= 3 && digits.length === String(q).replace(/[\s.]/g, '').length && ph.includes(digits)) || c.includes(f)) return 5;
+  const all = n + ' ' + c + ' ' + ph + ' ' + foldVi(extra);
+  if (toks.every((t) => all.includes(t))) return 6;
+  return -1;
+}
+db.function('cust_rank', { deterministic: true }, (name, code, phone, extra, q) => custRank(name, code, phone, extra, q));
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 

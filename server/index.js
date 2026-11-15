@@ -222,11 +222,7 @@ app.get('/api/customers', (req, res) => {
   const offset = Math.max(0, int(req.query.offset));
   let where = 'c.deleted=0';
   const params = [];
-  if (q) {
-    where += ' AND (c.name LIKE ? OR c.code LIKE ? OR c.phone LIKE ? OR c.formula LIKE ? OR c.hair_notes LIKE ?)';
-    const digits = q.replace(/\D/g, '');
-    params.push(`%${q}%`, `%${q}%`, `%${digits || q}%`, `%${q}%`, `%${q}%`);
-  }
+  if (q) { where += " AND cust_rank(c.name, c.code, c.phone, COALESCE(c.formula,'') || ' ' || COALESCE(c.hair_notes,''), ?) >= 0"; params.push(q); }
   const sf = req.query.staff_id === 'mine' ? req.user.id : req.query.staff_id === 'none' ? 'none' : int(req.query.staff_id);
   if (sf === 'none') where += ' AND c.staff_id IS NULL';
   else if (sf) { where += ' AND c.staff_id=?'; params.push(sf); }
@@ -234,7 +230,7 @@ app.get('/api/customers', (req, res) => {
       (SELECT COUNT(*) FROM visits v WHERE v.customer_id=c.id AND v.status='done') visits,
       (SELECT MAX(date) FROM visits v WHERE v.customer_id=c.id AND v.status='done') last_visit,
       (SELECT COALESCE(SUM(total),0) FROM visits v WHERE v.customer_id=c.id AND v.status='done') spend
-    FROM customers c WHERE ${where} ORDER BY (last_visit IS NULL), last_visit DESC, c.id DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
+    FROM customers c WHERE ${where} ORDER BY ${q ? "cust_rank(c.name, c.code, c.phone, COALESCE(c.formula,'') || ' ' || COALESCE(c.hair_notes,''), ?), " : ''}(last_visit IS NULL), last_visit DESC, c.id DESC LIMIT ? OFFSET ?`).all(...params, ...(q ? [q] : []), limit, offset);
   const total = db.prepare(`SELECT COUNT(*) n FROM customers c WHERE ${where}`).get(...params).n;
   if (req.user.role === 'staff') for (const r of rows) r.spend = null;
   res.json({ rows, total });
@@ -314,7 +310,7 @@ app.get('/api/search', (req, res) => {
   const customers = db.prepare(`SELECT id, code, name, phone,
       (SELECT MAX(date) FROM visits v WHERE v.customer_id=c.id AND v.status='done') last_visit
     , (SELECT full_name FROM users u WHERE u.id=c.staff_id) staff_name, formula
-    FROM customers c WHERE deleted=0 AND (name LIKE ? OR code LIKE ? OR phone LIKE ? OR formula LIKE ?) ORDER BY name LIMIT 10`).all(like, like, ph, like);
+    FROM customers c WHERE deleted=0 AND cust_rank(name, code, phone, COALESCE(formula,''), ?) >= 0 ORDER BY cust_rank(name, code, phone, COALESCE(formula,''), ?), (last_visit IS NULL), last_visit DESC LIMIT 10`).all(q, q);
   const cards = db.prepare(`SELECT cd.id, cd.code, cd.name, cd.status, cd.expires_at, cd.customer_id, c.name customer_name, c.phone
     FROM cards cd JOIN customers c ON c.id=cd.customer_id WHERE cd.code LIKE ? OR c.name LIKE ? OR c.phone LIKE ? ORDER BY cd.id DESC LIMIT 10`).all(like, like, ph)
     .map((c) => ({ ...c, balance: L.cardBalance(c.id) }));
