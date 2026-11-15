@@ -160,9 +160,9 @@ function chatDraftCard(m) {
   const d = m.draft; if (!d) return '';
   const f = (l, v, warn) => `<span class="cf ${v ? '' : 'miss'}">${l}: <b>${v || 'chưa rõ'}</b>${warn ? ` <span class="badge warn">${warn}</span>` : ''}</span>`;
   return `<div class="chat-card"><div class="small"><b>📅 Tạo lịch hẹn từ tin này?</b></div><div class="cf-wrap">
-    ${f('Khách', d.name ? esc(d.name) + (d.customer_id ? ' <span class="badge ok">khách cũ</span>' : ' <span class="badge">khách mới</span>') : '')}
+    ${f('Khách', d.name ? esc(d.name) + (d.customer_id ? ' <span class="badge ok">khách cũ</span>' : ' <span class="badge">khách mới</span>') : '', d.name_from_prev ? 'lấy từ tin trước' : '')}
     ${d.phone ? f('SĐT', esc(d.phone)) : ''}${f('Ngày', d.date ? dmy(d.date) : '', d.date_guess ? 'đoán hôm nay' : '')}${f('Giờ', esc(d.time || ''))}
-    ${f('Dịch vụ', esc(d.service || ''))}${f('Thợ', d.staff_id ? esc(staffName(d.staff_id)) : '', d.staff_from_profile ? 'thợ phụ trách' : '')}</div>
+    ${f('Dịch vụ', esc(d.service || ''))}${f('Thợ', d.staff_id ? esc(staffName(d.staff_id)) : '', d.staff_from_profile ? 'thợ phụ trách' : d.staff_from_sender ? 'người nhắn' : '')}</div>
     <div class="row" style="margin-top:6px"><button class="btn sm primary" data-mk="${m.id}" ${d.name || d.customer_id ? '' : 'disabled title="Chưa rõ tên khách, bấm Sửa"'}>✓ Tạo lịch</button><button class="btn sm" data-ed="${m.id}">Sửa rồi tạo</button><button class="btn sm" data-dm="${m.id}">Không phải lịch</button></div></div>`;
 }
 // ---------- Tìm kiếm nhanh ----------
@@ -647,10 +647,17 @@ function apptForm(a = {}, after, onSaved) {
 }
 
 VIEWS.chat = async (main) => {
-  let msgs = await api('/chat');
-  main.innerHTML = header('Chat nội bộ', 'Gõ “chị Lan 0912… mai 9h nhuộm với Dương” → bấm ✓ là có lịch hẹn') +
-    `<div class="card chat-box"><div id="chatList" class="chat-list"></div>
-    <form id="chatF" class="chat-input"><textarea name="body" rows="1" placeholder="Nhập tin nhắn…" maxlength="2000"></textarea><button class="btn primary">Gửi</button></form>
+  const day = /^\d{4}-\d\d-\d\d$/.test(S.params.date || '') ? S.params.date : S.today, isToday = day === S.today;
+  const [info, first] = await Promise.all([api('/chat/days'), api('/chat?date=' + day)]);
+  let msgs = first;
+  const days = info.days.some((d) => d.date === S.today) ? info.days : [{ date: S.today, n: 0, appts: 0, pending: 0 }, ...info.days];
+  const dayLabel = (d) => d === S.today ? 'Hôm nay' : d === addDays(S.today, -1) ? 'Hôm qua' : dmy(d).slice(0, 5);
+  const autoBtn = isMgr() ? `<button class="btn sm ${info.auto ? 'primary' : ''}" id="chatAuto" title="Bật: tin nào đủ tên khách + ngày + giờ thì app tự tạo lịch, không cần bấm">⚡ Tự tạo lịch: <b>${info.auto ? 'BẬT' : 'TẮT'}</b></button>` : '';
+  main.innerHTML = header('Chat nội bộ', info.auto ? '⚡ Đang bật tự tạo lịch: tin đủ tên khách + ngày + giờ sẽ tự thành lịch hẹn' : 'Gõ “chị Lan mai 9h nhuộm với Dương” → bấm ✓ Tạo lịch (ai trong nhóm cũng bấm được)', autoBtn) +
+    `<div class="chat-days">${days.map((d) => `<a class="chip ${d.date === day ? 'on' : ''}" href="#chat?date=${d.date}">${dayLabel(d.date)}${d.n ? ` <span class="muted">${d.n}</span>` : ''}${d.pending ? ` <span class="badge warn">${d.pending} chờ tạo</span>` : ''}${d.appts ? ` <span class="badge ok">${d.appts} lịch</span>` : ''}</a>`).join('')}</div>
+    <div class="card chat-sum" id="chatSum"></div>
+    <div class="card chat-box"><div id="chatList" class="chat-list"></div>
+    <form id="chatF" class="chat-input"><button type="button" class="btn mic" id="chatMic" title="Nói để nhập tin">🎤</button><textarea name="body" rows="1" placeholder="${isToday ? 'Nhập tin hoặc bấm 🎤…' : 'Đang xem ngày cũ, tin gửi sẽ vào Hôm nay'}" maxlength="2000"></textarea><button class="btn primary">Gửi</button></form>
     <div class="small muted" style="margin-top:6px">🔒 Tin nhắn lưu trên máy chủ riêng của tiệm, tự xóa sau ${esc(String(S.settings.chat_keep_days || 90))} ngày. Không gửi mật khẩu, số tài khoản, lương thưởng vào đây.</div></div>`;
   const list = $('#chatList');
   const timeOf = (c) => { const d = c.slice(0, 10); return (d === S.today ? '' : dmy(d).slice(0, 5) + ' ') + c.slice(11, 16); };
@@ -659,7 +666,7 @@ VIEWS.chat = async (main) => {
     list.innerHTML = msgs.length ? msgs.map((m, i) => { const mine = m.user_id === S.me.id; const same = i && msgs[i - 1].user_id === m.user_id;
       return `<div class="chat-msg ${mine ? 'mine' : ''}">${same ? '' : `<div class="small muted">${mine ? 'Bạn' : `<b>${esc(m.user_name)}</b>`}</div>`}
         <div class="bubble">${esc(m.body).replace(/\n/g, '<br>')}<span class="t">${timeOf(m.created_at)}${mine || isMgr() ? ` <a href="#" data-del="${m.id}" title="Xóa">✕</a>` : ''}</span></div>${chatDraftCard(m)}</div>`; }).join('')
-      : '<div class="empty">Chưa có tin nhắn. Gõ thử “chị Lan 0912345678 mai 9h nhuộm với Dương”.</div>';
+      : `<div class="empty">${isToday ? 'Hôm nay chưa có tin nhắn. Gõ thử “chị Lan 0912345678 mai 9h nhuộm với Dương”.' : 'Ngày này không có tin nhắn.'}</div>`;
     if (!keepPos || atBottom) list.scrollTop = list.scrollHeight;
     bind();
   };
@@ -681,8 +688,44 @@ VIEWS.chat = async (main) => {
     $$('[data-dm]', list).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/chat/${b.dataset.dm}/dismiss`, { method: 'POST', body: {} }); const m = msgs.find((x) => x.id === Number(b.dataset.dm)); m.draft = null; draw(true); })));
     $$('[data-del]', list).forEach((a) => (a.onclick = async (e) => { e.preventDefault(); if (!confirm('Xóa hẳn tin nhắn này?')) return; await api('/chat/' + a.dataset.del, { method: 'DELETE' }); msgs = msgs.filter((x) => x.id !== Number(a.dataset.del)); draw(true); }));
   };
+  // Tóm tắt ngày bằng AI
+  const sumBox = $('#chatSum');
+  const drawSum = (s) => {
+    sumBox.innerHTML = s ? `<details ${s.date === day ? 'open' : ''}><summary><b>🤖 Tóm tắt ${dayLabel(day).toLowerCase()}</b> <span class="small muted">· ${s.msg_count} tin · ${esc(s.by_name || '')} ${esc(String(s.created_at || '').slice(11, 16))}</span></summary>
+        <div class="sum-body">${esc(s.body).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>')}</div>
+        <div class="row" style="margin-top:6px"><button class="btn sm" id="sumGo">↻ Tóm tắt lại${s.msg_count < msgs.length ? ` (có ${msgs.length - s.msg_count} tin mới)` : ''}</button></div></details>`
+      : `<div class="row" style="justify-content:space-between"><span class="small muted">${msgs.length ? `${msgs.length} tin nhắn ${dayLabel(day).toLowerCase()}` : 'Chưa có tin để tóm tắt'}</span>
+        ${msgs.length ? `<button class="btn sm" id="sumGo">🤖 AI tóm tắt ngày</button>` : ''}</div>`;
+    const b = $('#sumGo');
+    if (b) b.onclick = () => {
+      if (!info.ai) { toast(isOwner() ? 'Chưa có khóa AI: vào Cài đặt › Tham số để nhập khóa Claude' : 'Chưa bật AI: nhờ Lãnh đạo nhập khóa ở Cài đặt › Tham số'); return; }
+      guard(b, async () => { b.textContent = 'AI đang đọc…'; drawSum(await api('/chat/summary', { method: 'POST', body: { date: day } })); });
+    };
+  };
+  drawSum(await api('/chat/summary?date=' + day));
+  const ab = $('#chatAuto');
+  if (ab) ab.onclick = () => {
+    const on = !info.auto;
+    if (on && !confirm('Bật tự tạo lịch?\n\nTin nào có đủ TÊN KHÁCH + NGÀY + GIỜ sẽ tự thành lịch hẹn (thợ trùng giờ thì không tự tạo). Tin thiếu vẫn hiện thẻ để bấm tay.')) return;
+    guard(ab, async () => { await api('/chat/settings', { method: 'PUT', body: { auto: on } }); toast(on ? 'Đã bật tự tạo lịch' : 'Đã tắt tự tạo lịch'); VIEWS.chat(main); });
+  };
+  // Mic: nói tiếng Việt → chữ
+  const mic = $('#chatMic');
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null;
+  mic.onclick = () => {
+    if (!SR) { toast('Máy này chưa hỗ trợ mic trong app: bấm vào ô nhập rồi dùng nút 🎤 trên bàn phím điện thoại'); ta.focus(); return; }
+    if (rec) { rec.stop(); return; }
+    rec = new SR(); rec.lang = 'vi-VN'; rec.interimResults = true; rec.continuous = false;
+    const base = ta.value ? ta.value.replace(/\s*$/, ' ') : '';
+    rec.onresult = (e) => { ta.value = base + Array.from(e.results).map((r) => r[0].transcript).join(''); ta.oninput(); };
+    rec.onerror = (e) => { toast(e.error === 'not-allowed' ? 'Chưa cho phép dùng micro: bật quyền micro cho trang này' : 'Không nghe rõ, thử lại'); };
+    rec.onend = () => { rec = null; mic.classList.remove('rec'); mic.textContent = '🎤'; ta.focus(); };
+    mic.classList.add('rec'); mic.textContent = '⏹'; rec.start();
+  };
   S.chatPull = async () => {
     if (!document.body.contains(list)) { S.chatPull = null; return; }
+    if (!isToday) return refreshChatBadge();
     const last = msgs.length ? msgs[msgs.length - 1].id : 0;
     const fresh = await api('/chat?after=' + last);
     if (fresh.length) { msgs = msgs.concat(fresh.filter((m) => !msgs.some((x) => x.id === m.id))); draw(true); }
@@ -691,7 +734,11 @@ VIEWS.chat = async (main) => {
   ta.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); f.requestSubmit(); } };
   ta.oninput = () => { ta.style.height = 'auto'; ta.style.height = Math.min(160, ta.scrollHeight) + 'px'; };
   f.onsubmit = (e) => { e.preventDefault(); const v = ta.value.trim(); if (!v) return;
-    guard(f.querySelector('button'), async () => { const m = await api('/chat', { method: 'POST', body: { body: v } }); ta.value = ''; ta.style.height = 'auto'; msgs.push(m); draw(); if (m.draft) toast('App nhận ra lịch hẹn, kiểm tra rồi bấm ✓ Tạo lịch'); }); };
+    guard(f.querySelector('button[class~="primary"]'), async () => { const m = await api('/chat', { method: 'POST', body: { body: v } }); ta.value = ''; ta.style.height = 'auto';
+      if (!isToday) { go('chat', { date: S.today }); return; }
+      msgs.push(m); draw();
+      if (m.auto_created) { toast(`⚡ Đã tự tạo lịch ${dmy(m.appt_date)} ${m.appt_time || ''}`); refreshReminderBadge(); }
+      else if (m.draft) toast(m.draft.name || m.draft.customer_id ? 'App nhận ra lịch hẹn, kiểm tra rồi bấm ✓ Tạo lịch' : 'Chưa rõ tên khách: bấm “Sửa rồi tạo” để điền'); }); };
   draw(); refreshChatBadge(); ta.focus();
 };
 
@@ -1812,6 +1859,12 @@ VIEWS.settings = async (main) => {
     sb.innerHTML = `<form id="pf"><div class="form-grid">${F.map(([k, l, t]) => `<div><label>${l}</label><input name="${k}" type="${t}" step="any" value="${esc(s[k])}"></div>`).join('')}</div>
       <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu tham số</button></div></form>`;
     $('#pf').onsubmit = (e) => { e.preventDefault(); guard($('#pf button'), async () => { await api('/settings', { method: 'PUT', body: formData($('#pf')) }); toast('Đã lưu'); boot(); }); };
+    const ci = await api('/chat/days');
+    sb.insertAdjacentHTML('beforeend', `<div class="card" style="margin-top:14px"><b>🤖 AI tóm tắt chat</b> · <span class="badge ${ci.ai ? 'ok' : ''}">${ci.ai ? 'Đã có khóa' : 'Chưa có khóa'}</span>
+      <div class="small muted" style="margin:6px 0">Lấy khóa ở console.anthropic.com (API Keys), nạp ít tiền vào tài khoản. Khóa chỉ lưu trên máy chủ của tiệm, không hiện lại ra ngoài. Khi tóm tắt, số điện thoại được che trước khi gửi đi.</div>
+      <form id="aif" class="row"><input name="key" type="password" autocomplete="off" placeholder="${ci.ai ? 'Dán khóa mới để thay' : 'sk-ant-…'}" style="flex:1;min-width:200px"><button class="btn primary">Lưu khóa</button>${ci.ai ? '<button type="button" class="btn" id="aiDel">Xóa khóa</button>' : ''}</form></div>`);
+    $('#aif').onsubmit = (e) => { e.preventDefault(); guard($('#aif .primary'), async () => { await api('/chat/ai-key', { method: 'PUT', body: { key: $('#aif').key.value } }); toast('Đã lưu khóa AI'); reload(); }); };
+    if ($('#aiDel')) $('#aiDel').onclick = () => { if (confirm('Xóa khóa AI? Nút tóm tắt sẽ ngừng hoạt động.')) guard($('#aiDel'), async () => { await api('/chat/ai-key', { method: 'PUT', body: { key: '' } }); reload(); }); };
   }
   if (tab === 'audit') {
     const P = S.params;
@@ -1823,7 +1876,7 @@ VIEWS.settings = async (main) => {
       create_user: 'Tạo tài khoản', update_user: 'Sửa tài khoản', update_settings: 'Sửa tham số', create_service: 'Thêm dịch vụ', update_service: 'Sửa dịch vụ', backup: 'Sao lưu', download_backup: 'Tải bản sao lưu',
       create_off: 'Xin/ghi nghỉ', decide_off: 'Duyệt nghỉ', delete_off: 'Xóa đơn nghỉ', manual_attendance: 'Chấm công tay', delete_attendance: 'Xóa chấm công',
       stock_in: 'Nhập kho', stock_adjust: 'Điều chỉnh kho', stock_count: 'Kiểm kho', stock_ordered: 'Báo đã gọi hàng', stock_unordered: 'Bỏ báo gọi hàng', stock_perm: 'Phân quyền kho',
-      transfer_customers: 'Bàn giao khách', update_visit_notes: 'Sửa ghi chú lượt', tip_paid: 'Ghi trả tip', expense_create: 'Ghi khoản chi', petty_in: 'Nạp quỹ', expense_approved: 'Duyệt chi', expense_rejected: 'KHÔNG duyệt chi', expense_pending: 'Đưa chi về chờ duyệt', expense_delete: 'XÓA khoản chi', expense_refunded: 'Hoàn quỹ', petty_target: 'Đổi mức quỹ', chat_to_appointment: 'Tạo lịch từ chat', delete_chat: 'Xóa tin chat', set_tip_pool: 'Sửa nhóm chia tip', create_card_type: 'Thêm gói thẻ', update_card_type: 'Sửa gói thẻ' };
+      transfer_customers: 'Bàn giao khách', update_visit_notes: 'Sửa ghi chú lượt', tip_paid: 'Ghi trả tip', expense_create: 'Ghi khoản chi', petty_in: 'Nạp quỹ', expense_approved: 'Duyệt chi', expense_rejected: 'KHÔNG duyệt chi', expense_pending: 'Đưa chi về chờ duyệt', expense_delete: 'XÓA khoản chi', expense_refunded: 'Hoàn quỹ', petty_target: 'Đổi mức quỹ', chat_to_appointment: 'Tạo lịch từ chat', chat_auto: 'Bật/tắt tự tạo lịch', set_ai_key: 'Đổi khóa AI', chat_summary: 'AI tóm tắt chat', delete_chat: 'Xóa tin chat', set_tip_pool: 'Sửa nhóm chia tip', create_card_type: 'Thêm gói thẻ', update_card_type: 'Sửa gói thẻ' };
     const hot = ['update_visit', 'delete_visit', 'adjust_card', 'delete_customer', 'export_excel', 'update_card', 'stock_adjust', 'delete_attendance', 'expense_delete', 'expense_rejected'];
     const LB = { date: 'Ngày', time: 'Giờ', customer_id: 'Khách', main_staff_id: 'Thợ chính', assistant_id: 'Người phụ', staff_id: 'Thợ', surcharge: 'Phụ thu', discount: 'Giảm giá', discount_reason: 'Lý do giảm',
       total: 'Tổng tiền', card_paid: 'Trừ thẻ', cash_paid: 'Tiền thu', payment_method: 'Hình thức TT', tip: 'Tip', formula: 'Công thức', result: 'Kết quả', note: 'Ghi chú', services: 'Dịch vụ', name: 'Tên', phone: 'SĐT',
