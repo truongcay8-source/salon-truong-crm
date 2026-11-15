@@ -74,6 +74,7 @@ function asTime(v) {
   return m ? `${m[1].padStart(2, '0')}:${m[2] || '00'}` : null;
 }
 const norm = (s) => String(s || '').normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
+const TITLES = new Set(['chi', 'anh', 'em', 'c', 'a', 'e', 'b', 'be', 'ban', 'co', 'chu', 'ong', 'ba', 'kh', 'khach']);
 function stripAccents(s) { return norm(s).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd'); }
 
 // Tìm dòng tiêu đề (dòng có "Tên khách" / "Ngày"...) và lập bản đồ tên cột → số cột
@@ -172,6 +173,21 @@ function customerResolver(summary, user) {
       const n = norm(name);
       const hits = all().filter((c) => norm(c.name) === n && (!phone || !c.phone || c.phone === phone));
       if (hits.length === 1) return { id: hits[0].id, how: 'name' };
+      // Gần đúng: mọi chữ của tên (bỏ danh xưng) đều có trong tên khách, vd "Phương vợ Khánh" ↔ "Phương (vợ Khánh Tao Lao)"
+      const toks = (x) => stripAccents(x).replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter((w) => w && !TITLES.has(w));
+      const q = toks(name);
+      // Danh xưng khác giới thì không ghép ("Hà" chị ≠ "Anh Hà"); tên 1 chữ phải cùng kiểu danh xưng
+      const sex = (x) => { const w = stripAccents(x).split(/[^a-z]+/).filter(Boolean)[0] || ''; return /^(a|anh|chu|ong|bo|cau)$/.test(w) ? 'M' : /^(c|chi|co|ba|me)$/.test(w) ? 'F' : /^(e|em|b|be|ban)$/.test(w) ? 'N' : ''; };
+      const okSex = (c) => { const a = sex(name), b = sex(c.name); if (a && b && a !== 'N' && b !== 'N' && a !== b) return false; return q.length > 1 || a === b || (a === 'N' && b !== '') || (b === 'N' && a !== ''); };
+      const same = q.length ? all().filter((c) => toks(c.name).join(' ') === q.join(' ') && okSex(c) && (!phone || !c.phone || c.phone === phone)) : [];
+      if (same.length === 1) return { id: same[0].id, how: 'name' }; // "E Bon" ↔ "Em Bon"
+      if (q.length >= 2 || (q.length === 1 && q[0].length >= 4)) {
+        const fz = all().filter((c) => { const t = new Set(toks(c.name)); return q.every((w) => t.has(w)) && okSex(c) && (!phone || !c.phone || c.phone === phone); });
+        // ưu tiên tên khớp từ đầu (vd "Khoa Điền" ↔ "Em Khoa Điền")
+        const head = fz.filter((c) => toks(c.name).slice(0, q.length).join(' ') === q.join(' '));
+        // chỉ nhận khi tên trùng phần đầu (tránh "Khánh Linh" ↔ "Alex (con Khánh Linh)")
+        if (head.length === 1) return { id: head[0].id, how: 'name' };
+      }
     }
     return null;
   }
@@ -382,6 +398,40 @@ async function importWorkbook(buffer, opts, user) {
         }
       }
     }
+    // ===== Thẻ voucher 1 triệu (tab "Quản lý Thẻ 1Tr") =====
+    const vt = ws('Quản lý Thẻ 1Tr');
+    const vRows = vt && readTable(vt, ['Mã thẻ', 'Tên khách hàng', 'Mệnh giá thẻ'], 10);
+    if (vRows) {
+      recognised = true; summary.format = summary.format || 'Thẻ voucher';
+      for (const r of vRows) {
+        const code = asText(r.get('Mã thẻ'));
+        const name = asText(r.get('Tên khách hàng'));
+        const value = asNum(r.get('Mệnh giá thẻ'));
+        if (!code || !name || !value) continue;
+        const giftType = db.prepare('SELECT id FROM card_types WHERE name=?').get(GIFT_CARD.name);
+        if (db.prepare('SELECT 1 FROM cards WHERE code=?').get(code)) {
+          // bản nhập trước đặt hạn sai (ngày cấp + 12 tháng) → sửa về hạn chung 25/10/2027
+          db.prepare("UPDATE cards SET expires_at=?, name=?, card_type_id=? WHERE code=? AND sale_type='gift'").run(GIFT_CARD.expires, GIFT_CARD.name, giftType && giftType.id, code);
+          summary.cards_skipped_existing++; continue;
+        }
+        const customerId = cust.upsert('APP', { name, phone: asText(r.get('Số điện thoại')) }, false);
+        if (!customerId) continue;
+        const soldAt = asDate(r.get('Ngày cấp thẻ')) || L.today();
+        const used = asNum(r.get('Đã chi dùng'));
+        const note = [asText(r.get('Ghi chú')), asText(r.get('Trạng thái'))].filter(Boolean).join(' · ') || null;
+        const id = db.prepare(`INSERT INTO cards(code,customer_id,card_type_id,name,price,value,sold_at,expires_at,seller_id,sale_type,commission,status,note,created_by)
+          VALUES (?,?,?,?,0,?,?,?,?,'gift',0,?,?,?)`).run(code, customerId, giftType && giftType.id, GIFT_CARD.name, value, soldAt, GIFT_CARD.expires,
+          staffOf(r.get('NV phụ trách')), used >= value ? 'closed' : 'active', note, user.id).lastInsertRowid;
+        if (used) {
+          const svc = asText(r.get('Dịch vụ thực hiện'));
+          const day = asDate(r.get('Ngày sử dụng'));
+          db.prepare('INSERT INTO card_txns(card_id,amount,note,created_by) VALUES (?,?,?,?)')
+            .run(id, -Math.min(used, value), ['Đã dùng (nhập từ Excel)', day, svc].filter(Boolean).join(' · '), user.id);
+        }
+        summary.cards_created++;
+      }
+    }
+
     // ===== Sổ đặt lịch theo ngày (tab "Tháng 10", "Tháng 11"...: mỗi ngày 1 khối, cột = thợ, dòng = giờ) =====
     const grids = wb.worksheets.filter((w) => /^tháng\s*\d+/.test(norm(w.name)));
     for (const g of grids) {
@@ -451,7 +501,7 @@ async function importWorkbook(buffer, opts, user) {
       }
       // ===== Tiền theo sổ (từ 01/11): mỗi ô = 1 lượt làm, tiền dòng chia theo ô, khách trả dư → tip chung =====
       function bookVisits(b) {
-        const st = summary.book || (summary.book = { days: 0, visits: 0, updated: 0, replaced_nk: 0, kept_manual: 0, extra_tip: 0, tip: 0, total: 0, unpaid: 0, rows_check: [], no_money: [] });
+        const st = summary.book || (summary.book = { days: 0, visits: 0, updated: 0, replaced_nk: 0, kept_manual: 0, extra_tip: 0, tip: 0, total: 0, unpaid: 0, voucher: 0, cards_created: [], rows_check: [], no_money: [] });
         st.days++;
         // Lượt nhập từ Nhật ký/CRM cùng ngày → thay bằng số liệu sổ (lượt nhân viên tự ghi trong app giữ nguyên)
         st.replaced_nk += db.prepare(`UPDATE visits SET status='deleted', delete_reason='Thay bằng số liệu sổ đặt lịch' WHERE date=? AND status='done' AND (import_ref LIKE 'NK:%' OR import_ref LIKE 'CRM:%')`).run(b.date).changes;
@@ -476,14 +526,19 @@ async function importWorkbook(buffer, opts, user) {
           }
           // Ô chỉ ghi chú cho khách cùng dòng ("huyen dung vocher…", "… ck sau") → không tính là lượt riêng
           if (es.length > 1) {
-            const k = (e) => BM.fold(BM.cleanName(e.text) || '').replace(/^(chi|anh|em|c|a|e|b)\s+/, '').split(/\s+/)[0];
-            es = es.filter((e) => !(/voucher|vocher|voch|\bvc\b|dung the|con thua|con lai/.test(BM.fold(e.text)) && !BM.amounts(e.text).list.length && es.some((o) => o !== e && k(o) && k(o) === k(e))));
+            const k = (e) => BM.fold(BM.cleanName(e.text) || '').replace(/[^a-z0-9 ]+/g, ' ').trim().replace(/^(chi|anh|em|c|a|e|b)\s+/, '').split(/\s+/)[0];
+            const notes = es.filter((e) => /voucher|vocher|voch|\bvc\b|dung the|con thua|con lai/.test(BM.fold(e.text)) && !BM.amounts(e.text).list.length && es.some((o) => o !== e && k(o) && k(o) === k(e)));
+            for (const nt of notes) { const sib = es.find((o) => o !== nt && !notes.includes(o) && k(o) === k(nt)); if (sib) sib.noteText = (sib.noteText || '') + ' ' + nt.text; }
+            es = es.filter((e) => !notes.includes(e));
           }
           if (!es.length) continue;
-          for (const e of es) e.parsed = BM.parseEntry(e.text, staffRows.get(e.staffId), byName, services, es.length === 1 ? row.amount : 0);
+          for (const e of es) {
+            e.parsed = BM.parseEntry(e.text, staffRows.get(e.staffId), byName, services, es.length === 1 ? row.amount : 0);
+            if (e.noteText && !e.parsed.voucher) e.parsed.voucher = BM.parseEntry(e.noteText, null, byName, services).voucher;
+          }
           BM.splitRow({ amount: row.amount, tip: row.tip, entries: es });
           const sum = es.reduce((t, e) => t + e.amount + e.parsed.surcharge, 0);
-          if (es.some((e) => e.check) || (row.amount && Math.abs(row.amount - sum - es.reduce((t, e) => t + e.extraTip, 0)) >= 1000)) st.rows_check.push(`${b.date.slice(8)}/${b.date.slice(5, 7)} ${row.time}: sổ thu ${row.amount.toLocaleString('vi-VN')}, giá ghi trong ô ${es.reduce((t, e) => t + (e.parsed.explicit || e.est) + e.parsed.surcharge, 0).toLocaleString('vi-VN')} (${es.map((e) => e.text).join(' | ').slice(0, 90)})`);
+          if (es.some((e) => e.check) || (row.amount && Math.abs(row.amount - sum + es.reduce((t, e) => t + (e.voucher || 0), 0) - es.reduce((t, e) => t + e.extraTip, 0)) >= 1000)) st.rows_check.push(`${b.date.slice(8)}/${b.date.slice(5, 7)} ${row.time}: sổ thu ${row.amount.toLocaleString('vi-VN')}, giá ghi trong ô ${es.reduce((t, e) => t + (e.parsed.explicit || e.est) + e.parsed.surcharge, 0).toLocaleString('vi-VN')} (${es.map((e) => e.text).join(' | ').slice(0, 90)})`);
           for (const e of es) {
             if (!e.customerId) { const id = cust.upsert('APP', { name: BM.cleanName(e.text) || ('Khách ' + e.time), phone: null }, false); e.customerId = id; }
             const ref = 'SO:' + crypto.createHash('sha1').update([b.date, e.time, e.staffId, e.text].join('|')).digest('hex').slice(0, 16);
@@ -499,7 +554,32 @@ async function importWorkbook(buffer, opts, user) {
               note: 'Sổ đặt lịch: ' + e.text + (e.extraTip ? ` · khách trả dư ${e.extraTip.toLocaleString('vi-VN')} → tip chung` : '') + (e.pay === 'Chưa thanh toán' ? ' · CHƯA THANH TOÁN (ô hồng), giá theo bảng giá' : '') + (!row.amount && e.pay !== 'Chưa thanh toán' ? ' · sổ không ghi tiền thu (trả bằng thẻ?), giá theo bảng giá' : '') + (e.check === 'more' ? ' · ⚠ sổ thu nhiều hơn giá dịch vụ, chưa rõ khoản thêm – kiểm tra lại' : e.check ? ' · ⚠ giá ghi cao hơn tiền thu (thẻ/voucher?) – kiểm tra lại' : ''), import_ref: ref, appointment_id: e.apptId };
             const ex = db.prepare('SELECT * FROM visits WHERE import_ref=?').get(ref);
             if (ex && ex.status === 'deleted') continue; // quản lý đã xóa lượt này → không tạo lại
+            let card = null;
+            if (e.voucher > 0) {
+              // Trừ thẻ tri ân 1tr: gắn đúng thẻ của khách (thay dòng "đã dùng" nhập từ tab Quản lý Thẻ 1Tr), doanh số giữ đủ cho thợ
+              card = db.prepare(`SELECT c.* FROM cards c WHERE c.customer_id=? AND c.sale_type='gift' ORDER BY (c.id=?) DESC,
+                (SELECT COUNT(*) FROM card_txns t WHERE t.card_id=c.id AND t.visit_id IS NULL AND t.amount<0) DESC, c.id LIMIT 1`).get(e.customerId, ex ? ex.card_id || 0 : 0);
+              if (!card) {
+                const gt = db.prepare('SELECT id FROM card_types WHERE name=?').get(GIFT_CARD.name);
+                const code = 'TA-' + b.date.slice(5).replace('-', '') + '-' + e.customerId;
+                const cid = db.prepare(`INSERT INTO cards(code,customer_id,card_type_id,name,price,value,sold_at,expires_at,seller_id,sale_type,commission,status,note,created_by)
+                  VALUES (?,?,?,?,0,?,?,?,NULL,'gift',0,'active',?,?)`).run(code, e.customerId, gt && gt.id, GIFT_CARD.name, Math.max(GIFT_CARD.value || 1000000, e.voucher), b.date, GIFT_CARD.expires,
+                  'Tạo khi nhập sổ đặt lịch: ô ghi dùng thẻ tri ân ngày ' + b.date + ' nhưng chưa thấy thẻ của khách – kiểm tra lại (có thể dùng thẻ của người khác)', user.id).lastInsertRowid;
+                card = db.prepare('SELECT * FROM cards WHERE id=?').get(cid);
+                st.cards_created.push(`${dayLabel} ${BM.cleanName(e.text) || e.text.slice(0, 30)}`);
+              }
+              if (!ex || ex.card_id !== card.id) {
+                const loose = db.prepare('SELECT id FROM card_txns WHERE card_id=? AND visit_id IS NULL AND amount<0 ORDER BY id LIMIT 1').get(card.id);
+                if (loose) db.prepare('DELETE FROM card_txns WHERE id=?').run(loose.id);
+              }
+              db.prepare("UPDATE cards SET status='active' WHERE id=?").run(card.id);
+              const bal = L.cardBalance(card.id) + (ex && ex.card_id === card.id ? ex.card_paid : 0);
+              input.card_id = card.id; input.card_paid = Math.min(e.voucher, Math.max(0, bal));
+              if (!input.card_paid) { input.card_id = null; delete input.card_paid; }
+              else { st.voucher += input.card_paid; input.note += ` · trừ thẻ tri ân ${card.code} ${input.card_paid.toLocaleString('vi-VN')}`; }
+            }
             L.saveVisit(input, importer, ex || null, { imported: true });
+            if (card && L.cardBalance(card.id) <= 0) db.prepare("UPDATE cards SET status='closed' WHERE id=?").run(card.id);
             if (ex) st.updated++; else st.visits++;
             if (e.pay === 'Chưa thanh toán') st.unpaid += e.amount;
             st.total += e.amount + e.parsed.surcharge + e.extraProduct + e.extraOther; st.tip += e.tip; st.extra_tip += e.extraTip;
@@ -561,40 +641,6 @@ async function importWorkbook(buffer, opts, user) {
           out.push({ date, entries, rows });
         }
         return out;
-      }
-    }
-
-    // ===== Thẻ voucher 1 triệu (tab "Quản lý Thẻ 1Tr") =====
-    const vt = ws('Quản lý Thẻ 1Tr');
-    const vRows = vt && readTable(vt, ['Mã thẻ', 'Tên khách hàng', 'Mệnh giá thẻ'], 10);
-    if (vRows) {
-      recognised = true; summary.format = summary.format || 'Thẻ voucher';
-      for (const r of vRows) {
-        const code = asText(r.get('Mã thẻ'));
-        const name = asText(r.get('Tên khách hàng'));
-        const value = asNum(r.get('Mệnh giá thẻ'));
-        if (!code || !name || !value) continue;
-        const giftType = db.prepare('SELECT id FROM card_types WHERE name=?').get(GIFT_CARD.name);
-        if (db.prepare('SELECT 1 FROM cards WHERE code=?').get(code)) {
-          // bản nhập trước đặt hạn sai (ngày cấp + 12 tháng) → sửa về hạn chung 25/10/2027
-          db.prepare("UPDATE cards SET expires_at=?, name=?, card_type_id=? WHERE code=? AND sale_type='gift'").run(GIFT_CARD.expires, GIFT_CARD.name, giftType && giftType.id, code);
-          summary.cards_skipped_existing++; continue;
-        }
-        const customerId = cust.upsert('APP', { name, phone: asText(r.get('Số điện thoại')) }, false);
-        if (!customerId) continue;
-        const soldAt = asDate(r.get('Ngày cấp thẻ')) || L.today();
-        const used = asNum(r.get('Đã chi dùng'));
-        const note = [asText(r.get('Ghi chú')), asText(r.get('Trạng thái'))].filter(Boolean).join(' · ') || null;
-        const id = db.prepare(`INSERT INTO cards(code,customer_id,card_type_id,name,price,value,sold_at,expires_at,seller_id,sale_type,commission,status,note,created_by)
-          VALUES (?,?,?,?,0,?,?,?,?,'gift',0,?,?,?)`).run(code, customerId, giftType && giftType.id, GIFT_CARD.name, value, soldAt, GIFT_CARD.expires,
-          staffOf(r.get('NV phụ trách')), used >= value ? 'closed' : 'active', note, user.id).lastInsertRowid;
-        if (used) {
-          const svc = asText(r.get('Dịch vụ thực hiện'));
-          const day = asDate(r.get('Ngày sử dụng'));
-          db.prepare('INSERT INTO card_txns(card_id,amount,note,created_by) VALUES (?,?,?,?)')
-            .run(id, -Math.min(used, value), ['Đã dùng (nhập từ Excel)', day, svc].filter(Boolean).join(' · '), user.id);
-        }
-        summary.cards_created++;
       }
     }
 
