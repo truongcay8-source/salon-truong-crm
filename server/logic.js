@@ -169,7 +169,9 @@ function saveVisit(input, user, existing, opts = {}) {
     if (pm && !methods.includes(pm)) throw bad('Hình thức thanh toán không hợp lệ');
   }
 
-  const factor = subtotal > 0 ? total / subtotal : 0;
+  // Hoa hồng tính trên tiền dịch vụ sau giảm giá, không gồm phụ thu (phụ thu chia riêng bên dưới)
+  const serviceNet = Math.max(0, total - surcharge);
+  const factor = subtotal > 0 ? serviceNet / subtotal : 0;
   const staffStmt = db.prepare('SELECT commission_enabled FROM users WHERE id=?');
   const ms = staffStmt.get(mainStaff);
   if (!ms) throw bad('Thợ chính không tồn tại');
@@ -178,8 +180,9 @@ function saveVisit(input, user, existing, opts = {}) {
   if (assistant) {
     const as = staffStmt.get(assistant);
     if (!as) throw bad('Người phụ không tồn tại');
-    if (as.commission_enabled) assistantCommission = Math.round(total * num('assistant_rate'));
+    if (as.commission_enabled) assistantCommission = Math.round(serviceNet * num('assistant_rate'));
   }
+  const sc = surchargeSplit(surcharge, !!assistant);
 
   const row = {
     customer_id: customerId, date, time: str(input.time), main_staff_id: mainStaff, assistant_id: assistant,
@@ -187,6 +190,7 @@ function saveVisit(input, user, existing, opts = {}) {
     card_id: cardId, card_paid: cardPaid, cash_paid: cashPaid, payment_method: cashPaid > 0 ? pm : null,
     tip: Math.max(0, int(input.tip)), tip_private: Math.max(0, int(input.tip_private)),
     tip_private_to: int(input.tip_private) > 0 ? int(input.tip_private_to) || mainStaff : null, main_commission: mainCommission, assistant_commission: assistantCommission,
+    surcharge_main: sc.main, surcharge_assist: sc.assist,
     hair_before: str(input.hair_before), wish: str(input.wish), formula: str(input.formula), result: str(input.result),
     note: str(input.note), next_visit_date: isDate(input.next_visit_date) ? input.next_visit_date : null,
   };
@@ -233,6 +237,16 @@ function saveVisit(input, user, existing, opts = {}) {
   return tx();
 }
 
+// Phụ thu: cửa hàng giữ surcharge_salon_rate (mặc định 33%), phần còn lại cho thợ làm lượt: có người phụ thì chia đôi
+function surchargeSplit(surcharge, hasAssistant) {
+  if (!(surcharge > 0)) return { salon: 0, main: 0, assist: 0 };
+  const raw = getSettings().surcharge_salon_rate;
+  const rate = raw === undefined || raw === '' ? 0.33 : Math.min(1, Math.max(0, Number(raw) || 0));
+  const staff = surcharge - Math.round(surcharge * rate);
+  const assist = hasAssistant ? Math.floor(staff / 2) : 0;
+  return { salon: surcharge - staff, main: staff - assist, assist };
+}
+
 function deleteVisit(id, reason, user) {
   const v = db.prepare("SELECT * FROM visits WHERE id=? AND status='done'").get(id);
   if (!v) throw new HttpError(404, 'Không tìm thấy lượt làm');
@@ -254,6 +268,7 @@ function getVisit(id) {
   v.items = db.prepare('SELECT * FROM visit_items WHERE visit_id=? ORDER BY id').all(id);
   v.photos = db.prepare('SELECT id,kind,created_at FROM photos WHERE visit_id=? ORDER BY id').all(id);
   v.materials = require('./stock').visitMaterials(id);
+  v.warranties = require('./warranty').forVisit(v);
   return v;
 }
 
@@ -264,7 +279,7 @@ function maskVisitMoney(v, user) {
   v = { ...v, cost: null, materials: v.materials ? v.materials.map((m) => ({ ...m, unit_cost: null })) : v.materials };
   if (v.main_staff_id === user.id || v.assistant_id === user.id) return v;
   const out = { ...v };
-  for (const k of ['subtotal', 'surcharge', 'discount', 'total', 'card_paid', 'cash_paid', 'tip', 'tip_private', 'main_commission', 'assistant_commission']) out[k] = null;
+  for (const k of ['subtotal', 'surcharge', 'discount', 'total', 'card_paid', 'cash_paid', 'tip', 'tip_private', 'main_commission', 'assistant_commission', 'surcharge_main', 'surcharge_assist']) out[k] = null;
   if (out.items) out.items = out.items.map((i) => ({ ...i, price: null }));
   out.masked = true;
   return out;
@@ -275,9 +290,9 @@ function salesReport(from, to, user) {
   const visits = db.prepare("SELECT * FROM visits WHERE status='done' AND date BETWEEN ? AND ?").all(from, to);
   const items = db.prepare(`SELECT vi.*, v.main_staff_id FROM visit_items vi JOIN visits v ON v.id=vi.visit_id
     WHERE v.status='done' AND v.date BETWEEN ? AND ?`).all(from, to);
-  const users = db.prepare('SELECT id, full_name, role, active FROM users ORDER BY id').all();
+  const users = db.prepare('SELECT id, full_name, role, active, level FROM users ORDER BY id').all();
   const per = new Map(users.map((u) => [u.id, {
-    user_id: u.id, name: u.full_name, active: u.active, main_count: 0, assist_count: 0,
+    user_id: u.id, name: u.full_name, level: u.level, active: u.active, main_count: 0, assist_count: 0, surcharge_share: 0,
     by_group: { 'Cắt': 0, 'Gội & chăm sóc': 0, 'Hóa chất': 0, 'Bán sản phẩm': 0, 'Khác': 0 },
     sales: 0, assist_sales: 0, main_commission: 0, assistant_commission: 0, tip: 0,
     cards_count: 0, cards_amount: 0, card_commission: 0, total_commission: 0,
@@ -285,16 +300,16 @@ function salesReport(from, to, user) {
   const vById = new Map(visits.map((v) => [v.id, v]));
   for (const v of visits) {
     const m = per.get(v.main_staff_id);
-    if (m) { m.main_count++; m.sales += v.total; m.main_commission += v.main_commission; m.tip += v.tip; }
+    if (m) { m.main_count++; m.sales += v.total; m.main_commission += v.main_commission; m.tip += v.tip; m.surcharge_share += v.surcharge_main || 0; }
     const tp = v.tip_private ? per.get(v.tip_private_to) : null;
     if (tp) tp.tip += v.tip_private;
     const a = per.get(v.assistant_id);
-    if (a) { a.assist_count++; a.assist_sales += v.total; a.assistant_commission += v.assistant_commission; }
+    if (a) { a.assist_count++; a.assist_sales += v.total; a.assistant_commission += v.assistant_commission; a.surcharge_share += v.surcharge_assist || 0; }
   }
   for (const i of items) {
     const v = vById.get(i.visit_id); const m = per.get(i.main_staff_id);
     if (!m || !v) continue;
-    const f = v.subtotal > 0 ? v.total / v.subtotal : 0;
+    const f = v.subtotal > 0 ? Math.max(0, v.total - v.surcharge) / v.subtotal : 0;
     const g = m.by_group[i.grp] != null ? i.grp : 'Khác';
     m.by_group[g] += Math.round(i.price * f);
   }
@@ -306,7 +321,7 @@ function salesReport(from, to, user) {
     const k = c.consultant_id && per.get(c.consultant_id);
     if (k) { k.cards_count++; k.cards_amount += c.price - Math.round((c.price * sh) / 100); k.card_commission += c.consultant_commission; }
   }
-  let rows = [...per.values()].map((r) => ({ ...r, total_commission: r.main_commission + r.assistant_commission + r.card_commission }))
+  let rows = [...per.values()].map((r) => ({ ...r, total_commission: r.main_commission + r.assistant_commission + r.card_commission + r.surcharge_share }))
     .filter((r) => r.active || r.main_count || r.assist_count || r.cards_count);
   const giftCards = new Set(db.prepare("SELECT id FROM cards WHERE sale_type='gift'").all().map((c) => c.id));
   const summary = {
@@ -448,6 +463,6 @@ module.exports = {
   cardCommission, cardSplit,
   staffCustomerReport,
   HttpError, bad, int, str, today, addDays, addMonths, isDate, normPhone, localDate,
-  cardBalance, cardRow, sellCard, saveVisit, updateVisitNotes, deleteVisit, getVisit, maskVisitMoney, canEditVisit,
+  cardBalance, cardRow, sellCard, saveVisit, surchargeSplit, updateVisitNotes, deleteVisit, getVisit, maskVisitMoney, canEditVisit,
   salesReport, reminders, nextBirthday,
 };

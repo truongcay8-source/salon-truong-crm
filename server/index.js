@@ -101,7 +101,7 @@ app.use('/api', auth);
 app.get('/api/me', (req, res) => {
   const { token, ...u } = req.user;
   const s = getSettings();
-  res.json({ user: { ...u, ...stockMod.perm(req.user) }, settings: { salon_name: s.salon_name, salon_address: s.salon_address, salon_phone: s.salon_phone, bank_info: s.bank_info, receipt_footer: s.receipt_footer, chat_keep_days: Number(s.chat_keep_days) || 90, card_new_rate: Number(s.card_new_rate) || 0, card_renewal_rate: Number(s.card_renewal_rate) || 0, payment_methods: s.payment_methods.split(',').map((x) => x.trim()) }, groups: GROUPS, today: today() });
+  res.json({ user: { ...u, ...stockMod.perm(req.user) }, settings: { salon_name: s.salon_name, salon_address: s.salon_address, salon_phone: s.salon_phone, bank_info: s.bank_info, receipt_footer: s.receipt_footer, chat_keep_days: Number(s.chat_keep_days) || 90, card_new_rate: Number(s.card_new_rate) || 0, card_renewal_rate: Number(s.card_renewal_rate) || 0, payment_methods: s.payment_methods.split(',').map((x) => x.trim()), surcharge_salon_rate: s.surcharge_salon_rate === undefined ? 0.33 : Number(s.surcharge_salon_rate) }, groups: GROUPS, today: today() });
 });
 app.post('/api/me/password', (req, res) => {
   const u = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
@@ -117,17 +117,19 @@ app.post('/api/me/password', (req, res) => {
 
 // ---------- Tài khoản ----------
 app.get('/api/staff', (req, res) => {
-  res.json(db.prepare('SELECT id, full_name, role, active FROM users ORDER BY active DESC, id').all());
+  res.json(db.prepare('SELECT id, full_name, role, active, level FROM users ORDER BY active DESC, id').all());
 });
 app.get('/api/users', OWNER, (req, res) => {
-  res.json(db.prepare('SELECT id,username,full_name,role,active,can_login,must_change_pw,commission_enabled,aliases,created_at FROM users ORDER BY id').all());
+  res.json(db.prepare('SELECT id,username,full_name,role,active,can_login,must_change_pw,commission_enabled,aliases,level,created_at FROM users ORDER BY id').all());
 });
+const LEVELS = ['Director', 'Senior', 'Stylist', 'Junior'];
 function userInput(b) {
   const r = {};
   if (b.full_name != null) { r.full_name = str(b.full_name); if (!r.full_name) throw bad('Nhập họ tên'); }
   if (b.role != null) { if (!['owner', 'manager', 'staff'].includes(b.role)) throw bad('Vai trò không hợp lệ'); r.role = b.role; }
   for (const k of ['active', 'can_login', 'commission_enabled']) if (b[k] != null) r[k] = b[k] ? 1 : 0;
   if (b.aliases != null) r.aliases = str(b.aliases);
+  if (b.level != null) { const l = str(b.level); if (l && !LEVELS.includes(l)) throw bad('Cấp bậc không hợp lệ'); r.level = l || null; }
   return r;
 }
 app.post('/api/users', OWNER, (req, res) => {
@@ -137,8 +139,8 @@ app.post('/api/users', OWNER, (req, res) => {
   const r = userInput({ role: 'staff', ...req.body });
   const pw = String(req.body.password || '');
   if (pw.length < 6) throw bad('Mật khẩu tối thiểu 6 ký tự');
-  const id = db.prepare('INSERT INTO users(username,full_name,role,password_hash,commission_enabled,aliases) VALUES (?,?,?,?,?,?)')
-    .run(username, r.full_name, r.role, bcrypt.hashSync(pw, 10), r.commission_enabled ?? 1, r.aliases ?? null).lastInsertRowid;
+  const id = db.prepare('INSERT INTO users(username,full_name,role,password_hash,commission_enabled,aliases,level) VALUES (?,?,?,?,?,?,?)')
+    .run(username, r.full_name, r.role, bcrypt.hashSync(pw, 10), r.commission_enabled ?? 1, r.aliases ?? null, r.level ?? null).lastInsertRowid;
   audit(req.user.id, 'create_user', 'user', id, { username, role: r.role });
   res.json({ id });
 });
@@ -168,7 +170,7 @@ app.post('/api/users/:id/reset-password', OWNER, (req, res) => {
 const publicSettings = () => { const s = { ...getSettings() }; delete s.anthropic_api_key; return s; };
 app.get('/api/settings', MGR, (req, res) => res.json(publicSettings()));
 app.put('/api/settings', OWNER, (req, res) => {
-  const allowed = ['salon_name', 'salon_address', 'salon_phone', 'bank_info', 'receipt_footer', 'return_days', 'birthday_days', 'card_expiry_days', 'card_low_balance', 'assistant_rate', 'card_new_rate', 'card_renewal_rate', 'payment_methods'];
+  const allowed = ['salon_name', 'salon_address', 'salon_phone', 'bank_info', 'receipt_footer', 'return_days', 'birthday_days', 'card_expiry_days', 'card_low_balance', 'assistant_rate', 'card_new_rate', 'card_renewal_rate', 'payment_methods', 'surcharge_salon_rate'];
   const up = db.prepare('UPDATE settings SET value=? WHERE key=?');
   for (const k of allowed) if (req.body[k] != null) up.run(String(req.body[k]).trim(), k);
   audit(req.user.id, 'update_settings', 'settings', null, req.body);
@@ -291,6 +293,7 @@ app.get('/api/customers/:id/brief', (req, res) => {
   const c = db.prepare(`SELECT c.id, c.code, c.name, c.staff_id, c.formula, c.formula_at, c.hair_notes, s.full_name staff_name, f.full_name formula_by_name
     FROM customers c LEFT JOIN users s ON s.id=c.staff_id LEFT JOIN users f ON f.id=c.formula_by WHERE c.id=? AND c.deleted=0`).get(int(req.params.id));
   if (!c) throw new HttpError(404, 'Không tìm thấy khách');
+  c.warranties = require('./warranty').active(today(), c.id);
   res.json(c);
 });
 app.delete('/api/customers/:id', OWNER, (req, res) => {
@@ -612,6 +615,9 @@ app.get('/api/reminders', (req, res) => {
       FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id WHERE a.pay_note='Chưa thanh toán' AND a.status<>'cancelled' ORDER BY a.date, a.time`).all();
     r.counts.unpaid = r.unpaid.length;
   }
+  // Khách đang trong hạn bảo hành: chỉ để tra cứu khi khách quay lại, không tính vào số nhắc
+  r.warranty = require('./warranty').active(today()).sort((a, b) => a.until.localeCompare(b.until));
+  if (req.user.role === 'staff') r.warranty = r.warranty.filter((v) => v.main_staff_id === req.user.id);
   res.json(r);
 });
 // Khách phụ trách theo thợ: nhân viên chỉ xem dòng của mình, không có số tiền

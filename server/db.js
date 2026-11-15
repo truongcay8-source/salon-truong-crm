@@ -218,6 +218,7 @@ const DEFAULT_SETTINGS = {
   salon_phone: '',
   bank_info: '',
   receipt_footer: 'Cảm ơn quý khách đã tin chọn Nếp Hair. Hẹn gặp lại!',
+  surcharge_salon_rate: '0.33',
 };
 // Nâng cấp CSDL cũ: thêm cột cho lịch hẹn (lý do hủy, ai hủy, đã mời đặt lại)
 {
@@ -231,6 +232,21 @@ const DEFAULT_SETTINGS = {
   if (!db.prepare('PRAGMA table_info(appointments)').all().some((c) => c.name === 'pay_note')) db.exec('ALTER TABLE appointments ADD COLUMN pay_note TEXT');
   // Người phụ ghi trong ngoặc ở sổ đặt lịch, vd "C Điệp(Thu)" → điền sẵn khi thu tiền
   if (!db.prepare('PRAGMA table_info(appointments)').all().some((c) => c.name === 'assistant_id')) db.exec('ALTER TABLE appointments ADD COLUMN assistant_id INTEGER REFERENCES users(id)');
+  // Cấp bậc thợ theo bảng giá (Director / Senior / Stylist / Junior) → chọn đúng giá cắt
+  if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'level')) {
+    db.exec('ALTER TABLE users ADD COLUMN level TEXT');
+    const f = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase();
+    const LV = [['truong', 'Director'], ['duong', 'Stylist'], ['thoai', 'Junior']];
+    for (const u of db.prepare('SELECT id, full_name FROM users').all()) {
+      const words = f(u.full_name).split(/\s+/);
+      const hit = LV.find(([k]) => words.includes(k));
+      if (hit) db.prepare('UPDATE users SET level=? WHERE id=? AND level IS NULL').run(hit[1], u.id);
+    }
+  }
+  // Phụ thu (sau 19h…): cửa hàng giữ 33%, phần còn lại chia cho thợ làm lượt đó
+  if (!db.prepare('PRAGMA table_info(visits)').all().some((c) => c.name === 'surcharge_main')) {
+    db.exec('ALTER TABLE visits ADD COLUMN surcharge_main INTEGER NOT NULL DEFAULT 0; ALTER TABLE visits ADD COLUMN surcharge_assist INTEGER NOT NULL DEFAULT 0');
+  }
   // Tip riêng: khách tặng riêng 1 người (không đưa vào quỹ tip chung)
   if (!db.prepare('PRAGMA table_info(visits)').all().some((c) => c.name === 'tip_private')) {
     db.exec('ALTER TABLE visits ADD COLUMN tip_private INTEGER NOT NULL DEFAULT 0; ALTER TABLE visits ADD COLUMN tip_private_to INTEGER REFERENCES users(id)');

@@ -149,10 +149,11 @@ function parseBooking(text, ctx) {
   for (const s of ctx.services) { const i = fNoPhone.indexOf(' ' + fold(s.name) + ' '); if (s.active && i >= 0) found.push({ name: s.name, at: i }); }
   const title = fold((out.name || '').split(' ')[0]);
   const male = ['anh', 'chu', 'ong'].includes(title) || /\b(nam|tóc nam|toc nam)\b/.test(f), female = ['chi', 'co', 'ba'].includes(title) || /\b(nu|toc nu)\b/.test(f);
-  // Cấp thợ (Director/Stylist): theo dịch vụ thợ đó hay làm
+  // Cấp thợ: lấy cấp đã khai ở Cài đặt › Tài khoản; chưa khai thì đoán theo dịch vụ thợ đó hay làm
   const lvl = {};
   for (const [k, n] of Object.entries(ctx.staffUsage || {})) { const [sid, nm] = k.split('|'); if (Number(sid) === out.staff_id) for (const l of ['director', 'stylist']) if (fold(nm).includes(l)) lvl[l] = (lvl[l] || 0) + n; }
-  const myLvl = Object.keys(lvl).sort((a, b) => lvl[b] - lvl[a])[0];
+  const own = (ctx.staff.find((u) => u.id === out.staff_id) || {}).level;
+  const myLvl = own ? fold(own) : Object.keys(lvl).sort((a, b) => lvl[b] - lvl[a])[0];
   for (const w of SVC_WORDS) {
     const fw = fold(w);
     const mw = fNoPhone.match(new RegExp(`\\b${fw}\\b`));
@@ -184,7 +185,7 @@ function ctxNow() {
   const use = db.prepare(`SELECT v.main_staff_id sid, vi.name, COUNT(*) n FROM visit_items vi JOIN visits v ON v.id=vi.visit_id WHERE v.status='done' AND v.date>=? GROUP BY 1,2`).all(since);
   const usage = {}, staffUsage = {};
   for (const r of use) { usage[r.name] = (usage[r.name] || 0) + r.n; staffUsage[`${r.sid}|${r.name}`] = r.n; }
-  return { today: today(), staff: db.prepare('SELECT id, full_name, aliases FROM users WHERE active=1').all(), services: db.prepare('SELECT name, active FROM services').all(), usage, staffUsage };
+  return { today: today(), staff: db.prepare('SELECT id, full_name, aliases, level FROM users WHERE active=1').all(), services: db.prepare('SELECT name, active FROM services').all(), usage, staffUsage };
 }
 
 // Tóm tắt chat 1 ngày bằng Claude. Số điện thoại được che trước khi gửi đi.

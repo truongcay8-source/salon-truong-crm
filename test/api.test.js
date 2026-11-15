@@ -86,8 +86,11 @@ test('luồng chính và phân quyền', async () => {
     surcharge: 420000, discount: 70000, discount_reason: 'Khách quen', card_id: ids.card, card_paid: 1000000, payment_method: 'Chuyển khoản', tip: 50000, formula: '5.14 60ml + oxi 30' });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(r.data.total, 1600000); assert.equal(r.data.cash_paid, 600000); assert.equal(r.data.card_paid, 1000000);
-  assert.equal(r.data.main_commission, Math.round(1250000 * (1600000 / 1250000) * 0.15));
-  assert.equal(r.data.assistant_commission, 48000);
+  // Hoa hồng tính trên tiền dịch vụ không gồm phụ thu: 1.600.000 − 420.000 = 1.180.000
+  assert.equal(r.data.main_commission, Math.round(1180000 * 0.15));
+  assert.equal(r.data.assistant_commission, 35400);
+  // Phụ thu 420.000: cửa hàng giữ 33% = 138.600, còn 281.400 chia đôi thợ chính / người phụ
+  assert.equal(r.data.surcharge_main, 140700); assert.equal(r.data.surcharge_assist, 140700);
   ids.visit = r.data.id;
   assert.equal((await duong.get('/cards?customer_id=' + ids.lan)).data.find((c) => c.id === ids.card).balance, 1200000);
   assert.equal((await duong.post('/visits', { customer_id: ids.lan, main_staff_id: staff['Dương'], items: [{ service_id: nhuom.id }], discount: 1000 })).status, 400, 'giảm giá phải có lý do');
