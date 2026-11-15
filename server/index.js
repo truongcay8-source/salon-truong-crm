@@ -672,6 +672,7 @@ staffMod.mount(app, { MGR, OWNER });
 require('./tips').mount(app, { MGR, OWNER });
 require('./chat').mount(app, { MGR, OWNER });
 require('./pricelist').apply(); // bảng giá 15/11/2026 (chạy 1 lần)
+try { require('./datafix').apply(); } catch (e) { console.error('datafix', e.message); } // công thức gửi qua Messenger 15/11
 const expMod = require('./expenses');
 expMod.mount(app, { MGR, upload, sniffImage, PHOTO_DIR });
 stockMod.mount(app, { MGR, OWNER });
@@ -680,7 +681,7 @@ stockMod.mount(app, { MGR, OWNER });
 const xlsxUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 60 * 1024 * 1024 } }); // sổ chi phí có ảnh hóa đơn ~20MB+
 app.post('/api/import', MGR, xlsxUpload.single('file'), async (req, res) => {
   if (!req.file) throw bad('Chưa chọn file Excel');
-  const opts = { dryRun: req.body.dry_run !== '0', includeHistory: req.body.include_history === '1' };
+  const opts = { dryRun: req.body.dry_run !== '0', includeHistory: req.body.include_history === '1', bookMoney: req.body.book_money !== '0' };
   const result = await importWorkbook(req.file.buffer, opts, req.user);
   if (!opts.dryRun) audit(req.user.id, 'import_excel', null, null, { file: req.file.originalname, ...result.summary });
   res.json(result);

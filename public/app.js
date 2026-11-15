@@ -1049,6 +1049,7 @@ async function visitForm(v = {}, after) {
       <datalist id="reasons"><option value="Khách quen"><option value="Khách giới thiệu"><option value="Khuyến mãi"><option value="Bù lỗi dịch vụ"><option value="Người nhà / nhân viên"><option value="Trẻ em dưới 13 tuổi (giảm 50%)"></datalist></div>
     <div id="cardBox" class="full"></div>
     <div><label>Hình thức thanh toán</label><select name="payment_method"><option value="">—</option>${methods.map((m) => `<option ${v.payment_method === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></div>
+    <div><label>Khách trả thực tế (tiền mặt/CK)</label><input type="number" id="paidAct" min="0" step="1000" placeholder="Trả dư → tự cộng tip chung"><div class="small muted" id="paidHint"></div></div>
     <div><label>Tip chung (chia cả nhóm)</label><input type="number" name="tip" min="0" step="1000" value="${v.tip || ''}"></div>
     <div class="full"><div class="form-grid" style="margin:0"><div><label>Tip riêng (khách tặng riêng 1 người)</label><input type="number" name="tip_private" min="0" step="1000" value="${v.tip_private || ''}"></div>
       <div><label>Người nhận tip riêng</label><select name="tip_private_to">${staffOptions(v.tip_private_to || null, '— Thợ chính —')}</select></div></div></div>
@@ -1064,6 +1065,14 @@ async function visitForm(v = {}, after) {
     <button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu lượt làm</button></div></form>`, true);
   const f = $('#vf');
   let cards = [];
+  // Khách trả dư so với số phải trả → phần dư tự vào TIP CHUNG (chia đều người đi làm hôm đó)
+  let due = 0;
+  const paidSync = () => {
+    const pa = $('#paidAct'); if (!pa || pa.value === '') { if ($('#paidHint')) $('#paidHint').textContent = ''; return; }
+    const extra = Number(pa.value) - due;
+    $('#paidHint').textContent = extra > 0 ? `Dư ${money(extra)} → tip chung` : extra < 0 ? `Còn thiếu ${money(-extra)}` : 'Đủ tiền';
+    if (extra >= 0) f.tip.value = extra || '';
+  };
   const renderItems = () => {
     $('#items').innerHTML = items.map((it, i) => `<div class="item-row"><select data-i="${i}" class="isvc">${svcOpts(it.service_id).replace(it.material_id ? `value="m${it.material_id}"` : '\u0000', `value="m${it.material_id}" selected`)}${!it.service_id && !it.material_id && it.name ? `<option selected value="">${esc(it.name)}</option>` : ''}</select>
       ${it.material_id ? `<input type="number" data-i="${i}" class="iqty" min="1" step="1" value="${it.qty || 1}" title="Số lượng" style="width:64px">` : ''}
@@ -1093,7 +1102,7 @@ async function visitForm(v = {}, after) {
     $('#tot').innerHTML = `<div class="row"><span>Tạm tính</span><span class="num">${money(sub)}</span></div>
       <div class="row"><span>Doanh số lượt này</span><span class="num big">${money(total)}</span></div>
       ${cardSel ? `<div class="row"><span>Trừ thẻ</span><span class="num">−${money(cardPaid)}</span></div>` : ''}
-      <div class="row"><span><b>Khách trả thêm</b></span><span class="num big">${money(Math.max(0, total - cardPaid))}</span></div>
+      <div class="row"><span><b>Khách trả thêm</b></span><span class="num big">${money(Math.max(0, total - cardPaid))}</span></div>${(() => { due = Math.max(0, total - cardPaid); setTimeout(paidSync); return ''; })()}
       ${Number(f.surcharge.value) > 0 ? (() => { const sc = Number(f.surcharge.value), r = S.settings.surcharge_salon_rate ?? 0.33, st = sc - Math.round(sc * r), as = f.assistant_id.value ? Math.floor(st / 2) : 0;
         return `<div class="row small muted"><span>Phụ thu chia: cửa hàng ${money(sc - st)} (${Math.round(r * 100)}%) · thợ chính ${money(st - as)}${as ? ' · người phụ ' + money(as) : ''}</span></div>`; })() : ''}
       ${f.time.value >= '19:00' && sub && !Number(f.surcharge.value) ? `<div class="row small" style="color:var(--warn)"><span>Lịch sau 19:00: phụ thu 10% theo bảng giá</span><button type="button" class="btn sm" id="eveSur">+ ${money(Math.round(sub * 0.1 / 1000) * 1000)}</button></div>` : ''}
@@ -1221,6 +1230,7 @@ async function visitForm(v = {}, after) {
   $('#vSvcS').innerHTML = vss.html; vss.bind();
   for (const n of ['surcharge', 'discount', 'time']) f[n].addEventListener('input', calc);
   f.assistant_id.addEventListener('change', calc);
+  $('#paidAct').addEventListener('input', paidSync);
   f.main_staff_id.addEventListener('change', () => { if (items.map((it) => levelSwap(it, f.main_staff_id.value)).some(Boolean)) { renderItems(); toast('Đã đổi giá cắt theo cấp của thợ chính'); } });
   renderItems();
   if (!isEdit && !used.length) autoRecipe(); else renderUsed();
@@ -1804,6 +1814,7 @@ VIEWS.excel = async (main) => {
       Khách trùng được ghép theo mã cũ → SĐT → tên. Nhập lại cùng file không bị nhân đôi.</div>
       <form id="imp"><label>File .xlsx</label><input type="file" name="file" accept=".xlsx" required>
       <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="include_history"> Nhập cả lịch sử cũ (lượt "Hoàn thành" ở tab Lịch sử của CRM Nếp Hair / lịch các ngày đã qua trong Sổ đặt lịch)</label>
+      <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="book_money" checked> Sổ đặt lịch: lấy <b>số tiền từ 01/11</b> theo cột Thu tiền / Tiền Tip → tạo lượt làm, thay các lượt nhập từ Nhật ký cùng ngày (lượt nhân viên tự ghi trong app giữ nguyên). Khách trả dư → tip chung.</label>
       <div class="small muted">Không nên tick nếu đã nhập file Nhật ký: 2 file ghi cùng các lượt 25/10–6/11 → doanh số bị cộng 2 lần (đã có chặn trùng theo khách + ngày).</div>
       <div class="err"></div><div class="row" style="margin-top:12px"><button class="btn" data-mode="1">Xem trước</button><button class="btn primary" data-mode="0">Nhập vào hệ thống</button></div></form>
       <div id="impRes"></div></div>
@@ -1816,7 +1827,7 @@ VIEWS.excel = async (main) => {
     if (!f.file.files.length) { $('#imp .err').textContent = 'Chọn file Excel'; return; }
     guard(b, async () => {
       const fd = new FormData();
-      fd.append('file', f.file.files[0]); fd.append('dry_run', b.dataset.mode); fd.append('include_history', f.include_history.checked ? '1' : '0');
+      fd.append('file', f.file.files[0]); fd.append('dry_run', b.dataset.mode); fd.append('include_history', f.include_history.checked ? '1' : '0'); fd.append('book_money', f.book_money.checked ? '1' : '0');
       if (b.dataset.mode === '0' && !confirm('Nhập dữ liệu vào hệ thống?')) return;
       const r = await api('/import', { method: 'POST', body: fd });
       const s = r.summary;
@@ -1832,6 +1843,14 @@ VIEWS.excel = async (main) => {
         ${s.visits_paid_set ? `<div class="stat-line"><span>Lượt làm được ghi hình thức thanh toán</span><b>${s.visits_paid_set}</b></div>` : ''}
         ${s.visits_assistant_set ? `<div class="stat-line"><span>Lượt làm được ghi người phụ (tên trong ngoặc)</span><b>${s.visits_assistant_set}</b></div>` : ''}
         ${s.cards_created || s.cards_skipped_existing ? `<div class="stat-line"><span>Thẻ voucher mới / đã có</span><b>${s.cards_created} / ${s.cards_skipped_existing}</b></div>` : ''}
+        ${s.book ? `<div class="stat-line"><span><b>Tiền theo sổ đặt lịch</b> (${s.book.days} ngày từ 01/11)</span><b>${money(s.book.total)}</b></div>
+          <div class="stat-line"><span>Lượt làm tạo mới / cập nhật</span><b>${s.book.visits} / ${s.book.updated}</b></div>
+          ${s.book.replaced_nk ? `<div class="stat-line"><span>Lượt nhập từ Nhật ký được thay bằng số liệu sổ</span><b>${s.book.replaced_nk}</b></div>` : ''}
+          ${s.book.kept_manual ? `<div class="stat-line"><span>Ô đã có lượt nhân viên tự ghi (giữ nguyên)</span><b>${s.book.kept_manual}</b></div>` : ''}
+          <div class="stat-line"><span>Tip chung (cột Tiền Tip + khách trả dư ${money(s.book.extra_tip)})</span><b>${money(s.book.tip)}</b></div>
+          ${s.book.unpaid ? `<div class="stat-line"><span>🩷 Đã làm chưa thanh toán (giá theo bảng giá)</span><b>${money(s.book.unpaid)}</b></div>` : ''}
+          ${s.book.rows_check.length ? `<details class="small"><summary>⚠ ${s.book.rows_check.length} dòng tiền thu khác giá ghi trong ô (thẻ/voucher, sản phẩm…) — nên kiểm tra</summary>${s.book.rows_check.map((x) => `<div>${esc(x)}</div>`).join('')}</details>` : ''}
+          ${s.book.no_money.length ? `<details class="small"><summary>${s.book.no_money.length} ô không có tiền thu → chưa tạo lượt làm</summary>${s.book.no_money.map((x) => `<div>${esc(x)}</div>`).join('')}</details>` : ''}` : ''}
         ${s.visits_updated ? `<div class="stat-line"><span>Lượt cũ được bổ sung công thức hóa chất</span><b>${s.visits_updated}</b></div>` : ''}
         <div class="stat-line"><span>Dịch vụ mới</span><b>${s.services_added}</b></div>
         ${s.purchases_created != null ? `<div class="stat-line"><span>Hóa chất / sản phẩm mới trong kho</span><b>${s.materials_created}</b></div>
