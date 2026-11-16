@@ -129,14 +129,14 @@ function saveVisit(input, user, existing, opts = {}) {
       const ps = db.prepare("SELECT * FROM services WHERE grp='Bán sản phẩm' AND active=1 ORDER BY id LIMIT 1").get();
       const price = it.price != null && it.price !== '' ? int(it.price) : (m.sell_price || 0) * qty;
       if (price < 0) throw bad('Giá sản phẩm không hợp lệ');
-      return { service_id: ps ? ps.id : null, name: m.name + (qty > 1 ? ' ×' + qty : ''), grp: 'Bán sản phẩm', price, commission_rate: ps ? ps.commission_rate : 0, material_id: m.id, qty };
+      return { service_id: ps ? ps.id : null, name: m.name + (qty > 1 ? ' ×' + qty : ''), grp: 'Bán sản phẩm', price, commission_rate: ps ? ps.commission_rate : 0, material_id: m.id, qty, staff_id: int(it.staff_id) || null };
     }
     const svc = it.service_id ? svcStmt.get(it.service_id) : null;
     const name = str(it.name) || (svc && svc.name);
     if (!name) throw bad('Dịch vụ thiếu tên');
     const price = it.price != null && it.price !== '' ? int(it.price) : svc ? svc.price : 0;
     if (price < 0) throw bad('Giá dịch vụ không hợp lệ');
-    return { service_id: svc ? svc.id : null, name, grp: svc ? svc.grp : str(it.grp) || 'Khác', price, commission_rate: svc ? svc.commission_rate : 0 };
+    return { service_id: svc ? svc.id : null, name, grp: svc ? svc.grp : str(it.grp) || 'Khác', price, commission_rate: svc ? svc.commission_rate : 0, staff_id: int(it.staff_id) || null };
   });
   const subtotal = cleanItems.reduce((s, i) => s + i.price, 0);
   const surcharge = Math.max(0, int(input.surcharge));
@@ -175,7 +175,14 @@ function saveVisit(input, user, existing, opts = {}) {
   const staffStmt = db.prepare('SELECT commission_enabled FROM users WHERE id=?');
   const ms = staffStmt.get(mainStaff);
   if (!ms) throw bad('Thợ chính không tồn tại');
-  const mainCommission = ms.commission_enabled ? Math.round(cleanItems.reduce((s, i) => s + i.price * factor * i.commission_rate, 0)) : 0;
+  // Từng dòng dịch vụ có thể do người khác làm (vd thợ chính cắt, Thu gội): hoa hồng dòng đó tính cho người làm
+  for (const i of cleanItems) {
+    if (i.staff_id === mainStaff) i.staff_id = null;
+    const doer = i.staff_id ? staffStmt.get(i.staff_id) : ms;
+    if (!doer) throw bad('Người làm dịch vụ không tồn tại');
+    i.commission = doer.commission_enabled ? Math.round(i.price * factor * i.commission_rate) : 0;
+  }
+  const mainCommission = cleanItems.filter((i) => !i.staff_id).reduce((s, i) => s + i.commission, 0);
   let assistantCommission = 0;
   if (assistant) {
     const as = staffStmt.get(assistant);
@@ -212,8 +219,8 @@ function saveVisit(input, user, existing, opts = {}) {
       db.prepare('DELETE FROM visit_items WHERE visit_id=?').run(id);
       db.prepare('DELETE FROM card_txns WHERE visit_id=?').run(id);
     }
-    const ins = db.prepare('INSERT INTO visit_items(visit_id,service_id,name,grp,price,commission_rate,material_id,qty) VALUES (?,?,?,?,?,?,?,?)');
-    for (const i of cleanItems) ins.run(id, i.service_id, i.name, i.grp, i.price, i.commission_rate, i.material_id || null, i.qty || null);
+    const ins = db.prepare('INSERT INTO visit_items(visit_id,service_id,name,grp,price,commission_rate,material_id,qty,staff_id,commission) VALUES (?,?,?,?,?,?,?,?,?,?)');
+    for (const i of cleanItems) ins.run(id, i.service_id, i.name, i.grp, i.price, i.commission_rate, i.material_id || null, i.qty || null, i.staff_id || null, i.commission);
     // Hóa chất đã dùng + sản phẩm bán → trừ kho, tính giá cốt lượt
     if (!opts.imported) require('./stock').applyVisit(id, date, cleanItems, Array.isArray(input.materials) ? input.materials : null, user);
     if (cardId && cardPaid > 0) {
@@ -231,7 +238,7 @@ function saveVisit(input, user, existing, opts = {}) {
     audit(user.id, isNew ? 'create_visit' : 'update_visit', 'visit', id,
       isNew ? { total, cash_paid: cashPaid, card_paid: cardPaid } : { code: existing.code, changes: {
         ...diffObj(existing, row, ['date', 'time', 'customer_id', 'main_staff_id', 'assistant_id', 'surcharge', 'discount', 'discount_reason', 'total', 'card_paid', 'cash_paid', 'payment_method', 'tip', 'tip_private', 'tip_private_to', 'formula', 'result', 'note']),
-        ...diffObj({ services: oldServices }, { services: cleanItems.map((i) => i.name).join(' + ') }) } });
+        ...diffObj({ services: oldServices }, { services: cleanItems.map((i) => i.name + (i.staff_id ? ' (' + i.staff_id + ')' : '')).join(' + ') }) } });
     return id;
   });
   return tx();
@@ -265,7 +272,7 @@ function getVisit(id) {
     FROM visits v LEFT JOIN customers c ON c.id=v.customer_id LEFT JOIN users m ON m.id=v.main_staff_id
     LEFT JOIN users a ON a.id=v.assistant_id LEFT JOIN cards cd ON cd.id=v.card_id WHERE v.id=?`).get(id);
   if (!v) return null;
-  v.items = db.prepare('SELECT * FROM visit_items WHERE visit_id=? ORDER BY id').all(id);
+  v.items = db.prepare('SELECT vi.*, u.full_name staff_name FROM visit_items vi LEFT JOIN users u ON u.id=vi.staff_id WHERE vi.visit_id=? ORDER BY vi.id').all(id);
   v.photos = db.prepare('SELECT id,kind,created_at FROM photos WHERE visit_id=? ORDER BY id').all(id);
   v.materials = require('./stock').visitMaterials(id);
   v.warranties = require('./warranty').forVisit(v);
@@ -277,7 +284,7 @@ function maskVisitMoney(v, user) {
   if (user.role !== 'staff') return v;
   // Nhân viên không bao giờ thấy giá cốt / giá nhập hóa chất
   v = { ...v, cost: null, materials: v.materials ? v.materials.map((m) => ({ ...m, unit_cost: null })) : v.materials };
-  if (v.main_staff_id === user.id || v.assistant_id === user.id) return v;
+  if (v.main_staff_id === user.id || v.assistant_id === user.id || (v.items || []).some((i) => i.staff_id === user.id)) return v;
   const out = { ...v };
   for (const k of ['subtotal', 'surcharge', 'discount', 'total', 'card_paid', 'cash_paid', 'tip', 'tip_private', 'main_commission', 'assistant_commission', 'surcharge_main', 'surcharge_assist']) out[k] = null;
   if (out.items) out.items = out.items.map((i) => ({ ...i, price: null }));
@@ -306,12 +313,22 @@ function salesReport(from, to, user) {
     const a = per.get(v.assistant_id);
     if (a) { a.assist_count++; a.assist_sales += v.total; a.assistant_commission += v.assistant_commission; a.surcharge_share += v.surcharge_assist || 0; }
   }
+  const helped = new Set();
   for (const i of items) {
-    const v = vById.get(i.visit_id); const m = per.get(i.main_staff_id);
+    const v = vById.get(i.visit_id);
+    const m = per.get(i.staff_id || i.main_staff_id);
     if (!m || !v) continue;
     const f = v.subtotal > 0 ? Math.max(0, v.total - v.surcharge) / v.subtotal : 0;
+    const net = Math.round(i.price * f);
     const g = m.by_group[i.grp] != null ? i.grp : 'Khác';
-    m.by_group[g] += Math.round(i.price * f);
+    m.by_group[g] += net;
+    // Dòng do người khác (không phải thợ chính) làm: doanh số + hoa hồng dòng đó chuyển sang người làm
+    if (i.staff_id && i.staff_id !== i.main_staff_id) {
+      const main = per.get(i.main_staff_id);
+      if (main) main.sales -= net;
+      m.sales += net; m.main_commission += i.commission || 0;
+      if (!helped.has(v.id + ':' + i.staff_id)) { helped.add(v.id + ':' + i.staff_id); m.main_count++; }
+    }
   }
   const cards = db.prepare("SELECT * FROM cards WHERE status!='refunded' AND sold_at BETWEEN ? AND ?").all(from, to);
   for (const c of cards) {
