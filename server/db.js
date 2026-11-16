@@ -367,6 +367,17 @@ function nextCode(table, prefix, width) {
   return prefix + String(max + 1).padStart(width, '0');
 }
 
+// Khách cắt định kỳ (vd anh Minh PH 14 ngày/lần, gọi trước hỏi giờ) + thợ không áp bảo hành chỉnh form cắt
+{
+  const cc = db.prepare('PRAGMA table_info(customers)').all().map((c) => c.name);
+  if (!cc.includes('cycle_days')) db.exec('ALTER TABLE customers ADD COLUMN cycle_days INTEGER; ALTER TABLE customers ADD COLUMN cycle_call INTEGER NOT NULL DEFAULT 0; ALTER TABLE customers ADD COLUMN cycle_note TEXT');
+  const uc = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+  if (!uc.includes('no_cut_warranty')) {
+    db.exec('ALTER TABLE users ADD COLUMN no_cut_warranty INTEGER NOT NULL DEFAULT 0');
+    // Vinh 16/11: cắt của anh Trường không cần lưu ý bảo hành chỉnh form
+    db.prepare("UPDATE users SET no_cut_warranty=1 WHERE username='truong' OR full_name='Trường'").run();
+  }
+}
 // Người làm từng dòng dịch vụ (trống = thợ chính) + hoa hồng của dòng
 {
   const ic = db.prepare('PRAGMA table_info(visit_items)').all().map((c) => c.name);

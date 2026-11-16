@@ -17,20 +17,24 @@ const EXCLUDE = 'Không bảo hành khi tóc đã chỉnh sửa ở nơi khác, 
 
 function addDays(d, n) { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
 
-// items: [{name, grp}] → [{key,label,days,until,note,services}]
-function forItems(date, items) {
+const noCut = () => new Set(db.prepare('SELECT id FROM users WHERE no_cut_warranty=1').all().map((u) => u.id));
+// items: [{name, grp, staff_id}] → [{key,label,days,until,note,services}]; mainStaff: thợ chính của lượt
+function forItems(date, items, mainStaff) {
   const out = [];
+  let skip = null;
   for (const it of items || []) {
     const n = fold(it.name);
     const r = RULES.find((x) => x.test(n, it.grp));
     if (!r) continue;
+    // Cắt do thợ không áp bảo hành chỉnh form (anh Trường) → không ghi lưu ý bảo hành
+    if (/^cut/.test(r.key) && (skip || (skip = noCut())).has(it.staff_id || mainStaff)) continue;
     const ex = out.find((w) => w.key === r.key);
     if (ex) { ex.services.push(it.name); continue; }
     out.push({ key: r.key, label: r.label, days: r.days, until: addDays(date, r.days), note: r.note, services: [it.name] });
   }
   return out;
 }
-function forVisit(v) { return v && v.date ? forItems(v.date, v.items) : []; }
+function forVisit(v) { return v && v.date ? forItems(v.date, v.items, v.main_staff_id) : []; }
 
 // Lượt còn trong hạn bảo hành (hôm nay ≤ hạn), mới nhất trước
 function active(today, customerId) {
@@ -39,10 +43,10 @@ function active(today, customerId) {
     FROM visits v LEFT JOIN customers c ON c.id=v.customer_id LEFT JOIN users u ON u.id=v.main_staff_id
     WHERE v.status='done' AND v.date>=? AND v.date<=? ${customerId ? 'AND v.customer_id=?' : ''} ORDER BY v.date DESC, v.id DESC`)
     .all(...[from, today, customerId].filter((x) => x != null));
-  const items = db.prepare('SELECT name, grp FROM visit_items WHERE visit_id=?');
+  const items = db.prepare('SELECT name, grp, staff_id FROM visit_items WHERE visit_id=?');
   const out = [];
   for (const v of visits) {
-    const w = forItems(v.date, items.all(v.id)).filter((x) => x.until >= today);
+    const w = forItems(v.date, items.all(v.id), v.main_staff_id).filter((x) => x.until >= today);
     if (w.length) out.push({ ...v, warranties: w, until: w.reduce((m, x) => (x.until > m ? x.until : m), '') });
   }
   return out;

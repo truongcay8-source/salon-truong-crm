@@ -245,7 +245,8 @@ function customerInput(b) {
   let birthday = str(b.birthday);
   if (birthday && !/^(\d{4}-)?\d{2}-\d{2}$/.test(birthday)) throw bad('Ngày sinh dạng YYYY-MM-DD');
   return { name, phone, gender: str(b.gender), birthday, source: str(b.source), hair_notes: str(b.hair_notes), notes: str(b.notes),
-    staff_id: int(b.staff_id) || null, formula: str(b.formula) };
+    staff_id: int(b.staff_id) || null, formula: str(b.formula),
+    cycle_days: int(b.cycle_days) > 0 ? Math.min(365, int(b.cycle_days)) : null, cycle_call: b.cycle_call === true || b.cycle_call === '1' || b.cycle_call === 'on' ? 1 : 0, cycle_note: str(b.cycle_note) };
 }
 app.post('/api/customers', (req, res) => {
   const c = customerInput(req.body);
@@ -256,6 +257,7 @@ app.post('/api/customers', (req, res) => {
   const code = nextCode('customers', 'KH', 4);
   const id = db.prepare('INSERT INTO customers(code,name,phone,gender,birthday,source,hair_notes,notes,created_by,staff_id,formula,formula_at,formula_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
     .run(code, c.name, c.phone, c.gender, c.birthday, c.source, c.hair_notes, c.notes, req.user.id, c.staff_id, c.formula, c.formula ? today() : null, c.formula ? req.user.id : null).lastInsertRowid;
+  db.prepare('UPDATE customers SET cycle_days=?, cycle_call=?, cycle_note=? WHERE id=?').run(c.cycle_days, c.cycle_call, c.cycle_note, id);
   audit(req.user.id, 'create_customer', 'customer', id, { code, name: c.name });
   res.json({ id, code });
 });
@@ -286,6 +288,9 @@ app.put('/api/customers/:id', (req, res) => {
   if (!('formula' in req.body)) c.formula = before.formula;
   db.prepare('UPDATE customers SET name=?,phone=?,gender=?,birthday=?,source=?,hair_notes=?,notes=?,staff_id=?,formula=? WHERE id=?')
     .run(c.name, c.phone, c.gender, c.birthday, c.source, c.hair_notes, c.notes, c.staff_id, c.formula, id);
+  // Khách định kỳ: chỉ đổi khi form có gửi ô này (form cũ / sửa nhanh không làm mất)
+  if (!('cycle_days' in req.body)) Object.assign(c, { cycle_days: before.cycle_days, cycle_call: before.cycle_call, cycle_note: before.cycle_note });
+  db.prepare('UPDATE customers SET cycle_days=?, cycle_call=?, cycle_note=? WHERE id=?').run(c.cycle_days, c.cycle_call, c.cycle_note, id);
   if ((before.formula || null) !== (c.formula || null)) db.prepare('UPDATE customers SET formula_at=?, formula_by=? WHERE id=?').run(today(), req.user.id, id);
   const changed = {};
   for (const k of Object.keys(c)) if ((before[k] || null) !== (c[k] || null)) changed[k] = [before[k], c[k]];
@@ -716,7 +721,7 @@ app.post('/api/customers/transfer', MGR, (req, res) => {
 });
 app.post('/api/reminders/done', (req, res) => {
   const { customer_id, type, ref, note } = req.body;
-  if (!['birthday', 'card', 'return', 'appointment'].includes(type)) throw bad('Loại nhắc không hợp lệ');
+  if (!['birthday', 'card', 'return', 'appointment', 'cycle'].includes(type)) throw bad('Loại nhắc không hợp lệ');
   db.prepare('INSERT OR REPLACE INTO reminder_log(customer_id,type,ref,note,created_by) VALUES (?,?,?,?,?)').run(int(customer_id), type, String(ref), str(note), req.user.id);
   res.json({ ok: true });
 });
