@@ -348,3 +348,39 @@ test('hồ sơ thừa 0đ trùng người → gộp vào hồ sơ có lượt, g
   assert.equal(db.prepare("SELECT customer_id FROM cards WHERE code='TXYZ'").get().customer_id, bon);
   assert.equal(db.prepare('SELECT deleted FROM customers WHERE id=?').get(woman).deleted, 0, 'anh Lan ≠ chị Lan');
 });
+
+test('bảng lương: chỉ Lãnh đạo xem; lương cứng theo công, HH từ hóa đơn, bậc thưởng, bù sàn, chốt tháng', async () => {
+  const o = client();
+  assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const thu = db.prepare("SELECT id FROM users WHERE username='thu'").get().id;
+  const svc = db.prepare("SELECT id, commission_rate FROM services WHERE active=1 AND commission_rate>0 ORDER BY id LIMIT 1").get();
+  const cid = (await o.post('/customers', { name: 'Khách lương', phone: '0913888555' })).data.id;
+  assert.equal((await o.post('/visits', { customer_id: cid, date: '2026-09-10', time: '10:00', main_staff_id: thu, payment_method: 'Tiền mặt', items: [{ service_id: svc.id, price: 10000000 }] })).status, 200);
+  let r = await o.put('/payroll/params/' + thu, { base_salary: 5500000, std_days: 26, allowance: 2000000, allowance_label: 'Phụ cấp lễ tân', error_penalty: 200000, kpi_max: 2000000,
+    bonus_tiers: [[5000000, 0.02], [20000000, 0.04]], floor_amount: 14000000, floor_until: '2026-12-31', floor_kpi_min: 0.7 });
+  assert.equal(r.status, 200);
+  assert.equal((await o.put('/payroll/inputs', { month: '2026-09', user_id: thu, days: 13, kpi_pct: 0.5, errors: 2, advance: 1000000 })).status, 200);
+  r = await o.get('/payroll?month=2026-09');
+  const x = r.data.rows.find((y) => y.user_id === thu);
+  assert.equal(x.base, 2750000);
+  assert.equal(x.allowance, 1600000);
+  assert.equal(x.commission_detail.service, Math.round(10000000 * svc.commission_rate));
+  assert.equal(x.bonus, 200000);
+  assert.equal(x.kpi, 1000000);
+  assert.equal(x.floor_topup, 0, 'KPI 50% < 70% → không bù sàn');
+  assert.equal(x.net, x.subtotal - 1000000);
+  // Nhân viên / quản lý không xem được
+  const t = client();
+  assert.equal((await t.post('/login', { username: 'truong', password: 'moi-truong' })).status, 200);
+  assert.equal((await t.get('/payroll?month=2026-09')).status, 403);
+  const s = await login('thu');
+  assert.equal((await s.get('/payroll?month=2026-09')).status, 403);
+  assert.equal((await s.put('/payroll/inputs', { month: '2026-09', user_id: thu, plus: 9000000 })).status, 403);
+  // Chốt → sửa không được, số giữ nguyên
+  assert.equal((await o.post('/payroll/lock', { month: '2026-09' })).status, 200);
+  assert.equal((await o.put('/payroll/inputs', { month: '2026-09', user_id: thu, days: 26 })).status, 400);
+  r = await o.get('/payroll?month=2026-09');
+  assert.ok(r.data.locked);
+  assert.equal(r.data.rows.find((y) => y.user_id === thu).net, x.net);
+  assert.equal((await o.post('/payroll/lock', { month: '2026-09', lock: false })).status, 200);
+});

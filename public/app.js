@@ -118,6 +118,7 @@ const PAGES = [
   ['cards', 'Thẻ trả trước', '💳', () => true],
   ['sales', 'Doanh số', '📊', () => true],
   ['tips', 'Chia tip', '💵', () => true],
+  ['payroll', 'Bảng lương', '💰', () => isOwner()],
   ['attendance', 'Chấm công', '🕘', () => true],
   ['offs', 'Lịch off', '🌴', () => true],
   ['stock', 'Kho hàng', '🧪', () => isMgr() || S.me.stock_view],
@@ -2051,6 +2052,101 @@ VIEWS.sales = async (main) => {
 };
 
 // ---------- Chia tip chung theo tháng ----------
+// ---------- Bảng lương (chỉ Lãnh đạo) ----------
+VIEWS.payroll = async (main) => {
+  if (!isOwner()) { main.innerHTML = header('Bảng lương', '') + '<div class="card empty">Chỉ Lãnh đạo xem được bảng lương</div>'; return; }
+  const month = S.params.month || S.today.slice(0, 7);
+  const r = await api('/payroll?month=' + month);
+  const shift = (n) => { const [y, m] = month.split('-').map(Number); const d = new Date(Date.UTC(y, m - 1 + n, 1)); return d.toISOString().slice(0, 7); };
+  const T = r.totals;
+  main.innerHTML = header('💰 Bảng lương', 'Chỉ tài khoản Lãnh đạo thấy trang này. Hoa hồng, phụ thu, thẻ, tip lấy thẳng từ hóa đơn.',
+    `<button class="btn" id="pxl">📥 Xuất Excel</button>${r.locked ? '<button class="btn" id="unlock">🔓 Mở chốt</button>' : '<button class="btn primary" id="lock">🔒 Chốt lương tháng</button>'}`) +
+    `<div class="card"><div class="row"><button class="btn sm" id="pm">‹</button><input type="month" id="mo" value="${month}" style="width:auto"><button class="btn sm" id="nm">›</button>
+      ${r.locked ? `<span class="badge ok">Đã chốt ${esc(r.locked.at)}${r.locked.by ? ' · ' + esc(r.locked.by) : ''}</span><span class="small muted">Số liệu giữ nguyên như lúc chốt, sửa hóa đơn không làm đổi.</span>` : '<span class="small muted">Chưa chốt: số tự cập nhật theo hóa đơn. Cuối tháng kiểm tra xong thì bấm Chốt.</span>'}</div></div>
+    <div class="grid kpis"><div class="kpi"><div class="l">Tổng thực nhận</div><div class="v">${money(T.net)}</div><div class="s">${r.rows.length} người</div></div>
+      <div class="kpi"><div class="l">Lương cứng + phụ cấp</div><div class="v">${money(T.base + T.allowance)}</div></div>
+      <div class="kpi"><div class="l">Hoa hồng + thưởng</div><div class="v">${money(T.commission + T.bonus + T.kpi + T.floor_topup)}</div><div class="s">${T.floor_topup ? 'gồm bù sàn ' + money(T.floor_topup) : ''}</div></div>
+      <div class="kpi"><div class="l">Quỹ lương / doanh số DV</div><div class="v">${r.service_sales ? Math.round(((T.net - T.tips) / r.service_sales) * 100) + '%' : '—'}</div><div class="s">không tính tip · DS ${money(r.service_sales)}</div></div></div>
+    <div class="card"><h3>Theo nhân viên <span class="small muted">(bấm tên để xem phiếu lương, nhập công/KPI/ứng lương)</span></h3><div class="table-wrap"><table><thead><tr><th>Nhân viên</th><th class="num">Công</th><th class="num">Lương cứng</th><th class="num">Phụ cấp</th><th class="num">Hoa hồng</th><th class="num">Thưởng DS</th><th class="num">KPI</th><th class="num">Bù sàn</th><th class="num">Tip</th><th class="num">Ứng / trừ</th><th class="num">Thực nhận</th></tr></thead>
+      <tbody>${r.rows.map((x) => `<tr><td><a href="#" data-ps="${x.user_id}"><b>${esc(x.name)}</b></a>${x.has_params ? '' : ' <span class="badge warn">chưa cài lương</span>'}</td><td class="num">${x.days}/${x.std_days}</td>
+        <td class="num">${money(x.base)}</td><td class="num">${money(x.allowance)}</td><td class="num">${money(x.commission)}</td><td class="num">${money(x.bonus)}</td><td class="num">${money(x.kpi)}</td>
+        <td class="num">${x.floor_topup ? money(x.floor_topup) : ''}</td><td class="num">${money(x.tip_shared + x.tip_private)}</td><td class="num">${x.advance + x.minus - x.plus ? money(-(x.advance + x.minus - x.plus)) : ''}</td><td class="num"><b>${money(x.net)}</b></td></tr>`).join('') || '<tr><td colspan="11" class="empty">Chưa có nhân viên</td></tr>'}</tbody>
+      <tfoot><tr><td>Tổng</td><td></td><td class="num">${money(T.base)}</td><td class="num">${money(T.allowance)}</td><td class="num">${money(T.commission)}</td><td class="num">${money(T.bonus)}</td><td class="num">${money(T.kpi)}</td><td class="num">${money(T.floor_topup)}</td><td class="num">${money(T.tips)}</td><td></td><td class="num"><b>${money(T.net)}</b></td></tr></tfoot></table></div>
+      <div class="small muted" style="margin-top:8px">Hoa hồng = HH dịch vụ tự làm + HH phụ + HH bán thẻ + phần phụ thu. Thưởng DS tính trên <b>DS tính thưởng</b> (đã bỏ thẻ tri ân và người nhà). Ngày công lấy theo trang Chấm công; chưa chấm thì lấy công chuẩn trừ ngày off đã duyệt; bạn sửa tay được ở phiếu.</div></div>`;
+  const go2 = (m) => go('payroll', { month: m });
+  $('#pm').onclick = () => go2(shift(-1)); $('#nm').onclick = () => go2(shift(1)); $('#mo').onchange = (e) => e.target.value && go2(e.target.value);
+  $('#pxl').onclick = () => guard($('#pxl'), async () => {
+    const res = await api('/payroll/export?month=' + month, { raw: true });
+    if (!res.ok) throw new Error('Không xuất được file');
+    const blob = await res.blob(); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Bang-luong-${month}.xlsx`; a.click();
+  });
+  if ($('#lock')) $('#lock').onclick = () => guard($('#lock'), async () => { if (!confirm(`Chốt bảng lương tháng ${month}? Sau khi chốt số liệu giữ nguyên.`)) return; await api('/payroll/lock', { method: 'POST', body: { month } }); toast('Đã chốt lương'); VIEWS.payroll(main); });
+  if ($('#unlock')) $('#unlock').onclick = () => guard($('#unlock'), async () => { await api('/payroll/lock', { method: 'POST', body: { month, lock: false } }); toast('Đã mở chốt'); VIEWS.payroll(main); });
+  $$('[data-ps]', main).forEach((a) => (a.onclick = (e) => { e.preventDefault(); payslip(r, Number(a.dataset.ps), () => VIEWS.payroll(main)); }));
+};
+function payslip(r, uid, after) {
+  const x = r.rows.find((y) => y.user_id === uid); if (!x) return;
+  const P = x.params, I = x.input, c = x.commission_detail;
+  const line = (l, v, sub) => `<div class="stat-line"><span>${l}${sub ? `<div class="small muted">${sub}</div>` : ''}</span><b>${v}</b></div>`;
+  const pct = (v) => Math.round(v * 1000) / 10 + '%';
+  const lk = !!r.locked;
+  openModal(`Phiếu lương ${x.name} – tháng ${r.month.slice(5)}/${r.month.slice(0, 4)}`, `
+    ${line('Ngày công', `${x.days}/${x.std_days}`, x.days_source)}
+    ${line('(A) Lương cứng theo công', money(x.base), `${money(P.base_salary)} × ${x.days}/${x.std_days}`)}
+    ${line('(B) ' + esc(P.allowance_label || 'Phụ cấp'), money(x.allowance), I.errors ? `${I.errors} lỗi × ${money(P.error_penalty)}` : '')}
+    ${line('(C) HH dịch vụ tự làm', `<a href="#" id="psl">${money(c.service)}</a>`, `DS tự làm ${money(x.sales)} · ${x.main_count} lượt — bấm để xem từng hóa đơn`)}
+    ${line('(D) HH làm phụ', money(c.assist), x.assist_count + ' lượt phụ')}
+    ${c.card ? line('(E) HH bán thẻ', money(c.card)) : ''}
+    ${c.surcharge ? line('(F) Phần phụ thu', money(c.surcharge)) : ''}
+    ${line('(G) Thưởng DS theo bậc', money(x.bonus), `DS tính thưởng ${money(x.bonus_sales)}${x.bonus_pct ? ' × ' + pct(x.bonus_pct) : P.bonus_tiers.length ? ' · chưa đạt bậc' : ' · chưa cài bậc'}${x.gift_sales || x.family_sales ? ` (đã bỏ tri ân ${money(x.gift_sales)}, người nhà ${money(x.family_sales)})` : ''}`)}
+    ${P.kpi_max ? line('(H) Thưởng KPI', money(x.kpi), `${money(P.kpi_max)} × ${pct(x.kpi_pct)}`) : ''}
+    ${line('Tổng theo cơ chế', money(x.subtotal))}
+    ${x.floor_topup ? line('Bù sàn chuyển tiếp', money(x.floor_topup), `sàn ${money(P.floor_amount)}${P.floor_until ? ' đến ' + dmy(P.floor_until) : ''}`) : ''}
+    ${line('Tip chung / tip riêng', `${money(x.tip_shared)} / ${money(x.tip_private)}`, 'theo trang Chia tip')}
+    ${x.plus ? line('Cộng khác', money(x.plus)) : ''}${x.minus ? line('Trừ khác', '−' + money(x.minus)) : ''}${x.advance ? line('Đã ứng', '−' + money(x.advance)) : ''}
+    <div class="stat-line" style="font-size:1.15em"><span><b>THỰC NHẬN</b></span><b>${money(x.net)}</b></div>
+    ${lk ? '<div class="small muted" style="margin-top:8px">Tháng đã chốt: mở chốt để sửa.</div>' : `
+    <form id="pin" style="margin-top:12px"><h3>Nhập cuối tháng</h3><div class="form-grid">
+      <label>Ngày công (để trống = tự lấy ${x.days_auto})<input name="days" type="number" step="0.5" min="0" max="31" value="${I.days ?? ''}"></label>
+      <label>% KPI đạt (để trống = 100%)<input name="kpi" type="number" min="0" max="100" value="${I.kpi_pct != null ? Math.round(I.kpi_pct * 100) : ''}"></label>
+      <label>Số lỗi lễ tân / lỗi trừ phụ cấp<input name="errors" type="number" min="0" value="${I.errors || ''}"></label>
+      <label>Đã ứng lương (đ)<input name="advance" inputmode="numeric" value="${I.advance || ''}"></label>
+      <label>Cộng khác (đ)<input name="plus" inputmode="numeric" value="${I.plus || ''}"></label>
+      <label>Trừ khác (đ)<input name="minus" inputmode="numeric" value="${I.minus || ''}"></label>
+      <label class="full">Ghi chú<input name="note" value="${esc(I.note || '')}"></label></div>
+      <div class="err"></div><div class="modal-foot"><button type="button" class="btn" id="pcfg">⚙️ Cài lương ${esc(x.name)}</button><span class="spacer"></span><button class="btn primary">Lưu</button></div></form>`}`, true);
+  $('#psl').onclick = (e) => { e.preventDefault(); salesLines(r.from, r.to, uid, '', () => {}); };
+  if (lk) return;
+  const num = (v) => Number(String(v || '').replace(/[^\d]/g, '')) || 0;
+  $('#pin').onsubmit = (e) => { e.preventDefault(); const b = formData(e.target); guard(e.submitter || $("button.primary", e.target), async () => {
+    await api('/payroll/inputs', { method: 'PUT', body: { month: r.month, user_id: uid, days: b.days, kpi_pct: b.kpi === '' ? '' : Number(b.kpi) / 100, errors: b.errors, advance: num(b.advance), plus: num(b.plus), minus: num(b.minus), note: b.note } });
+    toast('Đã lưu'); closeModal(); after(); }); };
+  $('#pcfg').onclick = () => payParams(x, after);
+}
+function payParams(x, after) {
+  const P = x.params;
+  const num = (v) => Number(String(v || '').replace(/[^\d]/g, '')) || 0;
+  openModal(`⚙️ Cài lương ${x.name}`, `<form id="pp"><div class="small muted" style="margin-bottom:8px">Cài 1 lần, áp dụng các tháng chưa chốt. Hoa hồng từng dịch vụ vẫn theo tỷ lệ ở Cài đặt › Dịch vụ & giá.</div><div class="form-grid">
+    <label>Lương cứng / tháng (đ)<input name="base_salary" inputmode="numeric" value="${P.base_salary || ''}"></label>
+    <label>Công chuẩn (ngày)<input name="std_days" type="number" min="1" max="31" value="${P.std_days || 26}"></label>
+    <label>Tên phụ cấp<input name="allowance_label" placeholder="Phụ cấp lễ tân" value="${esc(P.allowance_label || '')}"></label>
+    <label>Phụ cấp / tháng (đ)<input name="allowance" inputmode="numeric" value="${P.allowance || ''}"></label>
+    <label>Trừ mỗi lỗi (đ)<input name="error_penalty" inputmode="numeric" value="${P.error_penalty || ''}"></label>
+    <label>Thưởng KPI tối đa (đ)<input name="kpi_max" inputmode="numeric" value="${P.kpi_max || ''}"></label>
+    <label class="full">Bậc thưởng DS (mỗi dòng: mốc DS = %)<textarea name="tiers" rows="4" placeholder="40000000 = 2&#10;60000000 = 4&#10;80000000 = 6">${P.bonus_tiers.map((t) => `${t.from} = ${Math.round(t.pct * 1000) / 10}`).join('\n')}</textarea>
+      <span class="small muted">Đạt mốc nào nhận % đó trên toàn bộ DS tính thưởng.</span></label>
+    <label>Sàn thu nhập (đ, bỏ trống = không)<input name="floor_amount" inputmode="numeric" value="${P.floor_amount || ''}"></label>
+    <label>Sàn áp dụng đến ngày<input name="floor_until" type="date" value="${P.floor_until || ''}"></label>
+    <label>KPI tối thiểu để được bù sàn (%)<input name="floor_kpi_min" type="number" min="0" max="100" value="${Math.round((P.floor_kpi_min ?? 0.7) * 100)}"></label>
+    <label class="full">Ghi chú cơ chế<input name="note" value="${esc(P.note || '')}"></label></div>
+    <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu</button></div></form>`, true);
+  $('#pp').onsubmit = (e) => { e.preventDefault(); const b = formData(e.target); guard(e.submitter || $("button.primary", e.target), async () => {
+    const tiers = b.tiers.split('\n').map((l) => l.split(/[=:]/)).filter((p) => p.length === 2).map(([a, p]) => [num(a), Number(String(p).replace(',', '.').replace('%', '')) / 100]);
+    await api('/payroll/params/' + x.user_id, { method: 'PUT', body: { base_salary: num(b.base_salary), std_days: b.std_days, allowance_label: b.allowance_label, allowance: num(b.allowance), error_penalty: num(b.error_penalty),
+      kpi_max: num(b.kpi_max), bonus_tiers: tiers, floor_amount: num(b.floor_amount), floor_until: b.floor_until, floor_kpi_min: Number(b.floor_kpi_min || 70) / 100, note: b.note } });
+    toast('Đã lưu cài đặt lương'); closeModal(); after(); }); };
+}
+
 VIEWS.tips = async (main) => {
   const month = S.params.month || S.today.slice(0, 7);
   const r = await api('/tips?month=' + month);
