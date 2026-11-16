@@ -2105,6 +2105,7 @@ function showImport(r, sel) {
           ${s.book.kept_manual ? `<div class="stat-line"><span>Ô đã có lượt nhân viên tự ghi (giữ nguyên)</span><b>${s.book.kept_manual}</b></div>` : ''}
           <div class="stat-line"><span>Tip chung (cột Tiền Tip + khách trả dư ${money(s.book.extra_tip)})</span><b>${money(s.book.tip)}</b></div>
           ${s.book.unpaid ? `<div class="stat-line"><span>🩷 Đã làm chưa thanh toán (giá theo bảng giá)</span><b>${money(s.book.unpaid)}</b></div>` : ''}
+          ${(s.book.gifts_added || []).length ? `<details class="small" open><summary>🎁 Bổ sung ${s.book.gifts_added.length} thẻ tri ân (ô ghi tặng/có vc, chưa có trong tab Quản lý Thẻ 1Tr)</summary>${s.book.gifts_added.map((x) => `<div>${esc(x)}</div>`).join("")}</details>` : ""}
           ${s.book.rows_check.length ? `<details class="small"><summary>⚠ ${s.book.rows_check.length} dòng tiền thu khác giá ghi trong ô (thẻ/voucher, sản phẩm…) — nên kiểm tra</summary>${s.book.rows_check.map((x) => `<div>${esc(x)}</div>`).join('')}</details>` : ''}
           ${s.book.no_money.length ? `<details class="small"><summary>${s.book.no_money.length} ô không có tiền thu → chưa tạo lượt làm</summary>${s.book.no_money.map((x) => `<div>${esc(x)}</div>`).join('')}</details>` : ''}` : ''}
         ${s.expenses ? `<div class="stat-line"><span>💸 Khoản chi đưa vào quỹ tiền mặt (${s.expenses.days} ngày)</span><b>${s.expenses.created} · ${money(s.expenses.amount)}</b></div>
