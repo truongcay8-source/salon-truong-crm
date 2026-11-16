@@ -331,3 +331,20 @@ test('lỡ tay xóa lượt → Lãnh đạo khôi phục được', async () =>
   const v = db.prepare('SELECT status, total FROM visits WHERE id=?').get(r.data.id);
   assert.equal(v.status, 'done'); assert.equal(v.total, 3704000);
 });
+
+test('hồ sơ thừa 0đ trùng người → gộp vào hồ sơ có lượt, giữ SĐT/thẻ/lịch; khác giới không gộp', () => {
+  const L = require('../server/logic'); const I = require('../server/importer');
+  const svc = db.prepare("SELECT id FROM services WHERE active=1 AND price>0 ORDER BY id LIMIT 1").get();
+  const mk = (name, phone) => db.prepare("INSERT INTO customers(code,name,phone) VALUES (?,?,?)").run('O' + Math.random().toString(36).slice(2, 8), name, phone || null).lastInsertRowid;
+  const sys = { id: 1, role: 'owner' };
+  const bon = mk('E Bon xyz'); L.saveVisit({ customer_id: bon, date: '2026-11-03', time: '15:00', main_staff_id: 2, items: [{ service_id: svc.id, price: 390000 }], payment_method: 'Tiền mặt' }, sys, null, { imported: true });
+  const orphan = mk('Em Bon xyz', '0912345111');
+  db.prepare("INSERT INTO cards(code,customer_id,name,price,value,sold_at,sale_type,status,created_by) VALUES ('TXYZ',?, 'Thẻ tri ân 1Tr',0,1000000,'2026-11-03','gift','active',1)").run(orphan);
+  const man = mk('a Lan xyz'); L.saveVisit({ customer_id: man, date: '2026-11-04', time: '10:00', main_staff_id: 2, items: [{ service_id: svc.id, price: 100000 }], payment_method: 'Tiền mặt' }, sys, null, { imported: true });
+  const woman = mk('c Lan xyz');
+  I.mergeOrphanCustomers();
+  assert.equal(db.prepare('SELECT deleted FROM customers WHERE id=?').get(orphan).deleted, 1);
+  assert.equal(db.prepare('SELECT phone FROM customers WHERE id=?').get(bon).phone, '0912345111');
+  assert.equal(db.prepare("SELECT customer_id FROM cards WHERE code='TXYZ'").get().customer_id, bon);
+  assert.equal(db.prepare('SELECT deleted FROM customers WHERE id=?').get(woman).deleted, 0, 'anh Lan ≠ chị Lan');
+});
