@@ -319,9 +319,11 @@ function salesReport(from, to, user) {
     cards_count: 0, cards_amount: 0, card_commission: 0, total_commission: 0,
   }]));
   const vById = new Map(visits.map((v) => [v.id, v]));
+  // Thợ chính trên phiếu có thể chỉ là người nhận khách: chỉ tính 1 lượt cho họ nếu có làm ít nhất 1 dòng
+  const mainDid = new Set(items.filter((i) => !i.staff_id || i.staff_id === i.main_staff_id).map((i) => i.visit_id));
   for (const v of visits) {
     const m = per.get(v.main_staff_id);
-    if (m) { m.main_count++; m.sales += v.total; m.main_commission += v.main_commission; m.tip += v.tip; m.surcharge_share += v.surcharge_main || 0; }
+    if (m) { if (mainDid.has(v.id)) m.main_count++; m.sales += v.total; m.main_commission += v.main_commission; m.tip += v.tip; m.surcharge_share += v.surcharge_main || 0; }
     const tp = v.tip_private ? per.get(v.tip_private_to) : null;
     if (tp) tp.tip += v.tip_private;
     const a = per.get(v.assistant_id);
@@ -398,7 +400,7 @@ function reminders() {
   const t = today();
   const done = new Set(db.prepare('SELECT customer_id||\'|\'||type||\'|\'||ref k FROM reminder_log').all().map((r) => r.k));
   const isDone = (cid, type, ref) => done.has(`${cid}|${type}|${ref}`);
-  const out = { birthdays: [], cards: [], returns: [], appointments: [], cancels: [] };
+  const out = { cycles: [], birthdays: [], cards: [], returns: [], appointments: [], cancels: [] };
 
   const bdEnd = addDays(t, Number(s.birthday_days || 7));
   for (const c of db.prepare('SELECT id,code,name,phone,birthday,staff_id FROM customers WHERE deleted=0 AND birthday IS NOT NULL').all()) {
@@ -430,8 +432,19 @@ function reminders() {
       FROM customers c JOIN visits v ON v.customer_id=c.id AND v.status='done'
       WHERE c.deleted=0 GROUP BY c.id HAVING last_date <= ? AND last_date >= ?`).all(dueBefore, oldest);
   const futureAppt = db.prepare("SELECT 1 FROM appointments WHERE customer_id=? AND date>=? AND status IN ('booked','arrived')");
+  // Khách định kỳ: đến hạn (trước 2 ngày) → gọi/nhắn hỏi giờ; không lặp lại ở "đến hạn quay lại"
+  for (const c of db.prepare(`SELECT c.id,c.code,c.name,c.phone,c.staff_id,c.cycle_days,c.cycle_call,c.cycle_note,
+      (SELECT MAX(date) FROM visits v WHERE v.customer_id=c.id AND v.status='done') last_date
+      FROM customers c WHERE c.deleted=0 AND c.cycle_days>0`).all()) {
+    if (!c.last_date || futureAppt.get(c.id, t)) continue;
+    const due = addDays(c.last_date, c.cycle_days);
+    if (addDays(due, -2) > t) continue;
+    out.cycles.push({ ...c, due, days: Math.round((new Date(t) - new Date(c.last_date)) / 86400000), ref: c.last_date, done: isDone(c.id, 'cycle', c.last_date) });
+  }
+  out.cycles.sort((a, b) => a.due.localeCompare(b.due));
+  const cyc = new Set(out.cycles.map((c) => c.id).concat(db.prepare('SELECT id FROM customers WHERE cycle_days>0').all().map((x) => x.id)));
   for (const r of rows) {
-    if (futureAppt.get(r.id, t)) continue;
+    if (cyc.has(r.id) || futureAppt.get(r.id, t)) continue;
     out.returns.push({ ...r, days: Math.round((new Date(t) - new Date(r.last_date)) / 86400000), ref: r.last_date, done: isDone(r.id, 'return', r.last_date) });
   }
   out.returns.sort((a, b) => b.days - a.days);
@@ -451,6 +464,7 @@ function reminders() {
     out.cancels.push({ ...a, ref: String(a.id), done: !!a.followup_at });
   }
   out.counts = {
+    cycles: out.cycles.filter((x) => !x.done).length,
     birthdays: out.birthdays.filter((x) => !x.done).length,
     cards: out.cards.filter((x) => !x.done).length,
     returns: out.returns.filter((x) => !x.done).length,

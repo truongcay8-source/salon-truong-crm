@@ -403,7 +403,7 @@ VIEWS.dashboard = async (main) => {
     <div class="grid two">
       <div class="card"><h3>Lịch hẹn hôm nay (${d.appointments.length})</h3>${apptList(d.appointments)}</div>
       <div class="card"><h3>Việc cần làm</h3>
-        ${[['birthdays', '🎂 Sinh nhật sắp tới'], ['cards', '💳 Thẻ sắp hết hạn / hết tiền'], ['returns', '🔁 Khách đến hạn quay lại'], ['appointments', '📞 Gọi xác nhận lịch ngày mai'], ['cancels', '❌ Khách hủy / không đến – mời đặt lại']]
+        ${[['cycles', '📞 Khách định kỳ – gọi hỏi giờ'], ['birthdays', '🎂 Sinh nhật sắp tới'], ['cards', '💳 Thẻ sắp hết hạn / hết tiền'], ['returns', '🔁 Khách đến hạn quay lại'], ['appointments', '📞 Gọi xác nhận lịch ngày mai'], ['cancels', '❌ Khách hủy / không đến – mời đặt lại']]
           .map(([k, l]) => `<div class="stat-line"><a href="#reminders">${l}</a><b>${rc[k]}</b></div>`).join('')}
       </div></div>`;
   $('#qAppt').onclick = () => apptForm({ date: d.today });
@@ -1059,13 +1059,17 @@ function customerForm(c = {}, after) {
     <div><label>Thợ phụ trách</label>${isMgr() ? `<select name="staff_id">${staffOptions(c.staff_id || (isEdit ? null : S.me.role === 'staff' ? S.me.id : null), 'Chưa giao')}</select>` : `<input value="${esc(c.staff_name || staffName(c.staff_id) || 'Chưa giao')}" disabled>`}</div>
     <div class="full"><label>Lưu ý tóc, da đầu (nền tóc, % bạc, dị ứng…)</label><textarea name="hair_notes">${esc(c.hair_notes || '')}</textarea></div>
     <div class="full"><label>🧪 Công thức chuẩn của khách (màu, tỷ lệ, oxy, thời gian ủ…)</label><textarea name="formula" rows="3" placeholder="VD: Milbon 7-NB 30g + 8-MT 30g, oxy 6% 1:1,5, ủ 30'">${esc(c.formula || '')}</textarea></div>
-    <div class="full"><label>Ghi chú / sở thích</label><textarea name="notes">${esc(c.notes || '')}</textarea></div></div>
+    <div class="full"><label>Ghi chú / sở thích</label><textarea name="notes">${esc(c.notes || '')}</textarea></div>
+    <div><label>🔁 Khách định kỳ: bao nhiêu ngày làm 1 lần</label><input type="number" name="cycle_days" min="0" max="365" placeholder="vd 14 = 2 tuần" value="${c.cycle_days || ''}"></div>
+    <div><label>&nbsp;</label><label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="cycle_call" style="width:auto" ${c.cycle_call ? 'checked' : ''}> Gọi điện trước hỏi khách muốn mấy giờ</label></div>
+    <div class="full"><label>Ghi chú khi gọi (giờ hay đặt, cách gọi…)</label><input name="cycle_note" value="${esc(c.cycle_note || '')}" placeholder="vd: hay đặt chiều thứ 7, gọi sau 10h"></div></div>
     ${c.birthday && c.birthday.length === 5 ? `<div class="small muted">Sinh nhật đang lưu: ${c.birthday.split('-').reverse().join('/')} (không có năm). Để trống ô trên nếu không đổi.</div>` : ''}
     <div class="err"></div><div class="modal-foot">${isEdit && isOwner() ? '<button type="button" class="btn danger" id="delC">Xóa khách</button><span class="spacer"></span>' : ''}<button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu</button></div></form>`);
   $('#cf').onsubmit = (e) => {
     e.preventDefault();
     guard($('#cf button.primary'), async () => {
       const body = formData($('#cf'));
+      body.cycle_call = $('#cf').cycle_call.checked ? '1' : '0';
       if (!body.birthday && c.birthday && c.birthday.length === 5) body.birthday = c.birthday;
       let r;
       if (isEdit) r = await api('/customers/' + c.id, { method: 'PUT', body });
@@ -1256,7 +1260,7 @@ async function visitForm(v = {}, after) {
     <div class="full"><label>Khách hàng *</label>${customerPicker('customer_id', custSel)}</div>
     <div><label>Ngày</label><input type="date" name="date" value="${v.date || S.today}" ${!isMgr() ? 'readonly' : ''}></div>
     <div><label>Giờ</label><input type="time" name="time" value="${v.time || new Date().toTimeString().slice(0, 5)}"></div>
-    <div><label>Thợ chính *</label><select name="main_staff_id" required>${staffOptions(v.main_staff_id || (!isMgr() ? S.me.id : null))}</select></div>
+    <div><label>Thợ chính / người ghi lịch *</label><select name="main_staff_id" required>${staffOptions(v.main_staff_id || (!isMgr() ? S.me.id : null))}</select></div>
     <div><label>Người phụ</label><select name="assistant_id">${staffOptions(v.assistant_id, 'Không có')}</select></div>
     <div class="full"><label>Dịch vụ / sản phẩm bán (giá sửa được)</label><div id="items"></div><div class="row"><div style="flex:1;min-width:200px" id="vSvcS"></div><button type="button" class="btn sm" id="addItem">+ Thêm dòng</button></div></div>
     ${S.materials.some((m) => m.kind === 'service') ? `<div class="full"><label>🧪 Hóa chất đã dùng (ghi để tính giá cốt, trừ kho)</label><div id="used"></div>
@@ -1536,13 +1540,13 @@ VIEWS.reminders = async (main) => {
   const want = sf === 'mine' ? S.me.id : sf === 'none' ? null : sf ? Number(sf) : undefined;
   const owner = (x) => x.cust_staff_id !== undefined ? x.cust_staff_id : x.staff_id;
   const keep = (x, appt) => want === undefined || (want === null ? !owner(x) : owner(x) === want || (appt && x.staff_id === want));
-  for (const k of ['birthdays', 'cards', 'returns']) r[k] = r[k].filter((x) => keep(x));
+  for (const k of ['cycles', 'birthdays', 'cards', 'returns']) r[k] = r[k].filter((x) => keep(x));
   for (const k of ['appointments', 'cancels']) r[k] = r[k].filter((x) => keep(x, true));
-  for (const k of ['birthdays', 'cards', 'returns', 'appointments', 'cancels']) r.counts[k] = r[k].filter((x) => !x.done).length; // stock/expenses giữ số từ máy chủ
+  for (const k of ['cycles', 'birthdays', 'cards', 'returns', 'appointments', 'cancels']) r.counts[k] = r[k].filter((x) => !x.done).length; // stock/expenses giữ số từ máy chủ
   const who = (x) => { const id = owner(x); return id ? ` <span class="badge">${esc(staffName(id))}</span>` : ''; };
   const sec = (key, title, help, rows, line) => `<div class="card"><h3>${title} <span class="badge ${r.counts[key] ? 'bad' : ''}">${r.counts[key]}</span></h3><div class="small muted">${help}</div>
     ${rows.length ? rows.map((x) => `<div class="list-item" style="${x.done ? 'opacity:.5' : ''}"><div style="flex:1;min-width:0">${line(x)}<div class="small">${telLinks(x.phone)}</div></div>
-      ${x.done ? '<span class="badge ok">Đã liên hệ</span>' : `<button class="btn sm" data-done='${esc(JSON.stringify({ customer_id: x.customer_id || x.id, type: key === 'birthdays' ? 'birthday' : key === 'cards' ? 'card' : key === 'returns' ? 'return' : 'appointment', ref: x.ref }))}'>Đã liên hệ</button>`}</div>`).join('') : '<div class="empty">Không có</div>'}</div>`;
+      ${x.done ? '<span class="badge ok">Đã liên hệ</span>' : `<button class="btn sm" data-done='${esc(JSON.stringify({ customer_id: x.customer_id || x.id, type: key === 'cycles' ? 'cycle' : key === 'birthdays' ? 'birthday' : key === 'cards' ? 'card' : key === 'returns' ? 'return' : 'appointment', ref: x.ref }))}'>Đã liên hệ</button>`}</div>`).join('') : '<div class="empty">Không có</div>'}</div>`;
   main.innerHTML = header('Nhắc nhở', 'Gọi / nhắn Zalo cho khách rồi bấm “Đã liên hệ”') +
     `<div class="card"><div class="row"><span class="muted small">Xem nhắc nhở của</span><select id="rsf" style="width:auto">
       <option value="all" ${!sf ? 'selected' : ''}>Tất cả khách</option><option value="mine" ${sf === 'mine' ? 'selected' : ''}>⭐ Khách của tôi</option>
@@ -1550,6 +1554,7 @@ VIEWS.reminders = async (main) => {
       <option value="none" ${sf === 'none' ? 'selected' : ''}>Khách chưa giao thợ</option></select>
       <span class="small muted">Mỗi thợ tự gọi khách của mình, quản lý xem tổng.</span></div></div>
     <div class="grid two">
+    ${sec('cycles', '📞 Khách định kỳ đến lịch – gọi hỏi giờ', 'Khách cài "làm định kỳ" (vd 2 tuần/lần) sắp đến hoặc đã đến hạn, chưa có lịch hẹn. Gọi hỏi giờ rồi đặt lịch.', r.cycles, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b>${who(c)} <span class="small muted">${c.cycle_days} ngày/lần · lần cuối ${dmy(c.last_date)} · đến hạn <b>${dmy(c.due)}</b></span>${c.cycle_call ? '<div class="small"><b>☎ Gọi trước hỏi giờ</b></div>' : ''}${c.cycle_note ? `<div class="small">${esc(c.cycle_note)}</div>` : ''}`)}
     ${sec('appointments', '📞 Xác nhận lịch ngày mai', 'Gọi trước để giảm khách không đến.', r.appointments, (a) => `<b>${esc(a.time)} · ${a.customer_id ? `<a href="#customer?id=${a.customer_id}">${esc(a.name)}</a>` : esc(a.name)}</b> <span class="muted small">${esc(a.service || '')} ${a.staff_name ? '· ' + esc(a.staff_name) : ''}</span>`)}
     <div class="card"><h3>❌ Khách hủy / không đến <span class="badge ${r.counts.cancels ? 'bad' : ''}">${r.counts.cancels}</span></h3><div class="small muted">14 ngày gần đây, khách chưa đặt lịch mới. Nhắn mời đặt lại rồi bấm “Đã mời”.</div>
       ${r.cancels.length ? r.cancels.map((a) => `<div class="list-item" style="${a.done ? 'opacity:.5' : ''}"><div style="flex:1;min-width:0">

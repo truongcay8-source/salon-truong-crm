@@ -176,3 +176,24 @@ test('từng dòng có người phụ riêng: hoa hồng phụ tính theo dòng'
   assert.equal(rows.find((x) => x.user_id === 5).assistant_commission, Math.round(1000000 * rate));
   assert.equal(rows.find((x) => x.user_id === 4).assistant_commission, Math.round(600000 * rate));
 });
+
+test('khách định kỳ (2 tuần/lần, gọi trước hỏi giờ) + cắt của thợ không áp bảo hành', async () => {
+  const c = client();
+  assert.equal((await c.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const L = require('../server/logic');
+  const t = L.today();
+  const cid = (await c.post('/customers', { name: 'A Minh PH test', phone: '0912000333', cycle_days: 14, cycle_call: '1', cycle_note: 'gọi sau 10h' })).data.id;
+  const cut = db.prepare("SELECT id FROM services WHERE grp='Cắt' AND active=1 AND name LIKE '%nam%' LIMIT 1").get();
+  await c.post('/visits', { customer_id: cid, date: L.addDays(t, -13), time: '10:00', main_staff_id: 2, payment_method: 'Tiền mặt', items: [{ service_id: cut.id, price: 100000 }] });
+  let r = (await c.get('/reminders')).data;
+  const x = r.cycles.find((y) => y.id === cid);
+  assert.ok(x, JSON.stringify(r.cycles)); assert.equal(x.cycle_call, 1); assert.equal(x.due, L.addDays(t, 1));
+  assert.ok(!r.returns.some((y) => y.id === cid));
+  // Trường không áp bảo hành chỉnh form cắt; Dương vẫn có
+  const v2 = (await c.post('/visits', { customer_id: cid, date: t, time: '11:00', main_staff_id: 3, payment_method: 'Tiền mặt', items: [{ service_id: cut.id, price: 100000 }] })).data;
+  assert.ok(v2.warranties.some((w) => /^cut/.test(w.key)), 'Dương cắt có bảo hành');
+  const v3 = (await c.post('/visits', { customer_id: cid, date: t, time: '12:00', main_staff_id: 2, payment_method: 'Tiền mặt', items: [{ service_id: cut.id, price: 100000 }] })).data;
+  assert.ok(!v3.warranties.some((w) => /^cut/.test(w.key)), 'Trường cắt không lưu ý bảo hành');
+  r = (await c.get('/reminders')).data;
+  assert.ok(!r.cycles.some((y) => y.id === cid), 'đã làm hôm nay → hết nhắc');
+});
