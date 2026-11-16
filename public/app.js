@@ -1185,7 +1185,10 @@ async function visitForm(v = {}, after) {
     ${S.materials.some((m) => m.kind === 'service') ? `<div class="full"><label>🧪 Hóa chất đã dùng (ghi để tính giá cốt, trừ kho)</label><div id="used"></div>
       <div class="row"><button type="button" class="btn sm" id="addUsed">+ Thêm hóa chất</button><button type="button" class="btn sm" id="recipeFill">↻ Lấy theo định mức dịch vụ</button><button type="button" class="btn sm" id="formulaFill">🧪 Tính từ công thức</button></div></div>` : ''}
     <div><label>Phụ thu</label><input type="number" name="surcharge" min="0" step="1000" value="${v.surcharge || ''}"></div>
-    <div><label>Giảm giá</label><input type="number" name="discount" min="0" step="1000" value="${v.discount || ''}"></div>
+    <div><label>Giảm giá</label><div class="row" style="gap:6px;flex-wrap:nowrap"><input type="number" name="discount" min="0" step="1000" value="${v.discount || ''}" style="flex:1;min-width:0">
+      <input type="number" id="discPct" min="0" max="100" step="1" placeholder="%" title="Giảm theo % tiền dịch vụ" style="width:70px"><span class="muted">%</span></div>
+      <div class="row" style="gap:4px;margin-top:4px">${[10, 15, 20, 30, 50].map((p) => `<button type="button" class="btn sm" data-dpct="${p}">${p}%</button>`).join('')}<button type="button" class="btn sm" data-dpct="0">Bỏ</button></div>
+      <div class="small muted" id="discTxt"></div></div>
     <div class="full"><label>Lý do giảm (bắt buộc nếu có giảm)</label><input name="discount_reason" list="reasons" value="${esc(v.discount_reason || '')}">
       <datalist id="reasons"><option value="Khách quen"><option value="Khách giới thiệu"><option value="Khuyến mãi"><option value="Bù lỗi dịch vụ"><option value="Người nhà / nhân viên"><option value="Trẻ em dưới 13 tuổi (giảm 50%)"></datalist></div>
     <div id="cardBox" class="full"></div>
@@ -1231,6 +1234,10 @@ async function visitForm(v = {}, after) {
   };
   const calc = () => {
     const sub = items.reduce((s, i) => s + Number(i.price || 0), 0);
+    // Giảm theo %: tính trên tiền dịch vụ/sản phẩm (không tính phụ thu), làm tròn nghìn
+    const pct = Number($('#discPct').value || 0);
+    if (pct > 0) { f.discount.value = Math.round((sub * Math.min(100, pct)) / 100 / 1000) * 1000; $('#discTxt').textContent = `${pct}% của ${money(sub)} = −${money(Number(f.discount.value))}`; }
+    else $('#discTxt').textContent = Number(f.discount.value) > 0 && sub ? `≈ ${Math.round((Number(f.discount.value) / sub) * 1000) / 10}% tiền dịch vụ` : '';
     const total = Math.max(0, sub + Number(f.surcharge.value || 0) - Number(f.discount.value || 0));
     const cardSel = f.card_id ? Number(f.card_id.value) : 0;
     let cardPaid = 0;
@@ -1372,6 +1379,15 @@ async function visitForm(v = {}, after) {
   const vss = svcSearch('vSvcQ', (sv) => { const empty = items.findIndex((i) => !i.service_id && !i.name); const it = { service_id: sv.id, price: sv.price }; levelSwap(it, f.main_staff_id.value); if (empty >= 0) items[empty] = it; else items.push(it); renderItems(); });
   $('#vSvcS').innerHTML = vss.html; vss.bind();
   for (const n of ['surcharge', 'discount', 'time']) f[n].addEventListener('input', calc);
+  f.discount.addEventListener('input', () => { $('#discPct').value = ''; calc(); }); // gõ số tiền giảm → bỏ %
+  const setPct = (p) => {
+    $('#discPct').value = p || '';
+    if (!p) f.discount.value = '';
+    else if (!f.discount_reason.value.trim() || /^Giảm \d+%$/.test(f.discount_reason.value.trim())) f.discount_reason.value = `Giảm ${p}%`;
+    calc();
+  };
+  $('#discPct').addEventListener('input', () => setPct(Number($('#discPct').value) || 0));
+  $$('[data-dpct]', f).forEach((b) => (b.onclick = () => setPct(Number(b.dataset.dpct))));
   f.assistant_id.addEventListener('change', calc);
   $('#paidAct').addEventListener('input', paidSync);
   f.main_staff_id.addEventListener('change', () => { if (items.map((it) => levelSwap(it, f.main_staff_id.value)).some(Boolean)) { renderItems(); toast('Đã đổi giá cắt theo cấp của thợ chính'); } });
