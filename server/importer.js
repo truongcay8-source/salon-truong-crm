@@ -145,6 +145,36 @@ function dedupeAppointments() {
   return removed;
 }
 
+// Dọn lượt làm bị tạo 2 lần do ô sổ sửa chữ trước đây (cùng ngày, giờ, thợ, cùng khách/tên): giữ lượt đã sửa tay hoặc lượt mới nhất, xóa bản còn lại
+function dedupeVisits() {
+  const cellText = (v) => String(v.note || '').replace(/^Sổ đặt lịch: /, '').split(' · ')[0];
+  const rows = db.prepare("SELECT id, date, time, main_staff_id, customer_id, note, manual_edit FROM visits WHERE status='done' AND import_ref LIKE 'SO:%' ORDER BY id").all();
+  const groups = new Map();
+  for (const v of rows) {
+    const k = `${v.date}|${v.time}|${v.main_staff_id}`;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(v);
+  }
+  let removed = 0;
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    const done = new Set();
+    for (const a of list) {
+      if (done.has(a.id)) continue;
+      const same = list.filter((b) => !done.has(b.id) && (b.customer_id === a.customer_id || (apptKey(cellText(a)) && apptKey(cellText(a)) === apptKey(cellText(b)))));
+      if (same.length < 2) continue;
+      same.sort((x, y) => (y.manual_edit || 0) - (x.manual_edit || 0) || y.id - x.id);
+      for (const d of same.slice(1)) {
+        L.deleteVisit(d.id, 'Trùng: ô sổ đặt lịch bị sửa chữ nên nhập 2 lần (giữ lượt ' + same[0].id + ')', { id: 1 });
+        db.prepare('UPDATE appointments SET visit_id=? WHERE visit_id=?').run(same[0].id, d.id);
+        removed++;
+      }
+      for (const x of same) done.add(x.id);
+    }
+  }
+  return removed;
+}
+
 function guessName(text) {
   let s = String(text).split(/[\n(–-]| \d/)[0];
   s = s.replace(/(?:\+?84|0)[\d.\s]{8,}/g, '').replace(/\s+/g, ' ').trim();
@@ -585,6 +615,27 @@ async function importWorkbook(buffer, opts, user) {
           for (const e of es) {
             if (!e.customerId) { const id = cust.upsert('APP', { name: BM.cleanName(e.text) || ('Khách ' + e.time), phone: null }, false); e.customerId = id; }
             const ref = 'SO:' + crypto.createHash('sha1').update([b.date, e.time, e.staffId, e.text].join('|')).digest('hex').slice(0, 16);
+            let ex = db.prepare('SELECT * FROM visits WHERE import_ref=?').get(ref);
+            if (!ex) {
+              // Ô sổ bị sửa chữ sau khi đã nhập (thêm tiền, SĐT, tên…) → vẫn là lượt cũ (cùng ngày, giờ, thợ, cùng khách/tên), không tạo lượt thứ 2
+              const key = apptKey(e.text);
+              const cellText = (v) => String(v.note || '').replace(/^Sổ đặt lịch: /, '').split(' · ')[0];
+              ex = db.prepare("SELECT * FROM visits WHERE date=? AND time=? AND main_staff_id=? AND import_ref LIKE 'SO:%' ORDER BY (status='done') DESC, id").all(b.date, e.time, e.staffId)
+                .find((v) => v.customer_id === e.customerId || (key && apptKey(cellText(v)) === key)) || null;
+              if (ex) { db.prepare('UPDATE visits SET import_ref=? WHERE id=?').run(ref, ex.id); st.relinked = (st.relinked || 0) + 1; }
+            }
+            if (ex && ex.status === 'deleted') continue; // quản lý đã xóa lượt này → không tạo lại
+            if (ex && ex.manual_edit) { st.kept_manual++; continue; } // Lãnh đạo đã sửa tay (chia tiền, đổi dịch vụ) → giữ nguyên
+            // Lượt đã có trong máy → KHÓA: không nhập lại / không đổi tiền nữa (doanh số không tự nhảy). Chỉ chỉnh khách nếu trước đó nhận nhầm.
+            if (ex && !opts.updatePast) {
+              if (ex.customer_id !== e.customerId && e.customerId) {
+                db.prepare('UPDATE visits SET customer_id=? WHERE id=?').run(e.customerId, ex.id);
+                db.prepare('UPDATE appointments SET customer_id=? WHERE visit_id=?').run(e.customerId, ex.id);
+                st.customer_fixed = (st.customer_fixed || 0) + 1;
+              }
+              st.locked = (st.locked || 0) + 1;
+              continue;
+            }
             const manual = db.prepare(`SELECT 1 FROM visits WHERE date=? AND status='done' AND import_ref IS NULL AND main_staff_id=? AND (customer_id=? OR time=?)`).get(b.date, e.staffId, e.customerId, e.time);
             if (manual) { st.kept_manual++; continue; }
             const items = BM.fitItems(e.parsed.items.map((i) => ({ service_id: i.service_id, name: i.name, price: i.price, grp: i.grp })), e.amount);
@@ -595,9 +646,6 @@ async function importWorkbook(buffer, opts, user) {
             const input = { customer_id: e.customerId, date: b.date, time: e.time, main_staff_id: e.staffId, assistant_id: assistantIn(e.text, e.staffId), items,
               surcharge: e.parsed.surcharge, tip: e.tip, payment_method: e.pay && e.pay !== 'Chưa thanh toán' ? e.pay : null,
               note: 'Sổ đặt lịch: ' + e.text + (e.extraTip ? ` · khách trả dư ${e.extraTip.toLocaleString('vi-VN')} → tip chung` : '') + (e.pay === 'Chưa thanh toán' ? ' · CHƯA THANH TOÁN (ô hồng), giá theo bảng giá' : '') + (!row.amount && e.pay !== 'Chưa thanh toán' ? ' · sổ không ghi tiền thu (trả bằng thẻ?), giá theo bảng giá' : '') + (e.check === 'more' ? ' · ⚠ sổ thu nhiều hơn giá dịch vụ, chưa rõ khoản thêm – kiểm tra lại' : e.check ? ' · ⚠ giá ghi cao hơn tiền thu (thẻ/voucher?) – kiểm tra lại' : ''), import_ref: ref, appointment_id: e.apptId };
-            const ex = db.prepare('SELECT * FROM visits WHERE import_ref=?').get(ref);
-            if (ex && ex.status === 'deleted') continue; // quản lý đã xóa lượt này → không tạo lại
-            if (ex && ex.manual_edit) { st.kept_manual++; continue; } // Lãnh đạo đã sửa tay (chia tiền, đổi dịch vụ) → giữ nguyên
             let card = null;
             if (e.voucher > 0) {
               // Trừ thẻ tri ân 1tr: gắn đúng thẻ của khách (thay dòng "đã dùng" nhập từ tab Quản lý Thẻ 1Tr), doanh số giữ đủ cho thợ
@@ -735,11 +783,12 @@ async function importWorkbook(buffer, opts, user) {
   } catch (e) {
     if (e !== ROLLBACK) throw e;
   }
+  if (!opts.dryRun) try { summary.visits_deduped = dedupeVisits(); } catch (e) { summary.warnings.push('Dọn lượt trùng: ' + e.message); }
   if (!opts.dryRun) try { summary.appointments_deduped = dedupeAppointments(); } catch (e) { summary.warnings.push('Dọn lịch trùng: ' + e.message); }
   if (!opts.dryRun) try { require('./datafix').apply(); } catch (e) { summary.warnings.push('Bổ sung công thức: ' + e.message); }
   if (ws('Lịch sử') && !opts.includeHistory) summary.warnings.push('Chưa nhập lượt làm "Hoàn thành" từ tab "Lịch sử" (CRM Nếp Hair) vì trùng với Nhật ký dịch vụ. Tick "Nhập cả lịch sử" nếu cần.');
   return { dry_run: opts.dryRun, summary };
 }
 
-const VERSION = 2; // 2: không ghép "E Quang" vào "Quang Anh"
-module.exports = { VERSION, dedupeAppointments, apptKey, importWorkbook, asDate, asTime };
+const VERSION = 3; // 2: không ghép "E Quang" vào "Quang Anh"
+module.exports = { VERSION, dedupeVisits, dedupeAppointments, apptKey, importWorkbook, asDate, asTime };
