@@ -798,6 +798,7 @@ app.get('/api/dashboard', (req, res) => {
 
 staffMod.mount(app, { MGR, OWNER });
 require('./tips').mount(app, { MGR, OWNER });
+require('./payroll').mount(app, { OWNER }); // Bảng lương: chỉ Lãnh đạo
 require('./chat').mount(app, { MGR, OWNER });
 require('./pricelist').apply(); // bảng giá 15/11/2026 (chạy 1 lần)
 try { require('./datafix').apply(); } catch (e) { console.error('datafix', e.message); } // công thức gửi qua Messenger 15/11
