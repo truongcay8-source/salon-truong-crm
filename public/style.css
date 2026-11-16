@@ -28,7 +28,9 @@ a { color: var(--brand); }
 
 /* Layout */
 .app { display: grid; grid-template-columns: 230px 1fr; min-height: 100vh; }
-.side { background: var(--surface); border-right: 1px solid var(--line); padding: 16px 12px; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 4px; }
+.side { background: var(--surface); border-right: 1px solid var(--line); padding: 16px 12px; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; overscroll-behavior: contain; }
+.side > * { flex-shrink: 0; }
+@media (max-height: 820px) { .side { gap: 1px; padding-top: 10px; } .side .brand { padding-bottom: 6px; } .nav-btn { padding: 6px 10px; } }
 .side .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 14px; }
 .side .brand .logo { width: 36px; height: 36px; font-size: 20px; margin: 0; border-radius: 10px; }
 .nav-btn { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: 0; border-radius: 9px; background: none; text-align: left; cursor: pointer; color: var(--text); }
