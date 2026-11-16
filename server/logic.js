@@ -229,7 +229,7 @@ function saveVisit(input, user, existing, opts = {}) {
       db.prepare('INSERT INTO card_txns(card_id,visit_id,amount,note,created_by) VALUES (?,?,?,?,?)').run(cardId, id, -cardPaid, forName ? 'Dùng cho ' + forName + ' (được tặng lại)' : 'Dùng cho lượt làm', user.id);
     }
     if (input.appointment_id) {
-      db.prepare("UPDATE appointments SET status='done', visit_id=? WHERE id=?").run(id, int(input.appointment_id));
+      db.prepare("UPDATE appointments SET status='done', visit_id=?, customer_id=?, guest_name=NULL, guest_phone=NULL WHERE id=?").run(id, customerId, int(input.appointment_id));
     }
     // Hồ sơ khách: chưa có thợ phụ trách → gán thợ chính; công thức mới nhất → thành công thức của khách
     db.prepare('UPDATE customers SET staff_id=? WHERE id=? AND staff_id IS NULL').run(mainStaff, customerId);

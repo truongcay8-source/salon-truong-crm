@@ -55,7 +55,8 @@ async function run({ user, dryRun = false, force = false } = {}) {
     const s = getSettings();
     const buf = await download(s.gsheet_url);
     const today = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
-    const hash = crypto.createHash('sha1').update(buf).update(today).digest('hex');
+    // Đổi VERSION của bộ nhập (sửa lỗi ghép khách…) → lần tự đồng bộ sau chạy lại cả sổ
+    const hash = crypto.createHash('sha1').update(buf).update(today).update(String(require('./importer').VERSION)).digest('hex');
     if (!dryRun && !force && hash === s.gsheet_hash) return { unchanged: true, ...state() };
     const result = await importWorkbook(buf, { dryRun, includeHistory: false, bookMoney: true }, user || systemUser());
     if (!dryRun) {

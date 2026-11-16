@@ -210,14 +210,16 @@ function customerResolver(summary, user) {
       const hits = all().filter((c) => norm(c.name) === n && (!phone || !c.phone || c.phone === phone));
       if (hits.length === 1) return { id: hits[0].id, how: 'name' };
       // Gần đúng: mọi chữ của tên (bỏ danh xưng) đều có trong tên khách, vd "Phương vợ Khánh" ↔ "Phương (vợ Khánh Tao Lao)"
-      const toks = (x) => stripAccents(x).replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter((w) => w && !TITLES.has(w));
+      // Chỉ bỏ danh xưng ở ĐẦU tên: "Quang Anh", "Mai Chi" thì "Anh"/"Chi" là tên, không phải danh xưng
+      const toks = (x) => { const w = stripAccents(x).replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(Boolean); while (w.length > 1 && TITLES.has(w[0])) w.shift(); return w.filter((t, i) => !(i > 0 && /^(b|ban|cua)$/.test(t))); }; // "Hương b phúc" = "Hương (bạn Phúc)"
       const q = toks(name);
       // Danh xưng khác giới thì không ghép ("Hà" chị ≠ "Anh Hà"); tên 1 chữ phải cùng kiểu danh xưng
       const sex = (x) => { const w = stripAccents(x).split(/[^a-z]+/).filter(Boolean)[0] || ''; return /^(a|anh|chu|ong|bo|cau)$/.test(w) ? 'M' : /^(c|chi|co|ba|me)$/.test(w) ? 'F' : /^(e|em|b|be|ban)$/.test(w) ? 'N' : ''; };
       const okSex = (c) => { const a = sex(name), b = sex(c.name); if (a && b && a !== 'N' && b !== 'N' && a !== b) return false; return q.length > 1 || a === b || (a === 'N' && b !== '') || (b === 'N' && a !== ''); };
       const same = q.length ? all().filter((c) => toks(c.name).join(' ') === q.join(' ') && okSex(c) && (!phone || !c.phone || c.phone === phone)) : [];
       if (same.length === 1) return { id: same[0].id, how: 'name' }; // "E Bon" ↔ "Em Bon"
-      if (q.length >= 2 || (q.length === 1 && q[0].length >= 4)) {
+      // Tên 1 chữ ("E Quang") không ghép gần đúng vào tên dài hơn ("Quang Anh") — dễ là 2 người khác nhau
+      if (q.length >= 2) {
         const fz = all().filter((c) => { const t = new Set(toks(c.name)); return q.every((w) => t.has(w)) && okSex(c) && (!phone || !c.phone || c.phone === phone); });
         // ưu tiên tên khớp từ đầu (vd "Khoa Điền" ↔ "Em Khoa Điền")
         const head = fz.filter((c) => toks(c.name).slice(0, q.length).join(' ') === q.join(' '));
@@ -739,4 +741,5 @@ async function importWorkbook(buffer, opts, user) {
   return { dry_run: opts.dryRun, summary };
 }
 
-module.exports = { dedupeAppointments, apptKey, importWorkbook, asDate, asTime };
+const VERSION = 2; // 2: không ghép "E Quang" vào "Quang Anh"
+module.exports = { VERSION, dedupeAppointments, apptKey, importWorkbook, asDate, asTime };
