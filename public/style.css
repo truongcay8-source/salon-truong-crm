@@ -123,8 +123,8 @@ tfoot td { font-weight: 700; }
 .item-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
 .item-row > select { flex: 1; min-width: 0; }
 .item-row > .iprice { width: 120px; flex: none; }
-.item-row > .istaff { width: 140px; flex: none; }
-@media (max-width: 600px) { .item-row { flex-wrap: wrap; } .item-row > select.isvc { flex-basis: 100%; } .item-row > .istaff { flex: 1; } }
+.item-row > .istaff, .item-row > .iasst { width: 150px; flex: none; }
+@media (max-width: 600px) { .item-row { flex-wrap: wrap; } .item-row > select.isvc { flex-basis: 100%; } .item-row > .istaff, .item-row > .iasst { flex: 1 1 40%; width: auto; min-width: 0; } .item-row > .iprice { flex: 1 1 60%; width: auto; } }
 .item-row > .icon-btn { flex: none; width: 32px; }
 .totals { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; margin-top: 12px; }
 .totals .row { justify-content: space-between; }

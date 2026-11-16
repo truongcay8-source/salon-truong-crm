@@ -157,3 +157,22 @@ test('sửa số tiền thẻ đã bán (ghi nhầm 20tr → 2tr): chỉ Lãnh �
   await t.post('/me/password', { old_password: 'tam12345', new_password: 'moi-truong' }); await t.post('/login', { username: 'truong', password: 'moi-truong' });
   assert.equal((await t.put(`/cards/${card.id}/sale`, { price: 1, reason: 'x' })).status, 403);
 });
+
+test('từng dòng có người phụ riêng: hoa hồng phụ tính theo dòng', async () => {
+  const c = client();
+  assert.equal((await c.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  db.prepare('UPDATE users SET commission_enabled=1 WHERE id IN (2,3,4,5)').run();
+  const rate = Number(db.prepare("SELECT value FROM settings WHERE key='assistant_rate'").get().value);
+  const svc = db.prepare('SELECT id FROM services WHERE active=1 ORDER BY id LIMIT 1').get().id;
+  const cid = (await c.post('/customers', { name: 'Khách phụ dòng', phone: '0912777666' })).data.id;
+  const r = await c.post('/visits', { customer_id: cid, date: '2026-11-21', time: '13:30', main_staff_id: 2, assistant_id: 4, payment_method: 'Tiền mặt',
+    items: [{ service_id: svc, price: 600000 }, { service_id: svc, price: 1000000, staff_id: 3, assistant_id: 5 }, { service_id: svc, price: 400000, assistant_id: 0 }] });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.assistant_commission, Math.round(600000 * rate), 'người phụ chung chỉ ăn dòng theo phiếu');
+  const l2 = r.data.items[1];
+  assert.equal(l2.assistant_id, 5); assert.equal(l2.asst_commission, Math.round(1000000 * rate)); assert.equal(l2.assistant_name.length > 0, true);
+  assert.equal(r.data.items[2].assistant_id, 0);
+  const rows = require('../server/logic').salesReport('2026-11-21', '2026-11-21', { role: 'owner' }).rows;
+  assert.equal(rows.find((x) => x.user_id === 5).assistant_commission, Math.round(1000000 * rate));
+  assert.equal(rows.find((x) => x.user_id === 4).assistant_commission, Math.round(600000 * rate));
+});

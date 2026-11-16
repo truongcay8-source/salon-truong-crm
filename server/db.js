@@ -372,6 +372,9 @@ function nextCode(table, prefix, width) {
   const ic = db.prepare('PRAGMA table_info(visit_items)').all().map((c) => c.name);
   if (!ic.includes('staff_id')) db.exec('ALTER TABLE visit_items ADD COLUMN staff_id INTEGER');
   if (!ic.includes('commission')) db.exec('ALTER TABLE visit_items ADD COLUMN commission INTEGER');
+  // Người phụ của dòng: NULL = theo người phụ chung của phiếu, 0 = không có, >0 = người phụ riêng
+  if (!ic.includes('assistant_id')) db.exec('ALTER TABLE visit_items ADD COLUMN assistant_id INTEGER');
+  if (!ic.includes('asst_commission')) db.exec('ALTER TABLE visit_items ADD COLUMN asst_commission INTEGER');
 }
 module.exports = {
   diffObj, db, DATA_DIR, getSettings, num, audit, nextCode, GROUPS, GIFT_CARD };
