@@ -639,7 +639,7 @@ VIEWS.appointments = async (main) => {
   } else {
     const sc = await api('/schedule?date=' + date);
     main.innerHTML = top + daySum(sc.appointments, sc.visits) + `<div class="card grid-card">${scheduleGrid(sc)}</div>
-      <div class="small muted" style="margin:0 4px 12px">Bấm ô trống để đặt lịch · bấm lịch để Thu tiền / Sửa / Hủy. <span class="chip-k brand">Đã đặt</span> <span class="chip-k warn">Đã đến</span> <span class="chip-k ok">Đã làm</span> <span class="chip-k off">Nghỉ</span></div>`;
+      <div class="small muted" style="margin:0 4px 12px">Bấm ô trống để đặt lịch · bấm lịch để Thu tiền / Sửa / Hủy. <span class="chip-k brand">Đã đặt</span> <span class="chip-k warn">Đã đến</span> <span class="chip-k ok">Đã làm</span> <span class="chip-k help">↪ Làm/phụ trong phiếu người khác</span> <span class="chip-k off">Nghỉ</span></div>`;
     $$('[data-slot]', main).forEach((td) => (td.onclick = (e) => {
       if (e.target.closest('[data-ap],[data-vv]')) return;
       const [time, staff] = td.dataset.slot.split('|');
@@ -678,6 +678,8 @@ function scheduleGrid(sc) {
   const ids = new Set(activeStaff().filter((u) => u.role !== 'owner').map((u) => u.id));
   for (const a of sc.appointments) if (a.staff_id) ids.add(a.staff_id);
   for (const v of sc.visits) if (v.main_staff_id) ids.add(v.main_staff_id);
+  const helps = sc.helps || [];
+  for (const h of helps) ids.add(h.staff_id);
   const cols = [...ids].map((id) => ({ id, name: staffName(id) }));
   const hasNone = sc.appointments.some((a) => !a.staff_id && live(a));
   if (hasNone) cols.push({ id: 0, name: 'Chưa chọn thợ' });
@@ -698,9 +700,11 @@ function scheduleGrid(sc) {
     html += `<tr><td class="tcol">${fromMin(t)}</td>` + cols.map((c) => {
       const ap = sc.appointments.filter((a) => (a.staff_id || 0) === c.id && slot(toMin(a.time)) === t);
       const vs = sc.visits.filter((v) => v.main_staff_id === c.id && slot(toMin(v.time)) === t);
+      const hs = helps.filter((h) => h.staff_id === c.id && slot(toMin(h.time)) === t);
       const off = c.id && offOf(c.id, t);
       const inner = ap.map((a) => `<div class="ev ${a.status}" data-ap="${a.id}"><b>${esc(a.time)}</b> ${esc(a.name)}${a.grp ? ` <span title="Đi cùng người nhà: ${a.grp} người">👨‍👩‍👧</span>` : ''}${a.visit_services || a.service ? `<div class="small">${a.visit_services ? esc(a.visit_services) : svcWithPrice(a.service)}</div>` : ''}${evMoney(a)}</div>`).join('')
-        + vs.map((v) => `<div class="ev done" data-vv="${v.customer_id}"><b>✓ ${esc(v.time || '')}</b> ${esc(v.customer_name)}<div class="small">${esc(v.services || '')}</div>${v.total != null ? `<div class="small"><b>${money(v.total)}</b></div>` : ''}</div>`).join('');
+        + vs.map((v) => `<div class="ev done" data-vv="${v.customer_id}"><b>✓ ${esc(v.time || '')}</b> ${esc(v.customer_name)}<div class="small">${esc(v.services || '')}</div>${v.total != null ? `<div class="small"><b>${money(v.total)}</b></div>` : ''}</div>`).join('')
+        + hs.map((h) => `<div class="ev help" data-vv="${h.customer_id}" title="Dòng dịch vụ trong phiếu của ${esc(staffName(h.main_staff_id))} – tiền tính ở phiếu đó"><b>↪ ${esc(h.time || '')}</b> ${esc(h.customer_name)}<div class="small">${esc(h.lines.join(' + '))}</div><div class="small muted">phiếu của ${esc(staffName(h.main_staff_id))}</div></div>`).join('');
       return `<td class="${off ? 'offc' : ''} ${c.id === S.me.id ? 'me' : ''}" data-slot="${fromMin(t)}|${c.id}">${inner || (off ? '<span class="small">Nghỉ</span>' : '')}</td>`;
     }).join('') + '</tr>';
   }
