@@ -333,15 +333,19 @@ function salesReport(from, to, user) {
   const per = new Map(users.map((u) => [u.id, {
     user_id: u.id, name: u.full_name, level: u.level, active: u.active, main_count: 0, assist_count: 0, surcharge_share: 0,
     by_group: { 'Cắt': 0, 'Gội & chăm sóc': 0, 'Hóa chất': 0, 'Bán sản phẩm': 0, 'Khác': 0 },
-    sales: 0, assist_sales: 0, main_commission: 0, assistant_commission: 0, tip: 0,
+    sales: 0, gift_sales: 0, assist_sales: 0, main_commission: 0, assistant_commission: 0, tip: 0,
     cards_count: 0, cards_amount: 0, card_commission: 0, total_commission: 0,
   }]));
   const vById = new Map(visits.map((v) => [v.id, v]));
+  // Thẻ tri ân 1tr (chi phí cửa hàng): vẫn tính % hoa hồng từng dịch vụ, nhưng KHÔNG tính vào doanh số tổng để xét thưởng/hệ số
+  const giftIds = new Set(db.prepare("SELECT id FROM cards WHERE sale_type='gift'").all().map((c) => c.id));
+  const giftRate = (v) => (v.card_id && giftIds.has(v.card_id) && v.total > 0 ? Math.min(1, v.card_paid / v.total) : 0);
+  const giftByGroup = {};
   // Thợ chính trên phiếu có thể chỉ là người nhận khách: chỉ tính 1 lượt cho họ nếu có làm ít nhất 1 dòng
   const mainDid = new Set(items.filter((i) => !i.staff_id || i.staff_id === i.main_staff_id).map((i) => i.visit_id));
   for (const v of visits) {
     const m = per.get(v.main_staff_id);
-    if (m) { if (mainDid.has(v.id)) m.main_count++; m.sales += v.total; m.main_commission += v.main_commission; m.tip += v.tip; m.surcharge_share += v.surcharge_main || 0; }
+    if (m) { if (mainDid.has(v.id)) m.main_count++; m.sales += v.total; m.gift_sales += v.total * giftRate(v); m.main_commission += v.main_commission; m.tip += v.tip; m.surcharge_share += v.surcharge_main || 0; }
     const tp = v.tip_private ? per.get(v.tip_private_to) : null;
     if (tp) tp.tip += v.tip_private;
     const a = per.get(v.assistant_id);
@@ -356,11 +360,13 @@ function salesReport(from, to, user) {
     const net = Math.round(i.price * f);
     const g = m.by_group[i.grp] != null ? i.grp : 'Khác';
     m.by_group[g] += net;
+    const gr = giftRate(v);
+    if (gr) giftByGroup[g] = (giftByGroup[g] || 0) + Math.round(net * gr);
     // Dòng do người khác (không phải thợ chính) làm: doanh số + hoa hồng dòng đó chuyển sang người làm
     if (i.staff_id && i.staff_id !== i.main_staff_id) {
       const main = per.get(i.main_staff_id);
-      if (main) main.sales -= net;
-      m.sales += net; m.main_commission += i.commission || 0;
+      if (main) { main.sales -= net; main.gift_sales -= net * gr; }
+      m.sales += net; m.gift_sales += net * gr; m.main_commission += i.commission || 0;
       if (!helped.has(v.id + ':' + i.staff_id)) { helped.add(v.id + ':' + i.staff_id); m.main_count++; }
     }
     // Người phụ riêng của dòng
@@ -378,7 +384,7 @@ function salesReport(from, to, user) {
     const k = c.consultant_id && per.get(c.consultant_id);
     if (k) { k.cards_count++; k.cards_amount += c.price - Math.round((c.price * sh) / 100); k.card_commission += c.consultant_commission; }
   }
-  let rows = [...per.values()].map((r) => ({ ...r, total_commission: r.main_commission + r.assistant_commission + r.card_commission + r.surcharge_share }))
+  let rows = [...per.values()].map((r) => ({ ...r, gift_sales: Math.round(r.gift_sales), bonus_sales: r.sales - Math.round(r.gift_sales), total_commission: r.main_commission + r.assistant_commission + r.card_commission + r.surcharge_share }))
     .filter((r) => r.active || r.main_count || r.assist_count || r.cards_count);
   const giftCards = new Set(db.prepare("SELECT id FROM cards WHERE sale_type='gift'").all().map((c) => c.id));
   const summary = {
@@ -394,6 +400,7 @@ function salesReport(from, to, user) {
     discounts: visits.reduce((s, v) => s + v.discount, 0),
     by_method: {},
     by_day: {},
+    gift_by_group: giftByGroup,
   };
   for (const v of visits) {
     if (v.cash_paid > 0) { const k = v.payment_method || 'Chưa ghi'; summary.by_method[k] = (summary.by_method[k] || 0) + v.cash_paid; }

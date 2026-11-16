@@ -1984,23 +1984,25 @@ VIEWS.sales = async (main) => {
       <div class="kpi"><div class="l">Tiền vào thực tế</div><div class="v">${money(s.money_in)}</div><div class="s">thu dịch vụ ${money(s.service_cash)} + bán thẻ ${money(s.card_sales)}${s.unpaid ? `<br>⚠ chưa thu (ô hồng): <b>${money(s.unpaid)}</b>` : ''}</div></div>
       <div class="kpi"><div class="l">Dịch vụ trả bằng thẻ</div><div class="v">${money(s.paid_by_card)}</div><div class="s">${s.paid_by_gift ? `trong đó thẻ tặng ${money(s.paid_by_gift)} (chi phí tri ân, không có tiền vào)` : 'đã thu tiền lúc bán thẻ'}</div></div>
       <div class="kpi"><div class="l">Tip</div><div class="v">${money(s.tips)}</div><div class="s">không tính doanh số</div></div></div>
+      ${Object.keys(s.gift_by_group || {}).length ? `<div class="card"><h3>🎁 Thẻ tri ân đã dùng vào (chi phí cửa hàng)</h3>${Object.entries(s.gift_by_group).map(([k, v]) => `<div class="stat-line"><span>${esc(k)}</span><b>${money(v)}</b></div>`).join('')}<div class="stat-line"><span>Tổng</span><b>${money(s.paid_by_gift)}</b></div></div>` : ''}
       <div class="card"><h3>Tiền vào theo hình thức</h3>${Object.entries(s.by_method).map(([k, v]) => `<div class="stat-line"><span>${esc(k)}</span><b>${money(v)}</b></div>`).join('') || '<div class="empty">—</div>'}</div>` : ''}
     ${!isMgr() ? r.rows.map((x) => `<div class="card"><h3>${esc(x.name)}</h3>
       <div class="stat-line"><span class="muted">Lượt làm chính / phụ</span><b>${x.main_count} / ${x.assist_count}</b></div>
       ${G.map((g) => `<div class="stat-line"><span class="muted">DS ${esc(g)}</span><b>${money(x.by_group[g])}</b></div>`).join('')}
       <div class="stat-line"><span>Tổng doanh số</span><b>${money(x.sales)}</b></div>
+      ${x.gift_sales ? `<div class="stat-line"><span class="muted">− trong đó khách trả bằng thẻ tri ân</span><b>${money(x.gift_sales)}</b></div><div class="stat-line"><span>Doanh số tính thưởng</span><b>${money(x.bonus_sales)}</b></div>` : ''}
       <div class="stat-line"><span class="muted">HH dịch vụ</span><b>${money(x.main_commission)}</b></div>
       <div class="stat-line"><span class="muted">HH làm phụ</span><b>${money(x.assistant_commission)}</b></div>
       <div class="stat-line"><span class="muted">HH bán thẻ (${x.cards_count} thẻ)</span><b>${money(x.card_commission)}</b></div>
       ${x.surcharge_share ? `<div class="stat-line"><span class="muted">Phần phụ thu được chia</span><b>${money(x.surcharge_share)}</b></div>` : ''}
       <div class="stat-line"><span>Tổng hoa hồng (tạm tính)</span><b>${money(x.total_commission)}</b></div>
       <div class="stat-line"><span class="muted">Tip khách ghi ở lượt</span><b>${money(x.tip)}</b></div></div>`).join('') : ''}
-    <div class="card ${!isMgr() ? 'hidden' : ''}"><h3>Theo nhân viên</h3><div class="table-wrap"><table><thead><tr><th>Nhân viên</th><th class="num">Lượt chính</th><th class="num">Lượt phụ</th>${G.map((g) => `<th class="num">${esc(g)}</th>`).join('')}<th class="num">Tổng DS</th>
+    <div class="card ${!isMgr() ? 'hidden' : ''}"><h3>Theo nhân viên</h3><div class="table-wrap"><table><thead><tr><th>Nhân viên</th><th class="num">Lượt chính</th><th class="num">Lượt phụ</th>${G.map((g) => `<th class="num">${esc(g)}</th>`).join('')}<th class="num">Tổng DS</th><th class="num">Thẻ tri ân</th><th class="num">DS tính thưởng</th>
       <th class="num">HH dịch vụ</th><th class="num">HH phụ</th><th class="num">Thẻ bán</th><th class="num">HH thẻ</th><th class="num">Phụ thu</th><th class="num">Tổng HH</th><th class="num">Tip</th></tr></thead>
       <tbody>${r.rows.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td class="num">${x.main_count}</td><td class="num">${x.assist_count}</td>${G.map((g) => `<td class="num">${money(x.by_group[g])}</td>`).join('')}
-      <td class="num"><b>${money(x.sales)}</b></td><td class="num">${money(x.main_commission)}</td><td class="num">${money(x.assistant_commission)}</td><td class="num">${x.cards_count} · ${money(x.cards_amount)}</td>
+      <td class="num"><b>${money(x.sales)}</b></td><td class="num">${x.gift_sales ? '−' + money(x.gift_sales) : '–'}</td><td class="num"><b>${money(x.bonus_sales)}</b></td><td class="num">${money(x.main_commission)}</td><td class="num">${money(x.assistant_commission)}</td><td class="num">${x.cards_count} · ${money(x.cards_amount)}</td>
       <td class="num">${money(x.card_commission)}</td><td class="num">${money(x.surcharge_share)}</td><td class="num"><b>${money(x.total_commission)}</b></td><td class="num">${money(x.tip)}</td></tr>`).join('')}</tbody></table></div>
-      <div class="small muted" style="margin-top:8px">Hoa hồng tạm tính theo % từng dịch vụ (Cài đặt › Dịch vụ) và % người phụ, bán thẻ (Cài đặt › Tham số). Phụ thu: cửa hàng giữ ${Math.round((S.settings.surcharge_salon_rate ?? 0.33) * 100)}%, còn lại chia thợ chính / người phụ của lượt đó. Chưa gồm lương cứng, thưởng mốc doanh số. Tip được chia chung ở trang <a href="#tips">Chia tip</a>.</div></div>
+      <div class="small muted" style="margin-top:8px">Hoa hồng tạm tính theo % từng dịch vụ (Cài đặt › Dịch vụ) và % người phụ, bán thẻ (Cài đặt › Tham số). Phụ thu: cửa hàng giữ ${Math.round((S.settings.surcharge_salon_rate ?? 0.33) * 100)}%, còn lại chia thợ chính / người phụ của lượt đó. Chưa gồm lương cứng, thưởng mốc doanh số. <b>DS tính thưởng</b> = Tổng DS trừ phần khách trả bằng thẻ tri ân (chi phí cửa hàng); hoa hồng % từng dịch vụ vẫn tính đủ. Tip được chia chung ở trang <a href="#tips">Chia tip</a>.</div></div>
     ${staffCustomerCard(sc)}`;
   const set = (a, b) => go('sales', { from: a, to: b });
   $('#f').onchange = (e) => set(e.target.value, to); $('#t').onchange = (e) => set(from, e.target.value);
