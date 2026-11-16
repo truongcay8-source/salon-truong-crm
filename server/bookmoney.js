@@ -176,7 +176,7 @@ function cleanName(text) {
   let s = String(text).replace(/^\s*\d{1,2}[:h]\d{2}\s*/, '').split(/\s[–-]\s/)[0];
   s = s.replace(/\([^)]*\)?/g, ' ').replace(/[|/]/g, ' ').replace(/(?:\+?84|0)[\d.\s]{8,12}\d/g, ' ');
   const f = fold(s);
-  const stop = f.search(/[-=]|\b(phu|cat|ct|nhuom|uon|duoi|goi|tk|tao kieu|ep|tay|massage|masage|u lanh|hap|phuc hoi|mai|rua mat|cham chan|highlight|su dung|ck|off|tra|chuyen|tm|voucher)\b|\d/);
+  const stop = f.search(/[-=]|\b(phu|cat|ct|nhuom|uon|duoi|goi|tk|tao kieu|ep|tay|massage|masage|u lanh|hap|phuc hoi|mai|rua mat|cham chan|highlight|su dung|ck|off|tra|chuyen|tm|voucher|vc|tang (?:the )?(?:vc|voucher)|nap|kh tang|chua cap|co the|co vc|co voucher)\b|\d/);
   if (stop > 0) s = s.slice(0, stop);
   s = s.replace(/[+,.:;]+$/, '').replace(/\s+/g, ' ').trim();
   return s.length >= 2 ? s.slice(0, 60) : null;

@@ -649,6 +649,27 @@ async function importWorkbook(buffer, opts, user) {
           if (es.some((e) => e.check) || (row.amount && Math.abs(row.amount - sum + es.reduce((t, e) => t + (e.voucher || 0), 0) - es.reduce((t, e) => t + e.extraTip, 0)) >= 1000)) st.rows_check.push(`${b.date.slice(8)}/${b.date.slice(5, 7)} ${row.time}: sổ thu ${row.amount.toLocaleString('vi-VN')}, giá ghi trong ô ${es.reduce((t, e) => t + (e.parsed.explicit || e.est) + e.parsed.surcharge, 0).toLocaleString('vi-VN')} (${es.map((e) => e.text).join(' | ').slice(0, 90)})`);
           for (const e of es) {
             if (!e.customerId) { const id = cust.upsert('APP', { name: BM.cleanName(e.text) || ('Khách ' + e.time), phone: null }, false); e.customerId = id; }
+            // Ô ghi "tặng vc / tặng voucher / có vc / có thẻ vc" mà khách chưa có thẻ tri ân trong máy → bổ sung thẻ (chưa dùng)
+            {
+              const ft = BM.fold(e.text);
+              const gm = /(chua\s*cap)/.test(ft) ? null : ft.match(/\b(tang|co|cap|phat)\s*(?:the\s*)?(vc|voucher|vocher|the tri an)\b/);
+              // Tên ghi trong ô khác tên trong tab thẻ ("e duy anh" / "A Duy Anh") → coi là cùng người, không tạo thẻ thứ 2
+              const STOP = new Set(['a', 'anh', 'e', 'em', 'c', 'chi', 'co', 'b', 'ban', 'cua', 'chu', 'vc', 'voucher', 'the', 'kh', 'nap', 'tra', 'truoc', 'chau']);
+              const tk = (x) => BM.fold(x).replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w && !STOP.has(w) && !/\d/.test(w));
+              const mine = new Set(tk(e.text));
+              const sameName = () => db.prepare("SELECT cu.name FROM cards c JOIN customers cu ON cu.id=c.customer_id WHERE c.sale_type='gift'").all()
+                .some((r) => { const t = tk(r.name); return t.length && t.every((w) => mine.has(w)); });
+              if (gm && e.customerId && !(e.voucher > 0) && !db.prepare("SELECT 1 FROM cards WHERE customer_id=? AND sale_type='gift'").get(e.customerId) && !sameName()) {
+                const gt = db.prepare('SELECT id FROM card_types WHERE name=?').get(GIFT_CARD.name);
+                const code = 'TA-' + b.date.slice(5).replace('-', '') + '-' + e.customerId;
+                if (!db.prepare('SELECT 1 FROM cards WHERE code=?').get(code)) {
+                  db.prepare(`INSERT INTO cards(code,customer_id,card_type_id,name,price,value,sold_at,expires_at,seller_id,sale_type,commission,status,note,created_by)
+                    VALUES (?,?,?,?,0,?,?,?,?,'gift',0,'active',?,?)`).run(code, e.customerId, gt && gt.id, GIFT_CARD.name, GIFT_CARD.value || 1000000, b.date, GIFT_CARD.expires, e.staffId,
+                    (gm[1] === 'co' ? 'Bổ sung từ sổ: ô ghi "có vc" ngày ' : 'Bổ sung từ sổ: ô ghi "tặng vc" ngày ') + b.date + ' nhưng chưa có trong tab Quản lý Thẻ 1Tr – kiểm tra lại', user.id);
+                  (st.gifts_added = st.gifts_added || []).push(`${dayLabel} ${BM.cleanName(e.text) || e.text.slice(0, 30)}`);
+                }
+              }
+            }
             const ref = 'SO:' + crypto.createHash('sha1').update([b.date, e.time, e.staffId, e.text].join('|')).digest('hex').slice(0, 16);
             let ex = db.prepare('SELECT * FROM visits WHERE import_ref=?').get(ref);
             if (!ex) {
