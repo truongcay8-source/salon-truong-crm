@@ -1619,8 +1619,31 @@ function bindCardTable(root, cards, reload) {
         <div><label>Trạng thái</label><select name="status"><option value="active" ${c.status === 'active' ? 'selected' : ''}>Đang dùng</option><option value="closed" ${c.status === 'closed' ? 'selected' : ''}>Đóng thẻ</option><option value="refunded" ${c.status === 'refunded' ? 'selected' : ''}>Hoàn tiền (thu hồi HH)</option></select></div>
         <div><label>Điều chỉnh số dư (+/−)</label><input type="number" name="amount" step="1000"></div><div><label>Lý do điều chỉnh</label><input name="note"></div>
         ${sellerFields(c)}</div>
-        <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu</button></div></form>` : ''}`);
+        <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu</button></div></form>` : ''}
+      ${isOwner() ? `<form id="cardSale"><h3 style="margin-top:14px">✏️ Sửa số tiền thẻ (chỉ Lãnh đạo)</h3>
+        <div class="small muted">Dùng khi ghi nhầm (vd nạp 2tr mà ghi 20tr). Số dư = giá trị mới − phần đã dùng (${money(Math.max(0, c.value - c.balance))}); hoa hồng bán thẻ tính lại.</div><div class="form-grid">
+        <div><label>Giá bán (khách trả)</label><input type="number" name="price" min="0" step="1000" value="${c.price}"></div>
+        <div><label>Giá trị dùng</label><input type="number" name="value" min="1000" step="1000" value="${c.value}"></div>
+        <div><label>Loại</label><select name="sale_type">${[['new', 'Khách mua mới'], ['renewal', 'Mua lại / nạp thêm'], ['gift', 'Tặng']].map(([k, l]) => `<option value="${k}" ${c.sale_type === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div><label>Hình thức thanh toán</label><select name="payment_method">${S.settings.payment_methods.map((m) => `<option ${c.payment_method === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></div>
+        <div><label>Ngày bán</label><input type="date" name="sold_at" value="${c.sold_at || ''}"></div>
+        <div><label>Lý do sửa *</label><input name="reason" placeholder="vd: ghi nhầm 20tr, đúng 2tr"></div></div>
+        <div class="small" id="cardSaleHint"></div>
+        <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu số tiền thẻ</button></div></form>` : ''}`);
     bindMsgBox();
+    const fs2 = $('#cardSale');
+    if (fs2) {
+      const used = Math.max(0, c.value - c.balance);
+      const hint = () => { const v = Number(fs2.value.value || 0); $('#cardSaleHint').innerHTML = v ? `Số dư sau khi sửa: <b>${money(v - used)}</b>` : ''; };
+      fs2.value.oninput = hint; hint();
+      fs2.onsubmit = (e) => {
+        e.preventDefault();
+        guard($('#cardSale button'), async () => {
+          await api(`/cards/${c.id}/sale`, { method: 'PUT', body: formData(fs2) });
+          closeModal(); toast('Đã sửa số tiền thẻ'); reload();
+        });
+      };
+    }
     const f = $('#cardEdit');
     if (f) bindSellerFields(f, c);
     if (f) f.onsubmit = (e) => {
