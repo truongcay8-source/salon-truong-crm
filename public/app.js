@@ -1760,8 +1760,10 @@ function cardForm(customer, after) {
 VIEWS.cards = async (main) => {
   const status = S.params.status ?? 'active';
   const cards = await api('/cards' + (status ? '?status=' + status : ''));
-  const total = cards.filter((c) => c.status === 'active').reduce((s, c) => s + c.balance, 0);
-  main.innerHTML = header('Thẻ trả trước', isMgr() ? `Tổng số dư thẻ đang lưu hành: <b>${money(total)}</b> (tiệm còn nợ dịch vụ khách)` : '', `<button class="btn primary" id="sell">+ Bán thẻ</button>`) +
+  const act = cards.filter((c) => c.status === 'active');
+  const total = act.filter((c) => c.sale_type !== 'gift').reduce((s, c) => s + c.balance, 0);
+  const gifts = act.filter((c) => c.sale_type === 'gift');
+  main.innerHTML = header('Thẻ trả trước', isMgr() ? `Số dư thẻ khách đã trả tiền: <b>${money(total)}</b> (tiệm còn nợ dịch vụ khách)<br>Thẻ tri ân 1Tr chưa dùng: <b>${gifts.length} thẻ</b> = ${money(gifts.reduce((s, c) => s + c.balance, 0))} (chỉ dùng 1 lần, không có tiền vào)` : '', `<button class="btn primary" id="sell">+ Bán thẻ</button>`) +
     `<div class="card"><div class="row"><select id="stf" style="width:auto"><option value="active" ${status === 'active' ? 'selected' : ''}>Đang dùng</option><option value="" ${status === '' ? 'selected' : ''}>Tất cả</option><option value="closed" ${status === 'closed' ? 'selected' : ''}>Đã đóng</option><option value="refunded" ${status === 'refunded' ? 'selected' : ''}>Đã hoàn</option></select></div></div>
     <div class="card">${cardTable(cards)}</div>`;
   $('#stf').onchange = (e) => go('cards', { status: e.target.value });
@@ -1979,7 +1981,7 @@ VIEWS.sales = async (main) => {
       <button class="btn sm" data-p="today">Hôm nay</button><button class="btn sm" data-p="month">Tháng này</button><button class="btn sm" data-p="last">Tháng trước</button><button class="btn sm" data-p="all">Từ khai trương</button></div></div>
     ${s ? `<div class="grid kpis">
       <div class="kpi"><div class="l">Doanh số dịch vụ</div><div class="v">${money(s.service_sales)}</div><div class="s">${s.visits} lượt · giảm giá ${money(s.discounts)}</div></div>
-      <div class="kpi"><div class="l">Tiền vào thực tế</div><div class="v">${money(s.money_in)}</div><div class="s">thu dịch vụ ${money(s.service_cash)} + bán thẻ ${money(s.card_sales)}</div></div>
+      <div class="kpi"><div class="l">Tiền vào thực tế</div><div class="v">${money(s.money_in)}</div><div class="s">thu dịch vụ ${money(s.service_cash)} + bán thẻ ${money(s.card_sales)}${s.unpaid ? `<br>⚠ chưa thu (ô hồng): <b>${money(s.unpaid)}</b>` : ''}</div></div>
       <div class="kpi"><div class="l">Dịch vụ trả bằng thẻ</div><div class="v">${money(s.paid_by_card)}</div><div class="s">${s.paid_by_gift ? `trong đó thẻ tặng ${money(s.paid_by_gift)} (chi phí tri ân, không có tiền vào)` : 'đã thu tiền lúc bán thẻ'}</div></div>
       <div class="kpi"><div class="l">Tip</div><div class="v">${money(s.tips)}</div><div class="s">không tính doanh số</div></div></div>
       <div class="card"><h3>Tiền vào theo hình thức</h3>${Object.entries(s.by_method).map(([k, v]) => `<div class="stat-line"><span>${esc(k)}</span><b>${money(v)}</b></div>`).join('') || '<div class="empty">—</div>'}</div>` : ''}
@@ -2095,6 +2097,7 @@ function showImport(r, sel) {
           ${s.book.replaced_nk ? `<div class="stat-line"><span>Lượt nhập từ Nhật ký được thay bằng số liệu sổ</span><b>${s.book.replaced_nk}</b></div>` : ''}
           ${s.book.locked ? `<div class="stat-line"><span>🔒 Lượt đã có trong máy (khóa, không nhập lại / không đổi tiền)</span><b>${s.book.locked}</b></div>` : ''}
           ${s.visits_deduped ? `<div class="stat-line"><span>🧹 Lượt làm bị nhập 2 lần trước đây → đã xóa bản trùng</span><b>${s.visits_deduped}</b></div>` : ''}
+          ${s.gifts_closed ? `<div class="stat-line"><span>🎁 Thẻ tri ân đã dùng 1 lần → đã đóng (bỏ phần dư)</span><b>${s.gifts_closed}</b></div>` : ''}
           ${s.book.relinked ? `<div class="stat-line"><span>Ô sổ bị sửa chữ, nhận ra lượt cũ (không tạo trùng)</span><b>${s.book.relinked}</b></div>` : ''}
           ${s.book.customer_fixed ? `<div class="stat-line"><span>Lượt chuyển về đúng khách</span><b>${s.book.customer_fixed}</b></div>` : ''}
           ${s.book.kept_manual ? `<div class="stat-line"><span>Ô đã có lượt nhân viên tự ghi (giữ nguyên)</span><b>${s.book.kept_manual}</b></div>` : ''}

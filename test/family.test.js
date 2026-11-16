@@ -197,3 +197,43 @@ test('khách định kỳ (2 tuần/lần, gọi trước hỏi giờ) + cắt c
   r = (await c.get('/reminders')).data;
   assert.ok(!r.cycles.some((y) => y.id === cid), 'đã làm hôm nay → hết nhắc');
 });
+
+test('thẻ tri ân chỉ dùng 1 lần: dùng chưa hết cũng đóng; xóa lượt thì mở lại; dọn trùng không làm thẻ "hoàn" lại', async () => {
+  const c = client();
+  assert.equal((await c.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const L = require('../server/logic'); const I = require('../server/importer');
+  const svc = db.prepare("SELECT id FROM services WHERE active=1 ORDER BY id LIMIT 1").get();
+  const cid = (await c.post('/customers', { name: 'Khách tri ân', phone: '0912000111' })).data.id;
+  const card = (await c.post('/cards', { customer_id: cid, price: 0, value: 1000000 })).data;
+  assert.equal(card.sale_type, 'gift');
+  const r = await c.post('/visits', { customer_id: cid, date: '2026-11-21', time: '10:00', main_staff_id: 2, card_id: card.id, card_paid: 600000,
+    items: [{ service_id: svc.id, price: 600000 }] });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  let k = db.prepare('SELECT status FROM cards WHERE id=?').get(card.id);
+  assert.equal(k.status, 'closed'); assert.equal(L.cardBalance(card.id), 0);
+  // sửa lại lượt vẫn dùng được thẻ đã đóng của chính lượt đó
+  const r2 = await c.put('/visits/' + r.data.id, { ...r.data, card_id: card.id, card_paid: 500000, payment_method: 'Tiền mặt', items: [{ service_id: svc.id, price: 700000 }] });
+  assert.equal(r2.status, 200, JSON.stringify(r2.data));
+  assert.equal(r2.data.card_paid, 500000); assert.equal(L.cardBalance(card.id), 0);
+  // xóa lượt → thẻ mở lại đủ 1tr
+  assert.equal((await c.del('/visits/' + r.data.id, { reason: 'test' })).status, 200);
+  assert.equal(L.cardBalance(card.id), 1000000);
+  assert.equal(db.prepare('SELECT status FROM cards WHERE id=?').get(card.id).status, 'active');
+  // bản cũ: dọn trùng xóa lượt có trừ thẻ, lượt giữ lại không trừ → sửa lại
+  const a = await c.post('/visits', { customer_id: cid, date: '2026-11-22', time: '11:00', main_staff_id: 2, card_id: card.id, card_paid: 1000000, items: [{ service_id: svc.id, price: 1200000 }], payment_method: 'Tiền mặt' });
+  const b = await c.post('/visits', { customer_id: cid, date: '2026-11-22', time: '11:00', main_staff_id: 2, items: [{ service_id: svc.id, price: 1200000 }], payment_method: 'Tiền mặt' });
+  L.deleteVisit(a.data.id, 'Trùng: ô sổ đặt lịch bị sửa chữ nên nhập 2 lần (giữ lượt ' + b.data.id + ')', { id: 1 });
+  assert.equal(L.cardBalance(card.id), 1000000, 'lỗi cũ: thẻ như chưa dùng');
+  I.closeUsedGifts();
+  const kept = db.prepare('SELECT card_id, card_paid, cash_paid FROM visits WHERE id=?').get(b.data.id);
+  assert.equal(kept.card_id, card.id); assert.equal(kept.card_paid, 1000000); assert.equal(kept.cash_paid, 200000);
+  assert.equal(L.cardBalance(card.id), 0);
+  I.closeUsedGifts(); assert.equal(db.prepare('SELECT COUNT(*) n FROM card_txns WHERE card_id=?').get(card.id).n, 1, 'chạy lại không trừ 2 lần');
+});
+
+test('sổ đặt lịch: đuôi SĐT ghi cạnh tên không bị đọc thành tiền', () => {
+  const BM = require('../server/bookmoney');
+  const svcs = db.prepare('SELECT * FROM services').all();
+  const p = BM.parseEntry('Bảo 2772(Thu) 685 voucher 0933982772', { level: 'Director' }, (n) => svcs.find((s) => s.name === n), svcs);
+  assert.equal(p.explicit, 685000);
+});

@@ -5,6 +5,7 @@ const fold = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').rep
 
 // Số tiền ghi tay: "685k", "1250", "(180)", "1tr", "1tr086k", "1tr235" → đồng
 function amounts(text) {
+  const phones = (fold(text).match(/(?:\+?84|0)[\d.\s]{8,12}\d/g) || []).map((p) => p.replace(/\D/g, ''));
   let s = fold(text)
     .replace(/(?:\+?84|0)[\d.\s]{8,12}\d/g, ' ') // SĐT
     .replace(/\b\d{1,2}[:h]\d{2}\b/g, ' ') // giờ
@@ -16,6 +17,7 @@ function amounts(text) {
   while ((m = re.exec(s))) {
     if (m[1]) { out.push({ v: Math.round(Number(m[1].replace(',', '.')) * 1e6 + (m[3] ? Number(m[3].padEnd(3, '0')) * 1000 : 0)), at: m.index }); continue; }
     const raw = m[4].replace(/[.,]/g, '');
+    if (raw.length >= 3 && !m[5] && phones.some((p) => p.endsWith(raw))) continue; // đuôi SĐT ghi kèm tên khách
     let n = Number(raw);
     if (raw.length >= 6) { /* đã là đồng */ } else if (n >= 30 && n <= 9999) n *= 1000; else continue;
     out.push({ v: n, at: m.index, end: m.index + m[0].length });
