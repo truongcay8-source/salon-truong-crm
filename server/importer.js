@@ -1,7 +1,7 @@
 'use strict';
 const ExcelJS = require('exceljs');
 const crypto = require('crypto');
-const { db, nextCode, GROUPS, GIFT_CARD } = require('./db');
+const { db, nextCode, GROUPS, GIFT_CARD, audit } = require('./db');
 const L = require('./logic');
 
 const ROLLBACK = Symbol('dry-run');
@@ -275,6 +275,8 @@ function mergeCustomer(fromId, toId) {
     const ks = Object.keys(fill);
     if (ks.length) db.prepare(`UPDATE customers SET ${ks.map((k) => k + '=?').join(',')} WHERE id=?`).run(...ks.map((k) => fill[k]), toId);
     db.prepare("UPDATE customers SET deleted=1, notes=COALESCE(notes,'') || ? WHERE id=?").run(' · Đã gộp vào ' + t.code + ' ' + t.name, fromId);
+    db.prepare("UPDATE customers SET notes=TRIM(COALESCE(notes,'') || ?) WHERE id=?").run(' · Gộp hồ sơ trùng: ' + f.name + (f.phone ? ' ' + f.phone : '') + ' (' + f.code + ')', toId);
+    audit(1, 'merge_customer', 'customer', toId, { from: f.code, from_name: f.name, to: t.code, to_name: t.name });
   })();
   return true;
 }
@@ -297,9 +299,41 @@ function mergeMergedCustomers() {
   }
   return n;
 }
+// Hồ sơ thừa 0đ (chưa có lượt nào) trùng người với hồ sơ đã có lượt → gộp vào, giữ thông tin (SĐT, công thức, thẻ, lịch…)
+// Trùng = cùng SĐT; hoặc cùng tên (bỏ danh xưng / chữ "tặng vc"…) và chỉ 1 hồ sơ như vậy;
+// hoặc tên ngắn/dài hơn ("Vinh" ↔ "Vinh Phạm") nhưng có lịch/lượt cùng ngày cùng giờ
+const MALE_T = new Set(['a', 'anh', 'chu', 'ong', 'cau']), FEMALE_T = new Set(['c', 'chi', 'ch', 'co', 'ba']);
+function genderClash(x, y) {
+  const g = (n) => { const w = BM.fold(n).split(/\s+/)[0]; return MALE_T.has(w) ? 'm' : FEMALE_T.has(w) ? 'f' : null; };
+  const a = g(x), b = g(y);
+  return a && b && a !== b;
+}
+function mergeOrphanCustomers() {
+  const live = db.prepare(`SELECT c.id, c.name, c.phone FROM customers c WHERE c.deleted=0 AND EXISTS (SELECT 1 FROM visits v WHERE v.customer_id=c.id AND v.status='done')`).all()
+    .map((c) => ({ ...c, core: nameCore(c.name) }));
+  const orphans = db.prepare(`SELECT c.id, c.name, c.phone FROM customers c WHERE c.deleted=0 AND NOT EXISTS (SELECT 1 FROM visits v WHERE v.customer_id=c.id AND v.status='done')`).all();
+  const slots = db.prepare(`SELECT date || ' ' || IFNULL(time,'') s FROM appointments WHERE customer_id=? UNION SELECT date || ' ' || IFNULL(time,'') FROM visits WHERE customer_id=? AND status='done'`);
+  const eq = (a, b) => a.rel === b.rel && a.t.length && a.t.length === b.t.length && a.t.every((w, i) => w === b.t[i]);
+  const sub = (a, b) => a.rel === b.rel && a.t.length && b.t.length && (a.t.every((w) => b.t.includes(w)) || b.t.every((w) => a.t.includes(w)));
+  let n = 0;
+  for (const o of orphans) {
+    let to = o.phone ? live.filter((c) => c.phone === o.phone) : [];
+    if (to.length !== 1) {
+      const oc = nameCore(o.name);
+      to = live.filter((c) => eq(oc, c.core) && (!o.phone || !c.phone || o.phone === c.phone) && !genderClash(o.name, c.name));
+      if (to.length !== 1) {
+        const mine = new Set(slots.all(o.id, o.id).map((r) => r.s));
+        to = mine.size ? live.filter((c) => sub(oc, c.core) && (!o.phone || !c.phone || o.phone === c.phone) && slots.all(c.id, c.id).some((r) => mine.has(r.s))) : [];
+      }
+    }
+    if (to.length === 1 && mergeCustomer(o.id, to[0].id)) n++;
+  }
+  return n;
+}
 function closeUsedGifts() {
   repairDedupedCards();
   try { mergeMergedCustomers(); } catch (e) { console.error('Gộp hồ sơ khách lỗi:', e.message); }
+  try { const n = mergeOrphanCustomers(); if (n) console.log(`Đã gộp ${n} hồ sơ khách thừa (0đ) vào hồ sơ đã có lượt`); } catch (e) { console.error('Gộp hồ sơ thừa lỗi:', e.message); }
   let n = 0;
   for (const c of db.prepare(`SELECT c.id FROM cards c WHERE c.sale_type='gift' AND EXISTS (SELECT 1 FROM card_txns t WHERE t.card_id=c.id AND t.amount<0 AND t.note<>?)`).all(L.GIFT_WRITE_OFF)) {
     const last = db.prepare('SELECT visit_id FROM card_txns WHERE card_id=? AND amount<0 AND note<>? ORDER BY (visit_id IS NULL), id DESC LIMIT 1').get(c.id, L.GIFT_WRITE_OFF);
@@ -997,4 +1031,4 @@ async function importWorkbook(buffer, opts, user) {
 }
 
 const VERSION = 3; // 2: không ghép "E Quang" vào "Quang Anh"
-module.exports = { VERSION, dedupeVisits, closeUsedGifts, mergeSameVisits, dedupeAppointments, apptKey, importWorkbook, asDate, asTime };
+module.exports = { VERSION, dedupeVisits, closeUsedGifts, mergeSameVisits, mergeOrphanCustomers, dedupeAppointments, apptKey, importWorkbook, asDate, asTime };
