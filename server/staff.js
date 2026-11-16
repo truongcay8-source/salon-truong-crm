@@ -246,7 +246,19 @@ function mount(app, { MGR, OWNER }) {
     for (const a of appts) if (a.visit_id && byId.has(a.visit_id)) { a.visit_total = byId.get(a.visit_id).total; a.visit_services = byId.get(a.visit_id).services; }
     const free = visits.filter((v) => !linked.has(v.id));
     require('./famgroup').tag(appts);
-    res.json({ date, appointments: appts, visits: free, offs: offRows(date, date, req.user) });
+    // Dòng dịch vụ do người khác làm / phụ trong phiếu của thợ chính → hiện ở cột người đó (không tiền) để ai cũng thấy việc của mình
+    const helps = new Map();
+    for (const i of db.prepare(`SELECT vi.name, vi.staff_id, vi.assistant_id, v.id visit_id, v.time, v.main_staff_id, v.customer_id, c.name customer_name
+        FROM visit_items vi JOIN visits v ON v.id=vi.visit_id JOIN customers c ON c.id=v.customer_id
+        WHERE v.date=? AND v.status='done' AND ((vi.staff_id IS NOT NULL AND vi.staff_id<>v.main_staff_id) OR vi.assistant_id>0) ORDER BY v.time, vi.id`).all(date)) {
+      for (const [uid, role] of [[i.staff_id, 'làm'], [i.assistant_id > 0 ? i.assistant_id : null, 'phụ']]) {
+        if (!uid || uid === i.main_staff_id) continue;
+        const k = uid + ':' + i.visit_id;
+        if (!helps.has(k)) helps.set(k, { staff_id: uid, visit_id: i.visit_id, time: i.time, customer_id: i.customer_id, customer_name: i.customer_name, main_staff_id: i.main_staff_id, lines: [] });
+        helps.get(k).lines.push((role === 'phụ' ? 'phụ ' : '') + i.name);
+      }
+    }
+    res.json({ date, appointments: appts, visits: free, helps: [...helps.values()], offs: offRows(date, date, req.user) });
   });
 }
 
