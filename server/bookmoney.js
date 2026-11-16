@@ -35,7 +35,7 @@ const KW = [
   [/gloss/, 'Glossing (tráng màu) – M (ngang vai)'],
   [/cao rau/, 'Cạo râu'],
   [/balayage/, 'Balayage – M (ngang vai)'],
-  [/tay\b(?! da chet)/, 'Tẩy tóc (gồm dưỡng Olaplex) – M (ngang vai)', 'Tẩy nam (600–800)'],
+  [/(?<!dau )\btay\b(?! da chet)/, 'Tẩy tóc (gồm dưỡng Olaplex) – M (ngang vai)', 'Tẩy nam (600–800)'],
   [/nhuom/, 'Nhuộm tóc – M (ngang vai)', 'Nhuộm nam (700–1.000)'],
   [/\b(uon|duoi)\b/, 'Uốn / Duỗi – M (ngang vai)', 'Uốn – Duỗi nam (800–1.200)'],
   [/phuc hoi|hap/, 'Chữa trị 3 bước Milbon Grand Linkage – trên vai'],
