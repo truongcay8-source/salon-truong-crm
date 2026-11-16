@@ -626,6 +626,31 @@ app.put('/api/cards/:id', MGR, (req, res) => {
   audit(req.user.id, 'update_card', 'card', id, { code: c.code, changes: diffObj(c, after, ['expires_at', 'status', 'seller_id', 'consultant_id', 'seller_share', 'commission', 'consultant_commission']) });
   res.json({ ok: true });
 });
+// Sửa số tiền thẻ đã bán (ghi nhầm 20tr thay vì 2tr…): chỉ Lãnh đạo. Số dư = giá trị mới − phần đã dùng; hoa hồng tính lại.
+app.put('/api/cards/:id/sale', OWNER, (req, res) => {
+  const id = int(req.params.id);
+  const c = db.prepare('SELECT * FROM cards WHERE id=?').get(id);
+  if (!c) throw new HttpError(404, 'Không tìm thấy thẻ');
+  const b = req.body;
+  const price = b.price != null && b.price !== '' ? int(b.price) : c.price;
+  const value = b.value != null && b.value !== '' ? int(b.value) : c.value;
+  if (price < 0) throw bad('Giá bán không hợp lệ');
+  if (value <= 0) throw bad('Giá trị thẻ phải lớn hơn 0');
+  const used = c.value - L.cardBalance(id);
+  if (value - used < 0) throw bad(`Thẻ đã dùng ${used.toLocaleString('vi-VN')}đ, giá trị không được nhỏ hơn số đã dùng`);
+  const saleType = price === 0 ? 'gift' : ['new', 'renewal', 'gift'].includes(b.sale_type) ? b.sale_type : c.sale_type;
+  const methods = getSettings().payment_methods.split(',').map((s) => s.trim());
+  const pm = str(b.payment_method) && methods.includes(str(b.payment_method)) ? str(b.payment_method) : c.payment_method;
+  const soldAt = L.isDate(b.sold_at) ? b.sold_at : c.sold_at;
+  const name = str(b.name) || c.name;
+  if (!str(b.reason)) throw bad('Ghi lý do sửa (vd: ghi nhầm 20tr, đúng là 2tr)');
+  const cm = c.status === 'refunded' ? { commission: 0, consultant_commission: 0 } : L.cardCommission(price, saleType, c.seller_id, c.consultant_id, c.consultant_id ? c.seller_share : 100);
+  db.prepare('UPDATE cards SET price=?, value=?, sale_type=?, payment_method=?, sold_at=?, name=?, commission=?, consultant_commission=? WHERE id=?')
+    .run(price, value, saleType, pm, soldAt, name, cm.commission, cm.consultant_commission, id);
+  const after = db.prepare('SELECT * FROM cards WHERE id=?').get(id);
+  audit(req.user.id, 'update_card_sale', 'card', id, { code: c.code, reason: str(b.reason), changes: diffObj(c, after, ['price', 'value', 'sale_type', 'payment_method', 'sold_at', 'name', 'commission', 'consultant_commission']) });
+  res.json(L.cardRow(after));
+});
 app.post('/api/cards/:id/adjust', MGR, (req, res) => {
   const id = int(req.params.id);
   const amount = int(req.body.amount);

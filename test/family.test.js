@@ -138,3 +138,22 @@ test('từng dòng dịch vụ chọn người làm: doanh số + hoa hồng dò
   const r2 = await c.put('/visits/' + r.data.id, { ...r.data, items: [{ service_id: svc.id, price: 300000, staff_id: 2 }] });
   assert.equal(r2.data.items[0].staff_id, null);
 });
+
+test('sửa số tiền thẻ đã bán (ghi nhầm 20tr → 2tr): chỉ Lãnh đạo, số dư + hoa hồng tính lại', async () => {
+  const c = client();
+  assert.equal((await c.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const cid = (await c.post('/customers', { name: 'Khách thẻ nhầm', phone: '0912888777' })).data.id;
+  const card = (await c.post('/cards', { customer_id: cid, price: 20000000, value: 20000000, sale_type: 'renewal', payment_method: 'Tiền mặt', seller_id: 2 })).data;
+  db.prepare('INSERT INTO card_txns(card_id,amount,note,created_by) VALUES (?,?,?,1)').run(card.id, -300000, 'dùng thử');
+  let r = await c.put(`/cards/${card.id}/sale`, { price: 2000000, value: 2000000 });
+  assert.equal(r.status, 400, 'bắt ghi lý do');
+  r = await c.put(`/cards/${card.id}/sale`, { price: 2000000, value: 2000000, reason: 'ghi nhầm 20tr' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.balance, 1700000);
+  const rate = Number(db.prepare("SELECT value FROM settings WHERE key='card_renewal_rate'").get()?.value || 0);
+  if (db.prepare('SELECT commission_enabled FROM users WHERE id=2').get().commission_enabled) assert.equal(r.data.commission, Math.round(2000000 * rate));
+  assert.equal((await c.put(`/cards/${card.id}/sale`, { value: 200000, reason: 'x' })).status, 400, 'không nhỏ hơn phần đã dùng');
+  const t = client(); await t.post('/login', { username: 'truong', password: 'tam12345' });
+  await t.post('/me/password', { old_password: 'tam12345', new_password: 'moi-truong' }); await t.post('/login', { username: 'truong', password: 'moi-truong' });
+  assert.equal((await t.put(`/cards/${card.id}/sale`, { price: 1, reason: 'x' })).status, 403);
+});
