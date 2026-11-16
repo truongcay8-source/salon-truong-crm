@@ -237,3 +237,26 @@ test('sổ đặt lịch: đuôi SĐT ghi cạnh tên không bị đọc thành 
   const p = BM.parseEntry('Bảo 2772(Thu) 685 voucher 0933982772', { level: 'Director' }, (n) => svcs.find((s) => s.name === n), svcs);
   assert.equal(p.explicit, 685000);
 });
+
+test('thẻ tri ân: hoa hồng % vẫn đủ, nhưng tách khỏi doanh số tính thưởng; bóc theo nhóm dịch vụ', async () => {
+  const c = client();
+  assert.equal((await c.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const L = require('../server/logic');
+  const cut = db.prepare("SELECT id, grp FROM services WHERE active=1 AND grp='Cắt' ORDER BY id LIMIT 1").get();
+  const chem = db.prepare("SELECT id, grp FROM services WHERE active=1 AND grp='Hóa chất' ORDER BY id LIMIT 1").get();
+  const cid = (await c.post('/customers', { name: 'Khách tri ân 2', phone: '0912000222' })).data.id;
+  const card = (await c.post('/cards', { customer_id: cid, price: 0, value: 1000000 })).data;
+  const d = '2026-11-25';
+  const before = L.salesReport(d, d, { role: 'owner' });
+  const r = await c.post('/visits', { customer_id: cid, date: d, time: '10:00', main_staff_id: 2, card_id: card.id, card_paid: 1000000, payment_method: 'Tiền mặt',
+    items: [{ service_id: cut.id, price: 500000 }, { service_id: chem.id, price: 1500000, staff_id: 4 }] });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const rep = L.salesReport(d, d, { role: 'owner' });
+  const g = (x, id) => x.rows.find((y) => y.user_id === id) || { sales: 0, gift_sales: 0, bonus_sales: 0 };
+  assert.equal(g(rep, 2).sales - g(before, 2).sales, 500000);
+  assert.equal(g(rep, 2).gift_sales - g(before, 2).gift_sales, 250000);
+  assert.equal(g(rep, 4).gift_sales - g(before, 4).gift_sales, 750000);
+  assert.equal(g(rep, 4).bonus_sales - g(before, 4).bonus_sales, 750000);
+  assert.equal(rep.summary.gift_by_group['Cắt'], 250000);
+  assert.equal(rep.summary.gift_by_group['Hóa chất'], 750000);
+});
