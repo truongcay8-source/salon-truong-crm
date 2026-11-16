@@ -704,6 +704,35 @@ app.get('/api/reports/sales', (req, res) => {
   const to = L.isDate(req.query.to) ? req.query.to : t;
   res.json(L.salesReport(from, to, req.user));
 });
+// Bấm vào số trong bảng "Theo nhân viên" → các dòng hóa đơn tạo nên số đó (để tra soát, sửa người làm từng dòng)
+app.get('/api/reports/sales-lines', (req, res) => {
+  const t = today();
+  const from = L.isDate(req.query.from) ? req.query.from : t.slice(0, 8) + '01';
+  const to = L.isDate(req.query.to) ? req.query.to : t;
+  const staff = req.user.role === 'staff' ? req.user.id : int(req.query.staff_id);
+  if (!staff) throw bad('Chọn nhân viên');
+  const grp = str(req.query.grp);
+  const groups = new Set(require('./db').GROUPS);
+  const rows = db.prepare(`SELECT vi.id item_id, vi.name, vi.grp, vi.price, vi.staff_id, vi.assistant_id, v.id visit_id, v.code, v.date, v.time, v.subtotal, v.total, v.surcharge,
+      v.main_staff_id, v.assistant_id v_asst, v.note, v.import_ref, c.name customer_name, u.full_name doer_name, m.full_name main_name
+    FROM visit_items vi JOIN visits v ON v.id=vi.visit_id LEFT JOIN customers c ON c.id=v.customer_id
+    LEFT JOIN users u ON u.id=COALESCE(vi.staff_id, v.main_staff_id) LEFT JOIN users m ON m.id=v.main_staff_id
+    WHERE v.status='done' AND v.date BETWEEN ? AND ? ORDER BY v.date, v.time, v.id, vi.id`).all(from, to);
+  const out = [];
+  for (const r of rows) {
+    const f = r.subtotal > 0 ? Math.max(0, r.total - r.surcharge) / r.subtotal : 0;
+    const g = groups.has(r.grp) ? r.grp : 'Khác';
+    const doer = r.staff_id || r.main_staff_id;
+    const asst = r.assistant_id > 0 ? r.assistant_id : r.assistant_id === 0 ? null : r.v_asst;
+    let role = null;
+    if (doer === staff) role = r.staff_id && r.staff_id !== r.main_staff_id ? 'làm (phiếu của ' + (r.main_name || '') + ')' : 'làm chính';
+    else if (!grp && asst === staff) role = 'phụ';
+    if (!role || (grp && g !== grp)) continue;
+    out.push({ visit_id: r.visit_id, code: r.code, date: r.date, time: r.time, customer_name: r.customer_name, name: r.name, grp: g, net: Math.round(r.price * f),
+      role, main_name: r.main_name, doer_name: r.doer_name, note: String(r.note || '').replace(/^Sổ đặt lịch: /, '').split(' · ')[0], from_book: /^SO:/.test(r.import_ref || '') });
+  }
+  res.json({ from, to, staff_id: staff, grp: grp || null, lines: out, total: out.filter((x) => x.role !== 'phụ').reduce((s, x) => s + x.net, 0) });
+});
 app.get('/api/reminders', (req, res) => {
   const r = L.reminders();
   if (stockMod.perm(req.user).stock_view) { r.stock = stockMod.stockAlerts(); r.counts.stock = r.stock.filter((m) => !m.ordered_at).length; }

@@ -1533,6 +1533,20 @@ VIEWS.visits = async (main) => {
   $$('[data-rc-id]', main).forEach((b) => (b.onclick = () => showReceipt(b.dataset.rcId)));
 };
 
+// Chi tiết hóa đơn tạo nên doanh số 1 nhân viên (theo nhóm dịch vụ) → bấm Sửa để chọn đúng người làm từng dòng
+async function salesLines(from, to, staffId, grp, after) {
+  const r = await api(`/reports/sales-lines?from=${from}&to=${to}&staff_id=${staffId}${grp ? '&grp=' + encodeURIComponent(grp) : ''}`);
+  openModal(`${esc(staffName(staffId))} – ${grp ? esc(grp) : 'tất cả dịch vụ'} (${dmy(from).slice(0, 5)}–${dmy(to).slice(0, 5)})`,
+    `<div class="small muted" style="margin-bottom:8px">Dòng nào <b>không phải ${esc(staffName(staffId))} làm</b>: bấm <b>Sửa</b> → ở dòng dịch vụ đó chọn <b>Chính: tên người làm</b> → Lưu. Doanh số, hoa hồng chuyển sang đúng người. Ô "Sổ ghi" là chữ trong ô sổ đặt lịch để đối chiếu.</div>
+    <div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Khách</th><th>Dịch vụ</th><th>Vai trò</th><th class="num">Tiền</th><th>Sổ ghi</th><th></th></tr></thead><tbody>
+    ${r.lines.map((l) => `<tr><td class="nowrap">${dmy(l.date).slice(0, 5)} ${esc(l.time || '')}</td><td>${esc(l.customer_name || '')}</td><td>${esc(l.name)}<div class="small muted">${esc(l.grp)}</div></td>
+      <td class="small">${esc(l.role)}</td><td class="num">${money(l.net)}</td><td class="small muted">${esc(l.note || '')}</td>
+      <td class="nowrap"><button class="btn sm" data-lrc="${l.visit_id}">Hóa đơn</button>${isOwner() ? `<button class="btn sm" data-lev="${l.visit_id}">Sửa</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">Không có dòng nào</td></tr>'}
+    </tbody></table></div><div class="stat-line" style="margin-top:8px"><span>Tổng (không gồm dòng làm phụ)</span><b>${money(r.total)}</b></div>`);
+  $$('[data-lrc]').forEach((b) => (b.onclick = () => showReceipt(b.dataset.lrc)));
+  $$('[data-lev]').forEach((b) => (b.onclick = () => guard(b, async () => { const v = await api('/visits/' + b.dataset.lev); closeModal(); visitForm(v, () => { after && after(); }); })));
+}
+
 // Lượt đã xóa → khôi phục (lỡ tay xóa)
 async function deletedVisits(from, to, after) {
   const show = async (all) => {
@@ -2019,12 +2033,13 @@ VIEWS.sales = async (main) => {
       <div class="stat-line"><span class="muted">Tip khách ghi ở lượt</span><b>${money(x.tip)}</b></div></div>`).join('') : ''}
     <div class="card ${!isMgr() ? 'hidden' : ''}"><h3>Theo nhân viên</h3><div class="table-wrap"><table><thead><tr><th>Nhân viên</th><th class="num">Lượt chính</th><th class="num">Lượt phụ</th>${G.map((g) => `<th class="num">${esc(g)}</th>`).join('')}<th class="num">Tổng DS</th><th class="num">Thẻ tri ân</th><th class="num">Người nhà</th><th class="num">DS tính thưởng</th>
       <th class="num">HH dịch vụ</th><th class="num">HH phụ</th><th class="num">Thẻ bán</th><th class="num">HH thẻ</th><th class="num">Phụ thu</th><th class="num">Tổng HH</th><th class="num">Tip</th></tr></thead>
-      <tbody>${r.rows.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td class="num">${x.main_count}</td><td class="num">${x.assist_count}</td>${G.map((g) => `<td class="num">${money(x.by_group[g])}</td>`).join('')}
-      <td class="num"><b>${money(x.sales)}</b></td><td class="num">${x.gift_sales ? '−' + money(x.gift_sales) : '–'}</td><td class="num">${x.family_sales ? '−' + money(x.family_sales) : '–'}</td><td class="num"><b>${money(x.bonus_sales)}</b></td><td class="num">${money(x.main_commission)}</td><td class="num">${money(x.assistant_commission)}</td><td class="num">${x.cards_count} · ${money(x.cards_amount)}</td>
+      <tbody>${r.rows.map((x) => `<tr><td><a href="#" data-sl="${x.user_id}" data-g=""><b>${esc(x.name)}</b></a></td><td class="num">${x.main_count}</td><td class="num">${x.assist_count}</td>${G.map((g) => `<td class="num">${x.by_group[g] ? `<a href="#" data-sl="${x.user_id}" data-g="${esc(g)}">${money(x.by_group[g])}</a>` : money(0)}</td>`).join('')}
+      <td class="num"><a href="#" data-sl="${x.user_id}" data-g=""><b>${money(x.sales)}</b></a></td><td class="num">${x.gift_sales ? '−' + money(x.gift_sales) : '–'}</td><td class="num">${x.family_sales ? '−' + money(x.family_sales) : '–'}</td><td class="num"><b>${money(x.bonus_sales)}</b></td><td class="num">${money(x.main_commission)}</td><td class="num">${money(x.assistant_commission)}</td><td class="num">${x.cards_count} · ${money(x.cards_amount)}</td>
       <td class="num">${money(x.card_commission)}</td><td class="num">${money(x.surcharge_share)}</td><td class="num"><b>${money(x.total_commission)}</b></td><td class="num">${money(x.tip)}</td></tr>`).join('')}</tbody></table></div>
       <div class="small muted" style="margin-top:8px">Hoa hồng tạm tính theo % từng dịch vụ (Cài đặt › Dịch vụ) và % người phụ, bán thẻ (Cài đặt › Tham số). Phụ thu: cửa hàng giữ ${Math.round((S.settings.surcharge_salon_rate ?? 0.33) * 100)}%, còn lại chia thợ chính / người phụ của lượt đó. Chưa gồm lương cứng, thưởng mốc doanh số. <b>DS tính thưởng</b> = Tổng DS trừ phần khách trả bằng thẻ tri ân (chi phí cửa hàng) và lượt của người nhà chủ; hoa hồng % từng dịch vụ vẫn tính đủ. Tip được chia chung ở trang <a href="#tips">Chia tip</a>.</div></div>
     ${staffCustomerCard(sc)}`;
   const set = (a, b) => go('sales', { from: a, to: b });
+  $$('[data-sl]', main).forEach((a) => (a.onclick = (e) => { e.preventDefault(); salesLines(from, to, Number(a.dataset.sl), a.dataset.g, () => VIEWS.sales(main)); }));
   $('#f').onchange = (e) => set(e.target.value, to); $('#t').onchange = (e) => set(from, e.target.value);
   $$('[data-p]').forEach((b) => (b.onclick = () => {
     const t = S.today;
