@@ -224,7 +224,7 @@ app.get('/api/customers', (req, res) => {
   const offset = Math.max(0, int(req.query.offset));
   let where = 'c.deleted=0';
   const params = [];
-  if (q) { where += " AND cust_rank(c.name, c.code, c.phone, COALESCE(c.formula,'') || ' ' || COALESCE(c.hair_notes,''), ?) >= 0"; params.push(q); }
+  if (q) { where += " AND (cust_rank(c.name, c.code, c.phone, COALESCE(c.formula,'') || ' ' || COALESCE(c.hair_notes,''), ?) >= 0 OR c.family_id IN (SELECT family_id FROM customers WHERE family_id IS NOT NULL AND deleted=0 AND cust_rank(name, code, phone, '', ?) >= 0))"; params.push(q, q); }
   const sf = req.query.staff_id === 'mine' ? req.user.id : req.query.staff_id === 'none' ? 'none' : int(req.query.staff_id);
   if (sf === 'none') where += ' AND c.staff_id IS NULL';
   else if (sf) { where += ' AND c.staff_id=?'; params.push(sf); }
@@ -232,7 +232,8 @@ app.get('/api/customers', (req, res) => {
       (SELECT COUNT(*) FROM visits v WHERE v.customer_id=c.id AND v.status='done') visits,
       (SELECT MAX(date) FROM visits v WHERE v.customer_id=c.id AND v.status='done') last_visit,
       (SELECT COALESCE(SUM(total),0) FROM visits v WHERE v.customer_id=c.id AND v.status='done') spend
-    FROM customers c WHERE ${where} ORDER BY ${q ? "cust_rank(c.name, c.code, c.phone, COALESCE(c.formula,'') || ' ' || COALESCE(c.hair_notes,''), ?), " : ''}(last_visit IS NULL), last_visit DESC, c.id DESC LIMIT ? OFFSET ?`).all(...params, ...(q ? [q] : []), limit, offset);
+    ,c.family_id, c.relation, (SELECT COUNT(*) FROM customers m WHERE c.family_id IS NOT NULL AND m.family_id=c.family_id AND m.id<>c.id AND m.deleted=0) fam
+    FROM customers c WHERE ${where} ORDER BY ${q ? "CASE WHEN cust_rank(c.name, c.code, c.phone, COALESCE(c.formula,'') || ' ' || COALESCE(c.hair_notes,''), ?) < 0 THEN 999 ELSE cust_rank(c.name, c.code, c.phone, COALESCE(c.formula,'') || ' ' || COALESCE(c.hair_notes,''), ?) END, " : ''}(last_visit IS NULL), last_visit DESC, c.id DESC LIMIT ? OFFSET ?`).all(...params, ...(q ? [q, q] : []), limit, offset);
   const total = db.prepare(`SELECT COUNT(*) n FROM customers c WHERE ${where}`).get(...params).n;
   if (req.user.role === 'staff') for (const r of rows) r.spend = null;
   res.json({ rows, total });
@@ -270,6 +271,9 @@ app.get('/api/customers/:id', (req, res) => {
   c.cards = db.prepare('SELECT * FROM cards WHERE customer_id=? ORDER BY id DESC').all(id).map(L.cardRow);
   c.appointments = db.prepare(`SELECT a.*, u.full_name staff_name FROM appointments a LEFT JOIN users u ON u.id=a.staff_id
     WHERE a.customer_id=? ORDER BY a.date DESC, a.time DESC LIMIT 30`).all(id);
+  c.family = family.members(id);
+  c.hair_log = visits.filter((v) => v.hair_before || v.result || v.formula).slice(0, 20)
+    .map((v) => ({ id: v.id, date: v.date, staff: v.main_staff_name, services: v.items.map((i) => i.name).join(' + '), hair_before: v.hair_before, result: v.result, formula: v.formula }));
   c.stats = { visits: visits.length, spend: req.user.role === 'staff' ? null : visits.reduce((s, v) => s + (v.total || 0), 0), last_visit: visits[0] ? visits[0].date : null };
   res.json(c);
 });
@@ -294,8 +298,27 @@ app.get('/api/customers/:id/brief', (req, res) => {
     FROM customers c LEFT JOIN users s ON s.id=c.staff_id LEFT JOIN users f ON f.id=c.formula_by WHERE c.id=? AND c.deleted=0`).get(int(req.params.id));
   if (!c) throw new HttpError(404, 'Không tìm thấy khách');
   c.warranties = require('./warranty').active(today(), c.id);
+  c.family = family.members(c.id).map((m) => ({ id: m.id, name: m.name, relation: m.relation, last_visit: m.last_visit, has_formula: !!m.formula }));
+  c.last_hair = db.prepare("SELECT date, hair_before, result FROM visits WHERE customer_id=? AND status='done' AND (hair_before IS NOT NULL AND hair_before<>'' OR result IS NOT NULL AND result<>'') ORDER BY date DESC, id DESC LIMIT 1").get(c.id) || null;
   res.json(c);
 });
+// Người nhà / người đi cùng
+const family = require('./family');
+app.get('/api/family/relations', (req, res) => res.json(family.RELATIONS));
+app.post('/api/customers/:id/family', (req, res) => {
+  const id = int(req.params.id), other = int(req.body.other_id);
+  try { family.link(id, other, str(req.body.relation)); } catch (e) { throw bad(e.message); }
+  audit(req.user.id, 'update_customer', 'customer', other, { family_with: id, relation: str(req.body.relation) });
+  res.json({ ok: true, family: family.members(id) });
+});
+app.delete('/api/customers/:id/family', (req, res) => {
+  const id = int(req.params.id);
+  family.unlink(id);
+  audit(req.user.id, 'update_customer', 'customer', id, { family: 'gỡ khỏi nhóm' });
+  res.json({ ok: true });
+});
+app.get('/api/family/suggest', MGR, (req, res) => res.json(family.suggest(100)));
+app.post('/api/family/ignore', MGR, (req, res) => { family.ignore(int(req.body.a), int(req.body.b)); res.json({ ok: true }); });
 app.delete('/api/customers/:id', OWNER, (req, res) => {
   const id = int(req.params.id);
   db.prepare('UPDATE customers SET deleted=1 WHERE id=?').run(id);

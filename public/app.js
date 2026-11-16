@@ -827,12 +827,12 @@ VIEWS.customers = async (main) => {
   const fetchList = (qq) => api('/customers?limit=200&q=' + encodeURIComponent(qq) + (sf ? '&staff_id=' + sf : ''));
   let r = await fetchList(q);
   const canMove = isMgr() && sf && sf !== 'mine' && r.total > 0;
-  const rowsHtml = () => r.rows.length ? r.rows.map((c) => `<tr class="click" data-c="${c.id}"><td class="muted">${esc(c.code)}</td><td><b>${esc(c.name)}</b></td><td>${esc(c.phone || '')}</td>
+  const rowsHtml = () => r.rows.length ? r.rows.map((c) => `<tr class="click" data-c="${c.id}"><td class="muted">${esc(c.code)}</td><td><b>${esc(c.name)}</b>${c.fam ? ` <span class="badge" title="Có người nhà / người đi cùng">👨‍👩‍👧 ${c.fam + 1}</span>` : ''}${c.relation ? `<div class="small muted">${esc(c.relation)}</div>` : ''}</td><td>${esc(c.phone || '')}</td>
       <td class="num">${c.visits}</td><td>${dmy(c.last_visit)}</td><td>${c.staff_id ? esc(staffName(c.staff_id)) : '<span class="muted small">—</span>'}</td>
       <td class="small formula-cell" title="${esc(c.formula || '')}">${c.formula ? esc(c.formula.length > 40 ? c.formula.slice(0, 40) + '…' : c.formula) : ''}</td>${isMgr() ? `<td class="num">${money(c.spend)}</td>` : ''}</tr>`).join('')
     : `<tr><td colspan="8" class="muted">Không thấy khách nào. Thử gõ ít chữ hơn, không cần dấu (vd: “huyen”) hoặc 4 số cuối SĐT.</td></tr>`;
   const moreHtml = () => r.total > r.rows.length ? `Đang hiện ${r.rows.length}/${r.total} — gõ tìm kiếm để lọc.` : '';
-  main.innerHTML = header('Khách hàng', `<span id="cTotal">${r.total}</span> khách`, `${canMove ? '<button class="btn" id="moveC">🔄 Bàn giao khách</button>' : ''}<button class="btn primary" id="newC">+ Khách mới</button>`) +
+  main.innerHTML = header('Khách hàng', `<span id="cTotal">${r.total}</span> khách`, `${isMgr() ? '<button class="btn" id="famSug">👨‍👩‍👧 Gợi ý người nhà</button>' : ''}${canMove ? '<button class="btn" id="moveC">🔄 Bàn giao khách</button>' : ''}<button class="btn primary" id="newC">+ Khách mới</button>`) +
     `<div class="card"><div class="row"><input id="q" placeholder="🔍 Tìm tên (không cần dấu), SĐT, mã khách, công thức…" value="${esc(q)}" type="search" autocomplete="off" autocorrect="off" style="flex:1;min-width:220px">
       <select id="sf" style="width:auto"><option value="">Tất cả thợ</option><option value="mine" ${sf === 'mine' ? 'selected' : ''}>⭐ Khách của tôi</option>${activeStaff().map((u) => `<option value="${u.id}" ${String(u.id) === sf ? 'selected' : ''}>Khách của ${esc(u.full_name)}</option>`).join('')}<option value="none" ${sf === 'none' ? 'selected' : ''}>Chưa giao thợ</option></select></div></div>
     <div class="card"><div class="table-wrap"><table><thead><tr><th>Mã</th><th>Tên khách</th><th>SĐT</th><th class="num">Lượt</th><th>Lần gần nhất</th><th>Thợ phụ trách</th><th>Công thức</th>${isMgr() ? '<th class="num">Tổng chi</th>' : ''}</tr></thead>
@@ -861,6 +861,7 @@ VIEWS.customers = async (main) => {
   if (q && window.innerWidth > 820) { qi.focus(); qi.setSelectionRange(q.length, q.length); }
   bindRows();
   $('#newC').onclick = () => customerForm({}, (id) => go('customer', { id }));
+  if ($('#famSug')) $('#famSug').onclick = () => familySuggest(() => VIEWS.customers(main));
   if (canMove) $('#moveC').onclick = () => {
     const fromName = sf === 'none' ? 'chưa giao thợ' : 'của ' + staffName(Number(sf));
     const list = r.rows;
@@ -927,7 +928,7 @@ VIEWS.customer = async (main) => {
   const c = await api('/customers/' + id);
   const tab = S.params.tab || 'visits';
   const activeCards = c.cards.filter((x) => x.status === 'active');
-  main.innerHTML = header(c.name, `${esc(c.code)} · ${telLinks(c.phone)}`,
+  main.innerHTML = header(c.name, `${esc(c.code)} · ${telLinks(c.phone)}${c.relation ? ' · ' + esc(c.relation) : ''}`,
     `<button class="btn" id="eC">Sửa</button><button class="btn" id="aC">Đặt lịch</button><button class="btn" id="sC">Bán thẻ</button><button class="btn primary" id="vC">+ Ghi lượt làm</button>`) +
     `<div class="grid two"><div class="card">
       <div class="stat-line"><span class="muted">Thợ phụ trách</span><b>${c.staff_name ? esc(c.staff_name) : '<span class="badge warn">chưa giao</span>'}</b></div>
@@ -942,7 +943,12 @@ VIEWS.customer = async (main) => {
       <h3 style="margin-top:12px">🧪 Công thức của khách <button class="btn sm" id="fEdit" style="margin-left:6px">Sửa</button></h3>
       ${c.formula ? `<div class="pre formula-box">${esc(c.formula)}</div><div class="small muted">Cập nhật ${dmy(c.formula_at)}${c.formula_by_name ? ' · ' + esc(c.formula_by_name) : ''}</div>` : '<div class="small muted">Chưa có. Ghi ở phiếu thu (ô Công thức) là tự lưu vào đây.</div>'}
       ${(() => { const hist = c.visits.filter((x) => x.formula); return hist.length > 1 || (hist.length && hist[0].formula !== c.formula) ? `<details class="small" style="margin-top:6px"><summary>Lịch sử công thức (${hist.length} lần)</summary>${hist.map((x) => `<div style="margin:6px 0"><b>${dmy(x.date)}</b> · ${esc(x.main_staff_name || '')} · ${esc(x.items.map((i) => i.name).join(' + '))}<div class="pre">${esc(x.formula)}</div></div>`).join('')}</details>` : ''; })()}${c.notes ? `<h3 style="margin-top:12px">Ghi chú</h3><div class="pre">${esc(c.notes)}</div>` : ''}</div></div>
-    <div class="card"><div class="tabs">${[['visits', `Lượt làm (${c.visits.length})`], ['photos', `Ảnh (${c.photos.length})`], ['cards', `Thẻ (${c.cards.length})`], ['appts', `Lịch hẹn (${c.appointments.length})`]]
+    <div class="card"><h3>👨‍👩‍👧 Người nhà & người đi cùng <button class="btn sm" id="famAdd" style="margin-left:6px">+ Thêm</button></h3>
+      ${c.family.length ? c.family.map((m) => `<div class="list-item"><a href="#customer?id=${m.id}"><b>${esc(m.name)}</b></a>
+        <span class="small muted">${esc(m.relation || '')}</span>${m.formula ? ' <span class="badge" title="Có công thức">🧪</span>' : ''}
+        <span class="spacer"></span><span class="small muted">${m.visits} lượt${m.last_visit ? ' · gần nhất ' + dmy(m.last_visit) : ''}</span><button class="btn sm" data-funlink="${m.id}">Gỡ</button></div>`).join('')
+        : '<div class="small muted">Chưa gắn ai. Khách đi cùng vợ/chồng, con, anh chị em, bạn… bấm "+ Thêm" để gắn — tìm 1 người là ra cả nhà, xem được công thức và lịch sử của từng người.</div>'}</div>
+    <div class="card"><div class="tabs">${[['visits', `Lượt làm (${c.visits.length})`], ['hair', `Tình trạng tóc (${c.hair_log.length})`], ['photos', `Ảnh (${c.photos.length})`], ['cards', `Thẻ (${c.cards.length})`], ['appts', `Lịch hẹn (${c.appointments.length})`]]
       .map(([k, l]) => `<button data-tab="${k}" class="${tab === k ? 'active' : ''}">${l}</button>`).join('')}</div><div id="tabBody"></div></div>`;
   const reload = () => VIEWS.customer(main);
   $$('[data-tab]').forEach((b) => (b.onclick = () => { history.replaceState({}, '', `#customer?id=${id}&tab=${b.dataset.tab}`); S.params.tab = b.dataset.tab; reload(); }));
@@ -952,6 +958,8 @@ VIEWS.customer = async (main) => {
       <div class="small muted">Lần sau ghi lượt làm, phiếu thu hiện sẵn công thức này để thợ dùng lại.</div><div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu công thức</button></div></form>`);
     $('#ff').onsubmit = (e) => { e.preventDefault(); guard($('#ff button'), async () => { await api('/customers/' + c.id, { method: 'PUT', body: { ...c, formula: $('#ff [name=formula]').value, staff_id: c.staff_id } }); closeModal(); toast('Đã lưu công thức'); reload(); }); };
   };
+  $('#famAdd').onclick = () => familyAdd(c, reload);
+  $$('[data-funlink]').forEach((b) => (b.onclick = async () => { if (!confirm('Gỡ người này khỏi nhóm người nhà?')) return; try { await api(`/customers/${b.dataset.funlink}/family`, { method: 'DELETE' }); reload(); } catch (e) { toast(e.message); } }));
   $('#aC').onclick = () => apptForm({ customer_id: c.id, customer_code: c.code, name: c.name }, reload);
   $('#sC').onclick = () => cardForm(c, reload);
   $('#vC').onclick = () => visitForm({ customer_id: c.id, customer: c }, reload);
@@ -965,6 +973,13 @@ VIEWS.customer = async (main) => {
       if (!inp.files.length) return;
       try { await uploadPhotos(c.id, inp.files, inp.dataset.kind, inp.dataset.vphoto); toast('Đã tải ảnh'); reload(); } catch (e) { toast(e.message); }
     }));
+  } else if (tab === 'hair') {
+    body.innerHTML = c.hair_log.length ? `<div class="small muted" style="margin-bottom:8px">Ghi ở phiếu thu: ô "Tình trạng tóc trước khi làm" và "Kết quả". Mới nhất ở trên.</div>` + c.hair_log.map((h) => `<div class="list-item" style="display:block">
+        <div class="row"><b>${dmy(h.date)}</b><span class="small">${esc(h.services)}</span><span class="badge brand">${esc(h.staff || '')}</span></div>
+        ${h.hair_before ? `<div class="small"><span class="muted">Tóc trước:</span> ${esc(h.hair_before)}</div>` : ''}
+        ${h.formula ? `<div class="small pre"><span class="muted">Công thức:</span> ${esc(h.formula)}</div>` : ''}
+        ${h.result ? `<div class="small"><span class="muted">Kết quả:</span> ${esc(h.result)}</div>` : ''}</div>`).join('')
+      : '<div class="empty">Chưa có ghi chép. Khi ghi lượt làm, điền "Tình trạng tóc trước khi làm" (có nút chọn nhanh) và "Kết quả" để theo dõi tóc qua từng lần.</div>';
   } else if (tab === 'photos') {
     body.innerHTML = `<div class="row" style="margin-bottom:10px"><label class="btn sm">+ Ảnh trước<input type="file" accept="image/*" multiple hidden data-kind="before" class="up"></label>
       <label class="btn sm">+ Ảnh sau<input type="file" accept="image/*" multiple hidden data-kind="after" class="up"></label></div>${photoGrid(c.photos, true)}`;
@@ -978,6 +993,51 @@ VIEWS.customer = async (main) => {
     bindApptList(body, reload, c.appointments.map((a) => ({ ...a, name: c.name, customer_code: c.code })));
   }
 };
+const HAIR_TAGS = ['Khỏe', 'Khô', 'Xơ', 'Hư tổn', 'Gãy rụng', 'Tóc mỏng', 'Bạc ít', 'Bạc nhiều', 'Đã nhuộm', 'Đã tẩy', 'Đã uốn/duỗi', 'Da đầu dầu', 'Gàu', 'Da đầu nhạy cảm'];
+function hairChips() {
+  return `<div class="row hair-chips" style="gap:4px;margin:4px 0">${HAIR_TAGS.map((t) => `<button type="button" class="btn sm" data-hchip="${esc(t)}">${esc(t)}</button>`).join('')}</div>`;
+}
+// bấm chip → thêm/bớt chữ trong ô tình trạng tóc
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-hchip]'); if (!b) return;
+  const ta = b.closest('div.full')?.querySelector('textarea[name=hair_before]'); if (!ta) return;
+  const t = b.dataset.hchip; const parts = ta.value.split(/\s*,\s*/).filter(Boolean);
+  const i = parts.findIndex((p) => p.toLowerCase() === t.toLowerCase());
+  if (i >= 0) parts.splice(i, 1); else parts.push(t);
+  ta.value = parts.join(', '); ta.dispatchEvent(new Event('input', { bubbles: true }));
+});
+async function familyAdd(c, done) {
+  const rels = await api('/family/relations');
+  openModal('Thêm người nhà · ' + c.name, `<form id="fam"><label>Tìm khách (tên hoặc SĐT)</label><input id="famQ" placeholder="VD: khanh, 0935…" autocomplete="off">
+    <div id="famR" class="small" style="max-height:220px;overflow:auto"></div><input type="hidden" name="other_id">
+    <label>Người này là gì của ${esc(c.name)}?</label><select name="relation"><option value="">— chọn —</option>${rels.map((r) => `<option>${esc(r)}</option>`).join('')}</select>
+    <div class="err"></div><div class="modal-foot"><button class="btn primary">Gắn vào nhóm người nhà</button></div></form>`);
+  const f = $('#fam'); let t;
+  $('#famQ').oninput = () => { clearTimeout(t); t = setTimeout(async () => {
+    const q = $('#famQ').value.trim(); if (q.length < 2) { $('#famR').innerHTML = ''; return; }
+    const r = await api('/customers?limit=8&q=' + encodeURIComponent(q));
+    $('#famR').innerHTML = r.rows.filter((x) => x.id !== c.id).map((x) => `<div class="list-item click" data-pick="${x.id}"><b>${esc(x.name)}</b> <span class="muted">${esc(x.phone || '')} · ${x.visits} lượt</span></div>`).join('') || '<div class="muted">Không thấy — tạo khách mới ở trang Khách hàng trước.</div>';
+    $$('[data-pick]', $('#famR')).forEach((d) => (d.onclick = () => { f.other_id.value = d.dataset.pick; $$('[data-pick]', $('#famR')).forEach((x) => x.classList.toggle('active', x === d)); $('#famQ').value = d.querySelector('b').textContent; }));
+  }, 300); };
+  f.onsubmit = (e) => { e.preventDefault(); guard($('#fam .btn.primary'), async () => {
+    if (!f.other_id.value) throw new Error('Chọn 1 khách trong danh sách');
+    await api(`/customers/${c.id}/family`, { method: 'POST', body: { other_id: Number(f.other_id.value), relation: f.relation.value } });
+    closeModal(); toast('Đã gắn người nhà'); done();
+  }); };
+}
+async function familySuggest(done) {
+  const list = await api('/family/suggest');
+  openModal('👨‍👩‍👧 Gợi ý người nhà từ tên khách', list.length ? `<div class="small muted" style="margin-bottom:8px">App đọc tên khách ghi trong sổ (vd "Phương vợ Khánh", "Alex (con Khánh Linh)") và tìm người được nhắc tới. Kiểm tra rồi bấm Gắn — sai thì Bỏ qua.</div>
+    ${list.map((s, i) => `<div class="list-item" style="display:block" data-sg="${i}"><div><b>${esc(s.name)}</b> ${s.phone ? `<span class="muted small">${esc(s.phone)}</span>` : ''} → là <b>${esc(s.relation)}</b> của:</div>
+      <div class="row" style="margin-top:4px"><select data-sgc>${s.candidates.map((x) => `<option value="${x.id}">${esc(x.name)}${x.phone ? ' · ' + esc(x.phone) : ''}</option>`).join('')}</select>
+      <button class="btn sm primary" data-sgok>Gắn</button><button class="btn sm" data-sgno>Bỏ qua</button></div></div>`).join('')}` : '<div class="empty">Chưa có gợi ý nào.</div>', true);
+  $$('[data-sg]').forEach((el) => {
+    const s = list[Number(el.dataset.sg)]; const sel = $('[data-sgc]', el);
+    $('[data-sgok]', el).onclick = async () => { try { await api(`/customers/${sel.value}/family`, { method: 'POST', body: { other_id: s.id, relation: s.relation } }); el.remove(); toast('Đã gắn'); } catch (e) { toast(e.message); } };
+    $('[data-sgno]', el).onclick = async () => { try { await api('/family/ignore', { method: 'POST', body: { a: Number(sel.value), b: s.id } }); el.remove(); } catch (e) { toast(e.message); } };
+  });
+  const mc = $('#modal'); const obs = new MutationObserver(() => { if (mc.classList.contains('hidden')) { obs.disconnect(); done(); } }); obs.observe(mc, { attributes: true });
+}
 function visitBlock(v, photos) {
   const ps = photos.filter((p) => p.visit_id === v.id);
   return `<div class="list-item" style="display:block"><div class="row"><b>${dmy(v.date)}${v.time ? ' ' + esc(v.time) : ''}</b>
@@ -1000,7 +1060,7 @@ function visitNotesForm(v, after) {
   openModal('Sửa ghi chú lượt ' + (v.code || ''), `<form id="vn"><div class="small" style="margin-bottom:8px">🔒 Hóa đơn đã hoàn thành: <b>dịch vụ, giá, giảm giá, tip, thanh toán</b> chỉ quản lý sửa được. Cần sửa tiền thì nhắn quản lý.</div>
     <div class="totals small">${esc((v.items || []).map((i) => i.name).join(' + '))}${v.total != null ? ` · <b>${money(v.total)}</b>` : ''}${v.tip ? ' · tip ' + money(v.tip) : ''}${v.tip_private ? ' · tip riêng ' + money(v.tip_private) : ''}</div>
     <div class="form-grid" style="margin-top:8px">
-    <div class="full"><label>Tình trạng tóc trước khi làm</label><textarea name="hair_before">${esc(v.hair_before || '')}</textarea></div>
+    <div class="full"><label>Tình trạng tóc trước khi làm</label>${hairChips()}<textarea name="hair_before">${esc(v.hair_before || '')}</textarea></div>
     <div class="full"><label>Mong muốn của khách</label><input name="wish" value="${esc(v.wish || '')}"></div>
     <div class="full"><label>Công thức / tỷ lệ pha</label><textarea name="formula">${esc(v.formula || '')}</textarea></div>
     <div class="full"><label>Kết quả sau làm</label><input name="result" value="${esc(v.result || '')}"></div>
@@ -1054,7 +1114,7 @@ async function visitForm(v = {}, after) {
     <div class="full"><div class="form-grid" style="margin:0"><div><label>Tip riêng (khách tặng riêng 1 người)</label><input type="number" name="tip_private" min="0" step="1000" value="${v.tip_private || ''}"></div>
       <div><label>Người nhận tip riêng</label><select name="tip_private_to">${staffOptions(v.tip_private_to || null, '— Thợ chính —')}</select></div></div></div>
     <div class="full"><div class="totals" id="tot"></div></div>
-    <div class="full"><label>Tình trạng tóc trước khi làm</label><textarea name="hair_before">${esc(v.hair_before || '')}</textarea></div>
+    <div class="full"><label>Tình trạng tóc trước khi làm</label>${hairChips()}<textarea name="hair_before">${esc(v.hair_before || '')}</textarea></div>
     <div class="full"><label>Mong muốn của khách</label><input name="wish" value="${esc(v.wish || '')}"></div>
     <div class="full"><label>Công thức / tỷ lệ pha</label><div id="fHint"></div><textarea name="formula" placeholder="VD: 9nb 35ml + 7glca 25ml, oxi 20 (gõ lượng ml/g để app tự tính hóa chất & giá cốt)">${esc(v.formula || '')}</textarea><div id="fCost" class="small"></div></div>
     <div class="full"><label>Kết quả sau làm</label><input name="result" value="${esc(v.result || '')}"></div>
@@ -1208,8 +1268,10 @@ async function visitForm(v = {}, after) {
     if (!isEdit && !f.main_staff_id.value && b.staff_id) f.main_staff_id.value = b.staff_id;
     const wb = (b.warranties || []).map((x) => `<div class="totals small" style="margin-bottom:6px;border-left:3px solid var(--warn)"><b>🛡 Khách đang trong hạn bảo hành</b> · lượt ${esc(x.code)} ngày ${dmy(x.date)}${x.staff_name ? ' (' + esc(x.staff_name) + ')' : ''}
       ${warrantyLines(x.warranties).map((l) => `<div>${esc(l)}</div>`).join('')}<div class="muted">Nếu làm lại do lỗi kỹ thuật: ghi giảm giá với lý do "Bảo hành lượt ${esc(x.code)}".</div></div>`).join('');
-    $('#fHint').innerHTML = wb + (b.formula || b.hair_notes ? `<div class="totals small" style="margin-bottom:6px">${b.staff_name ? `<div>Thợ phụ trách: <b>${esc(b.staff_name)}</b></div>` : ''}
-      ${b.hair_notes ? `<div><span class="muted">Lưu ý tóc:</span> ${esc(b.hair_notes)}</div>` : ''}
+    const fam = (b.family || []).length ? `<div><span class="muted">👨‍👩‍👧 Người nhà:</span> ${b.family.map((m) => `<a href="#customer?id=${m.id}" target="_blank">${esc(m.name)}</a>${m.relation ? ' (' + esc(m.relation) + ')' : ''}${m.has_formula ? ' 🧪' : ''}`).join(', ')}</div>` : '';
+    const lh = b.last_hair ? `<div><span class="muted">Tóc lần trước (${dmy(b.last_hair.date)}):</span> ${esc([b.last_hair.hair_before, b.last_hair.result && 'KQ: ' + b.last_hair.result].filter(Boolean).join(' · '))}</div>` : '';
+    $('#fHint').innerHTML = wb + (b.formula || b.hair_notes || fam || lh ? `<div class="totals small" style="margin-bottom:6px">${b.staff_name ? `<div>Thợ phụ trách: <b>${esc(b.staff_name)}</b></div>` : ''}
+      ${b.hair_notes ? `<div><span class="muted">Lưu ý tóc:</span> ${esc(b.hair_notes)}</div>` : ''}${lh}${fam}
       ${b.formula ? `<div><span class="muted">Công thức khách (${dmy(b.formula_at)}${b.formula_by_name ? ', ' + esc(b.formula_by_name) : ''}):</span><div class="pre">${esc(b.formula)}</div>
       ${!f.formula.value ? '<button type="button" class="btn sm" id="useF">↓ Dùng lại công thức này</button>' : ''}` : ''}</div>` : '');
     const u = $('#useF'); if (u) u.onclick = () => { f.formula.value = b.formula; u.remove(); };
