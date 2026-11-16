@@ -745,7 +745,7 @@ stockMod.mount(app, { MGR, OWNER });
 const xlsxUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 60 * 1024 * 1024 } }); // sổ chi phí có ảnh hóa đơn ~20MB+
 app.post('/api/import', MGR, xlsxUpload.single('file'), async (req, res) => {
   if (!req.file) throw bad('Chưa chọn file Excel');
-  const opts = { dryRun: req.body.dry_run !== '0', includeHistory: req.body.include_history === '1', bookMoney: req.body.book_money !== '0' };
+  const opts = { dryRun: req.body.dry_run !== '0', includeHistory: req.body.include_history === '1', bookMoney: req.body.book_money !== '0', updatePast: req.body.update_past === '1' && req.user.role === 'owner' };
   const result = await importWorkbook(req.file.buffer, opts, req.user);
   if (!opts.dryRun) audit(req.user.id, 'import_excel', null, null, { file: req.file.originalname, ...result.summary });
   res.json(result);
@@ -850,6 +850,7 @@ if (require.main === module) {
   app.listen(port, () => console.log(`CRM Salon Nếp chạy tại http://localhost:${port}`));
   startBackups();
   gsync.startAutoSync();
+  try { const n = require('./importer').dedupeVisits(); if (n) console.log(`Đã dọn ${n} lượt làm trùng do sổ sửa chữ`); } catch (e) { console.error('Dọn lượt trùng lỗi:', e.message); }
   try { const n = require('./importer').dedupeAppointments(); if (n) console.log(`Đã dọn ${n} lịch hẹn trùng`); } catch (e) { console.error('Dọn lịch trùng lỗi:', e.message); }
 }
 

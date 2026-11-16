@@ -2088,6 +2088,10 @@ function showImport(r, sel) {
         ${s.book ? `<div class="stat-line"><span><b>Tiền theo sổ đặt lịch</b> (${s.book.days} ngày từ 01/11)</span><b>${money(s.book.total)}</b></div>
           <div class="stat-line"><span>Lượt làm tạo mới / cập nhật</span><b>${s.book.visits} / ${s.book.updated}</b></div>
           ${s.book.replaced_nk ? `<div class="stat-line"><span>Lượt nhập từ Nhật ký được thay bằng số liệu sổ</span><b>${s.book.replaced_nk}</b></div>` : ''}
+          ${s.book.locked ? `<div class="stat-line"><span>🔒 Lượt đã có trong máy (khóa, không nhập lại / không đổi tiền)</span><b>${s.book.locked}</b></div>` : ''}
+          ${s.visits_deduped ? `<div class="stat-line"><span>🧹 Lượt làm bị nhập 2 lần trước đây → đã xóa bản trùng</span><b>${s.visits_deduped}</b></div>` : ''}
+          ${s.book.relinked ? `<div class="stat-line"><span>Ô sổ bị sửa chữ, nhận ra lượt cũ (không tạo trùng)</span><b>${s.book.relinked}</b></div>` : ''}
+          ${s.book.customer_fixed ? `<div class="stat-line"><span>Lượt chuyển về đúng khách</span><b>${s.book.customer_fixed}</b></div>` : ''}
           ${s.book.kept_manual ? `<div class="stat-line"><span>Ô đã có lượt nhân viên tự ghi (giữ nguyên)</span><b>${s.book.kept_manual}</b></div>` : ''}
           <div class="stat-line"><span>Tip chung (cột Tiền Tip + khách trả dư ${money(s.book.extra_tip)})</span><b>${money(s.book.tip)}</b></div>
           ${s.book.unpaid ? `<div class="stat-line"><span>🩷 Đã làm chưa thanh toán (giá theo bảng giá)</span><b>${money(s.book.unpaid)}</b></div>` : ''}
@@ -2121,6 +2125,7 @@ VIEWS.excel = async (main) => {
       <form id="imp"><label>File .xlsx</label><input type="file" name="file" accept=".xlsx" required>
       <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="include_history"> Nhập cả lịch sử cũ (lượt "Hoàn thành" ở tab Lịch sử của CRM Nếp Hair / lịch các ngày đã qua trong Sổ đặt lịch)</label>
       <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="book_money" checked> Sổ đặt lịch: lấy <b>số tiền từ 01/11</b> theo cột Thu tiền / Tiền Tip → tạo lượt làm, thay các lượt nhập từ Nhật ký cùng ngày (lượt nhân viên tự ghi trong app giữ nguyên). Khách trả dư → tip chung.</label>
+      ${isOwner() ? `<label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="update_past"> 🔓 Cập nhật lại cả lượt đã có trong máy theo sổ (ghi đè tiền/dịch vụ). Bình thường để TẮT: lượt đã nhập bị khóa, đồng bộ không làm doanh số nhảy.</label>` : ''}
       <div class="small muted">Không nên tick nếu đã nhập file Nhật ký: 2 file ghi cùng các lượt 25/10–6/11 → doanh số bị cộng 2 lần (đã có chặn trùng theo khách + ngày).</div>
       <div class="err"></div><div class="row" style="margin-top:12px"><button class="btn" data-mode="1">Xem trước</button><button class="btn primary" data-mode="0">Nhập vào hệ thống</button></div></form>
       <div id="impRes"></div></div>
@@ -2133,7 +2138,7 @@ VIEWS.excel = async (main) => {
     if (!f.file.files.length) { $('#imp .err').textContent = 'Chọn file Excel'; return; }
     guard(b, async () => {
       const fd = new FormData();
-      fd.append('file', f.file.files[0]); fd.append('dry_run', b.dataset.mode); fd.append('include_history', f.include_history.checked ? '1' : '0'); fd.append('book_money', f.book_money.checked ? '1' : '0');
+      fd.append('file', f.file.files[0]); fd.append('dry_run', b.dataset.mode); fd.append('include_history', f.include_history.checked ? '1' : '0'); fd.append('book_money', f.book_money.checked ? '1' : '0'); if (f.update_past && f.update_past.checked) fd.append('update_past', '1');
       if (b.dataset.mode === '0' && !confirm('Nhập dữ liệu vào hệ thống?')) return;
       const r = await api('/import', { method: 'POST', body: fd });
       showImport(r, '#impRes');
