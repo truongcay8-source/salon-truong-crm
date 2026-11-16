@@ -812,6 +812,7 @@ if (require.main === module) {
   app.listen(port, () => console.log(`CRM Salon Nếp chạy tại http://localhost:${port}`));
   startBackups();
   gsync.startAutoSync();
+  try { const n = require('./importer').dedupeAppointments(); if (n) console.log(`Đã dọn ${n} lịch hẹn trùng`); } catch (e) { console.error('Dọn lịch trùng lỗi:', e.message); }
 }
 
 module.exports = { app };
