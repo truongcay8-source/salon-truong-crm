@@ -119,6 +119,7 @@ function saveVisit(input, user, existing, opts = {}) {
   const assistant = int(input.assistant_id) || null;
   const items = Array.isArray(input.items) ? input.items : [];
   if (!items.length) throw bad('Chọn ít nhất 1 dịch vụ');
+  const lineAsst = (it) => (it.assistant_id === undefined || it.assistant_id === null || it.assistant_id === '' ? null : Math.max(0, int(it.assistant_id)));
   const svcStmt = db.prepare('SELECT * FROM services WHERE id=?');
   const cleanItems = items.map((it) => {
     // Sản phẩm bán lẻ lấy từ kho: tên thật + số lượng, tính vào nhóm "Bán sản phẩm"
@@ -129,14 +130,14 @@ function saveVisit(input, user, existing, opts = {}) {
       const ps = db.prepare("SELECT * FROM services WHERE grp='Bán sản phẩm' AND active=1 ORDER BY id LIMIT 1").get();
       const price = it.price != null && it.price !== '' ? int(it.price) : (m.sell_price || 0) * qty;
       if (price < 0) throw bad('Giá sản phẩm không hợp lệ');
-      return { service_id: ps ? ps.id : null, name: m.name + (qty > 1 ? ' ×' + qty : ''), grp: 'Bán sản phẩm', price, commission_rate: ps ? ps.commission_rate : 0, material_id: m.id, qty, staff_id: int(it.staff_id) || null };
+      return { service_id: ps ? ps.id : null, name: m.name + (qty > 1 ? ' ×' + qty : ''), grp: 'Bán sản phẩm', price, commission_rate: ps ? ps.commission_rate : 0, material_id: m.id, qty, staff_id: int(it.staff_id) || null, assistant_id: lineAsst(it) };
     }
     const svc = it.service_id ? svcStmt.get(it.service_id) : null;
     const name = str(it.name) || (svc && svc.name);
     if (!name) throw bad('Dịch vụ thiếu tên');
     const price = it.price != null && it.price !== '' ? int(it.price) : svc ? svc.price : 0;
     if (price < 0) throw bad('Giá dịch vụ không hợp lệ');
-    return { service_id: svc ? svc.id : null, name, grp: svc ? svc.grp : str(it.grp) || 'Khác', price, commission_rate: svc ? svc.commission_rate : 0, staff_id: int(it.staff_id) || null };
+    return { service_id: svc ? svc.id : null, name, grp: svc ? svc.grp : str(it.grp) || 'Khác', price, commission_rate: svc ? svc.commission_rate : 0, staff_id: int(it.staff_id) || null, assistant_id: lineAsst(it) };
   });
   const subtotal = cleanItems.reduce((s, i) => s + i.price, 0);
   const surcharge = Math.max(0, int(input.surcharge));
@@ -183,12 +184,25 @@ function saveVisit(input, user, existing, opts = {}) {
     i.commission = doer.commission_enabled ? Math.round(i.price * factor * i.commission_rate) : 0;
   }
   const mainCommission = cleanItems.filter((i) => !i.staff_id).reduce((s, i) => s + i.commission, 0);
+  // Người phụ: dòng không chọn riêng → theo người phụ chung của phiếu; dòng chọn riêng → hoa hồng phụ của dòng cho người đó
+  const aRate = num('assistant_rate');
   let assistantCommission = 0;
-  if (assistant) {
-    const as = staffStmt.get(assistant);
-    if (!as) throw bad('Người phụ không tồn tại');
-    if (as.commission_enabled) assistantCommission = Math.round(serviceNet * num('assistant_rate'));
+  const as = assistant ? staffStmt.get(assistant) : null;
+  if (assistant && !as) throw bad('Người phụ không tồn tại');
+  for (const i of cleanItems) {
+    if (i.assistant_id && i.assistant_id === assistant) i.assistant_id = null;
+    const doerId = i.staff_id || mainStaff;
+    if (i.assistant_id && i.assistant_id === doerId) i.assistant_id = 0;
+    i.asst_commission = 0;
+    const net = i.price * factor * aRate;
+    if (i.assistant_id === null) { if (as && as.commission_enabled && assistant !== doerId) assistantCommission += net; }
+    else if (i.assistant_id > 0) {
+      const la = staffStmt.get(i.assistant_id);
+      if (!la) throw bad('Người phụ của dòng không tồn tại');
+      i.asst_commission = la.commission_enabled ? Math.round(net) : 0;
+    }
   }
+  assistantCommission = Math.round(assistantCommission);
   const sc = surchargeSplit(surcharge, !!assistant);
 
   const row = {
@@ -219,8 +233,8 @@ function saveVisit(input, user, existing, opts = {}) {
       db.prepare('DELETE FROM visit_items WHERE visit_id=?').run(id);
       db.prepare('DELETE FROM card_txns WHERE visit_id=?').run(id);
     }
-    const ins = db.prepare('INSERT INTO visit_items(visit_id,service_id,name,grp,price,commission_rate,material_id,qty,staff_id,commission) VALUES (?,?,?,?,?,?,?,?,?,?)');
-    for (const i of cleanItems) ins.run(id, i.service_id, i.name, i.grp, i.price, i.commission_rate, i.material_id || null, i.qty || null, i.staff_id || null, i.commission);
+    const ins = db.prepare('INSERT INTO visit_items(visit_id,service_id,name,grp,price,commission_rate,material_id,qty,staff_id,commission,assistant_id,asst_commission) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
+    for (const i of cleanItems) ins.run(id, i.service_id, i.name, i.grp, i.price, i.commission_rate, i.material_id || null, i.qty || null, i.staff_id || null, i.commission, i.assistant_id, i.asst_commission);
     // Hóa chất đã dùng + sản phẩm bán → trừ kho, tính giá cốt lượt
     if (!opts.imported) require('./stock').applyVisit(id, date, cleanItems, Array.isArray(input.materials) ? input.materials : null, user);
     if (cardId && cardPaid > 0) {
@@ -272,7 +286,7 @@ function getVisit(id) {
     FROM visits v LEFT JOIN customers c ON c.id=v.customer_id LEFT JOIN users m ON m.id=v.main_staff_id
     LEFT JOIN users a ON a.id=v.assistant_id LEFT JOIN cards cd ON cd.id=v.card_id WHERE v.id=?`).get(id);
   if (!v) return null;
-  v.items = db.prepare('SELECT vi.*, u.full_name staff_name FROM visit_items vi LEFT JOIN users u ON u.id=vi.staff_id WHERE vi.visit_id=? ORDER BY vi.id').all(id);
+  v.items = db.prepare('SELECT vi.*, u.full_name staff_name, a.full_name assistant_name FROM visit_items vi LEFT JOIN users u ON u.id=vi.staff_id LEFT JOIN users a ON a.id=vi.assistant_id WHERE vi.visit_id=? ORDER BY vi.id').all(id);
   v.photos = db.prepare('SELECT id,kind,created_at FROM photos WHERE visit_id=? ORDER BY id').all(id);
   v.materials = require('./stock').visitMaterials(id);
   v.warranties = require('./warranty').forVisit(v);
@@ -284,7 +298,7 @@ function maskVisitMoney(v, user) {
   if (user.role !== 'staff') return v;
   // Nhân viên không bao giờ thấy giá cốt / giá nhập hóa chất
   v = { ...v, cost: null, materials: v.materials ? v.materials.map((m) => ({ ...m, unit_cost: null })) : v.materials };
-  if (v.main_staff_id === user.id || v.assistant_id === user.id || (v.items || []).some((i) => i.staff_id === user.id)) return v;
+  if (v.main_staff_id === user.id || v.assistant_id === user.id || (v.items || []).some((i) => i.staff_id === user.id || i.assistant_id === user.id)) return v;
   const out = { ...v };
   for (const k of ['subtotal', 'surcharge', 'discount', 'total', 'card_paid', 'cash_paid', 'tip', 'tip_private', 'main_commission', 'assistant_commission', 'surcharge_main', 'surcharge_assist']) out[k] = null;
   if (out.items) out.items = out.items.map((i) => ({ ...i, price: null }));
@@ -328,6 +342,12 @@ function salesReport(from, to, user) {
       if (main) main.sales -= net;
       m.sales += net; m.main_commission += i.commission || 0;
       if (!helped.has(v.id + ':' + i.staff_id)) { helped.add(v.id + ':' + i.staff_id); m.main_count++; }
+    }
+    // Người phụ riêng của dòng
+    const la = i.assistant_id > 0 && per.get(i.assistant_id);
+    if (la) {
+      la.assist_sales += net; la.assistant_commission += i.asst_commission || 0;
+      if (!helped.has(v.id + ':a' + i.assistant_id)) { helped.add(v.id + ':a' + i.assistant_id); if (i.assistant_id !== v.assistant_id) la.assist_count++; }
     }
   }
   const cards = db.prepare("SELECT * FROM cards WHERE status!='refunded' AND sold_at BETWEEN ? AND ?").all(from, to);

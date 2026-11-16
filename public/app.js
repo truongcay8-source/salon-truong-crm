@@ -1231,7 +1231,7 @@ async function visitForm(v = {}, after) {
     .map((s) => `<option value="${s.id}" data-price="${s.price}" ${s.id === sel ? 'selected' : ''}>${esc(s.name)}${s.price ? ' · ' + (s.price / 1000) + 'k' : ''}</option>`).join('')}</optgroup>`).join('')
     + (S.materials.some((m) => m.kind === 'retail' && m.active) ? `<optgroup label="🛍 Sản phẩm bán lẻ (trừ kho)">${S.materials.filter((m) => m.kind === 'retail' && m.active)
       .map((m) => `<option value="m${m.id}" data-price="${m.sell_price || 0}">${esc(m.name)}${m.sell_price ? ' · ' + kMoney(m.sell_price) : ''}</option>`).join('')}</optgroup>` : '');
-  let items = v.items ? v.items.map((i) => (i.material_id ? { material_id: i.material_id, qty: i.qty || 1, price: i.price, staff_id: i.staff_id || '' } : { service_id: i.service_id, name: i.name, price: i.price, staff_id: i.staff_id || '' })) : [];
+  let items = v.items ? v.items.map((i) => (i.material_id ? { material_id: i.material_id, qty: i.qty || 1, price: i.price, staff_id: i.staff_id || '', assistant_id: i.assistant_id ?? '' } : { service_id: i.service_id, name: i.name, price: i.price, staff_id: i.staff_id || '', assistant_id: i.assistant_id ?? '' })) : [];
   // Hóa chất đã dùng: amt theo ml/g (hoặc tuýp/chai nếu chưa khai dung tích)
   let used = (v.materials || []).map((x) => ({ material_id: x.material_id, amt: fromUnits(matById(x.material_id), x.qty) }));
   const recipeFor = (its) => {
@@ -1293,13 +1293,15 @@ async function visitForm(v = {}, after) {
   const renderItems = () => {
     $('#items').innerHTML = items.map((it, i) => `<div class="item-row"><select data-i="${i}" class="isvc">${svcOpts(it.service_id).replace(it.material_id ? `value="m${it.material_id}"` : '\u0000', `value="m${it.material_id}" selected`)}${!it.service_id && !it.material_id && it.name ? `<option selected value="">${esc(it.name)}</option>` : ''}</select>
       ${it.material_id ? `<input type="number" data-i="${i}" class="iqty" min="1" step="1" value="${it.qty || 1}" title="Số lượng" style="width:64px">` : ''}
-      <select data-i="${i}" class="istaff" title="Người làm dịch vụ này (hoa hồng tính cho người này)"><option value="">= Thợ chính</option>${activeStaff().map((s) => `<option value="${s.id}" ${Number(it.staff_id) === s.id ? 'selected' : ''}>${esc(s.full_name)}</option>`).join('')}</select>
+      <select data-i="${i}" class="istaff" title="Thợ làm dòng này (hoa hồng dịch vụ tính cho người này)"><option value="">Chính: = phiếu</option>${activeStaff().map((s) => `<option value="${s.id}" ${Number(it.staff_id) === s.id ? 'selected' : ''}>Chính: ${esc(s.full_name)}</option>`).join('')}</select>
+      <select data-i="${i}" class="iasst" title="Người phụ của dòng này (hoa hồng phụ tính cho người này)"><option value="">Phụ: = phiếu</option><option value="0" ${it.assistant_id === 0 || it.assistant_id === '0' ? 'selected' : ''}>Phụ: không có</option>${activeStaff().map((s) => `<option value="${s.id}" ${Number(it.assistant_id) === s.id ? 'selected' : ''}>Phụ: ${esc(s.full_name)}</option>`).join('')}</select>
       <input type="number" data-i="${i}" class="iprice" min="0" step="1000" value="${it.price ?? ''}" placeholder="Giá"><button type="button" class="icon-btn" data-rm="${i}">×</button></div>`).join('');
     $$('.istaff', f).forEach((s) => (s.onchange = () => { items[s.dataset.i].staff_id = s.value; }));
+    $$('.iasst', f).forEach((s) => (s.onchange = () => { items[s.dataset.i].assistant_id = s.value; }));
     $$('.isvc', f).forEach((s) => (s.onchange = () => {
       const o = s.selectedOptions[0], price = o && o.dataset.price ? Number(o.dataset.price) : '';
-      const who = items[s.dataset.i] ? items[s.dataset.i].staff_id : '';
-      items[s.dataset.i] = s.value.startsWith('m') ? { material_id: Number(s.value.slice(1)), qty: 1, price, staff_id: who } : { service_id: Number(s.value) || '', price, staff_id: who };
+      const who = items[s.dataset.i] ? items[s.dataset.i].staff_id : '', asst = items[s.dataset.i] ? items[s.dataset.i].assistant_id : '';
+      items[s.dataset.i] = s.value.startsWith('m') ? { material_id: Number(s.value.slice(1)), qty: 1, price, staff_id: who, assistant_id: asst } : { service_id: Number(s.value) || '', price, staff_id: who, assistant_id: asst };
       if (levelSwap(items[s.dataset.i], f.main_staff_id.value)) toast('Đã đổi sang giá cắt đúng cấp của thợ chính');
       renderItems(); autoRecipe();
     }));
@@ -1474,8 +1476,8 @@ async function visitForm(v = {}, after) {
     e.preventDefault();
     guard($('#vf button.primary'), async () => {
       const d = formData(f);
-      const body = { ...d, items: items.filter((i) => i.service_id || i.name || i.material_id).map((i) => (i.material_id ? { material_id: i.material_id, qty: i.qty || 1, price: i.price === '' ? null : Number(i.price), staff_id: Number(i.staff_id) || null }
-        : { service_id: i.service_id || null, name: i.name, price: i.price === '' ? null : Number(i.price), staff_id: Number(i.staff_id) || null })), appointment_id: v.appointment_id };
+      const body = { ...d, items: items.filter((i) => i.service_id || i.name || i.material_id).map((i) => (i.material_id ? { material_id: i.material_id, qty: i.qty || 1, price: i.price === '' ? null : Number(i.price), staff_id: Number(i.staff_id) || null, assistant_id: i.assistant_id === '' || i.assistant_id == null ? null : Number(i.assistant_id) }
+        : { service_id: i.service_id || null, name: i.name, price: i.price === '' ? null : Number(i.price), staff_id: Number(i.staff_id) || null, assistant_id: i.assistant_id === '' || i.assistant_id == null ? null : Number(i.assistant_id) })), appointment_id: v.appointment_id };
       if ($('#used')) body.materials = used.filter((u) => u.material_id && Number(u.amt) > 0).map((u) => ({ material_id: u.material_id, qty: toUnits(matById(u.material_id), u.amt) }));
       if (body.card_id && body.card_paid === '') body.card_paid = 0;
       const saved = await api(isEdit ? '/visits/' + v.id : '/visits', { method: isEdit ? 'PUT' : 'POST', body });

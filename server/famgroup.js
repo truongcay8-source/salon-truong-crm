@@ -141,7 +141,7 @@ function linkAll(apptId, user) {
 
 const visitBody = (v) => ({
   customer_id: v.customer_id, date: v.date, time: v.time, main_staff_id: v.main_staff_id, assistant_id: v.assistant_id,
-  items: v.items.map((i) => ({ service_id: i.service_id, name: i.name, grp: i.grp, price: i.price, material_id: i.material_id, qty: i.qty, staff_id: i.staff_id })),
+  items: v.items.map((i) => ({ service_id: i.service_id, name: i.name, grp: i.grp, price: i.price, material_id: i.material_id, qty: i.qty, staff_id: i.staff_id, assistant_id: i.assistant_id })),
   surcharge: v.surcharge, discount: v.discount, discount_reason: v.discount_reason, card_id: v.card_id, card_paid: v.card_paid,
   payment_method: v.payment_method, tip: v.tip, tip_private: v.tip_private, tip_private_to: v.tip_private_to,
   hair_before: v.hair_before, wish: v.wish, formula: v.formula, result: v.result, note: v.note, next_visit_date: v.next_visit_date,
