@@ -169,6 +169,98 @@ function repairDedupedCards() {
   }
   return n;
 }
+// ---- Gộp lượt: 1 khách làm nhiều dịch vụ cùng lúc ở nhiều cột thợ (Vinh: Trường cắt + Thu duỗi; Beo: Dương uốn + Thoại cắt)
+// → 1 phiếu, mỗi dòng ghi người làm (doanh số + hoa hồng vẫn theo người làm), lượt khách tính 1 lần.
+const REL_PERSON = new Set(['bo', 'me', 'con', 'chau', 'vo', 'chong']); // "Bố Long gà" là người khác "E Long gà"
+const REL_DESC = new Set(['bo', 'me', 'con', 'chau', 'vo', 'chong', 'ban', 'b', 'cua']); // "Nhi con c Khánh Chi" = Nhi
+const LEAD = new Set(['a', 'anh', 'e', 'em', 'c', 'chi', 'ch', 'b', 'ban', 'chu', 'co', 'ong', 'ba']);
+function nameCore(name) {
+  const w = BM.fold(BM.cleanName(name) || name).replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((x) => x && !/\d/.test(x));
+  // "B anh duy" = bạn của anh Duy → người khác, không gộp với "a Duy Hip"
+  if (w.length > 1 && (w[0] === 'b' || w[0] === 'ban')) return { rel: true, t: w };
+  while (w.length > 1 && LEAD.has(w[0]) && !REL_PERSON.has(w[0])) w.shift();
+  if (REL_PERSON.has(w[0])) return { rel: true, t: w };
+  const i = w.findIndex((x, k) => k > 0 && REL_DESC.has(x));
+  return { rel: false, t: i > 0 ? w.slice(0, i) : w };
+}
+function samePerson(a, b, sameTime) {
+  if (a.customer_id === b.customer_id) return true;
+  const x = nameCore(a.cname), y = nameCore(b.cname);
+  if (!x.t.length || !y.t.length || x.rel !== y.rel) return false;
+  const [s, l] = x.t.length <= y.t.length ? [x.t, y.t] : [y.t, x.t];
+  if (s.length === l.length) return s.every((w, i) => w === l[i]);
+  if (!sameTime || !s.every((w) => l.includes(w))) return false;
+  // "Vinh" ↔ "vinh phạm": chỉ khi cùng giờ VÀ hồ sơ tên ngắn chỉ mới có ở ngày này (khách tạo tạm từ ô sổ, không có thẻ),
+  // tránh gộp nhầm 2 người thật ("Duy Anh" ≠ "Duy Hip")
+  const short = x.t.length <= y.t.length ? a : b;
+  return !db.prepare("SELECT 1 FROM visits WHERE customer_id=? AND status='done' AND date<>? LIMIT 1").get(short.customer_id, short.date)
+    && !db.prepare('SELECT 1 FROM cards WHERE customer_id=? LIMIT 1').get(short.customer_id);
+}
+const mins = (t) => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ''); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+function mergeSameVisits() {
+  const vs = db.prepare(`SELECT v.*, c.name cname FROM visits v JOIN customers c ON c.id=v.customer_id
+    WHERE v.status='done' AND v.import_ref LIKE 'SO:%' AND IFNULL(v.manual_edit,0)=0 ORDER BY v.date, v.time, v.id`).all();
+  const byDate = new Map();
+  for (const v of vs) { if (!byDate.has(v.date)) byDate.set(v.date, []); byDate.get(v.date).push(v); }
+  const sys = { id: 1, role: 'owner' };
+  let merged = 0;
+  for (const list of byDate.values()) {
+    const used = new Set();
+    for (const a of list) {
+      if (used.has(a.id)) continue;
+      const grp = [a];
+      for (const b of list) {
+        if (b.id === a.id || used.has(b.id) || grp.some((g) => g.main_staff_id === b.main_staff_id)) continue;
+        const ta = mins(a.time), tb = mins(b.time);
+        if (ta == null || tb == null || Math.abs(ta - tb) > 60) continue;
+        if (grp.every((g) => samePerson(g, b, g.time === b.time))) grp.push(b);
+      }
+      if (grp.length < 2) continue;
+      if (grp.filter((g) => g.card_id).length > 1) continue; // 2 phiếu cùng trừ thẻ → để Lãnh đạo xử lý tay
+      grp.sort((x, y) => y.total - x.total || x.id - y.id);
+      const keep = grp[0], others = grp.slice(1);
+      for (const g of grp) used.add(g.id);
+      const itemsOf = db.prepare('SELECT * FROM visit_items WHERE visit_id=? ORDER BY id');
+      const items = itemsOf.all(keep.id).map((i) => ({ service_id: i.service_id, name: i.name, grp: i.grp, price: i.price, staff_id: i.staff_id, assistant_id: i.assistant_id }));
+      for (const o of others) for (const i of itemsOf.all(o.id))
+        items.push({ service_id: i.service_id, name: i.name, grp: i.grp, price: i.price, staff_id: i.staff_id || o.main_staff_id, assistant_id: i.assistant_id != null ? i.assistant_id : o.assistant_id || 0 });
+      const cardV = grp.find((g) => g.card_id);
+      const sum = (k) => grp.reduce((s, g) => s + (g[k] || 0), 0);
+      db.transaction(() => {
+        if (cardV && cardV.id !== keep.id) { db.prepare('DELETE FROM card_txns WHERE visit_id=?').run(cardV.id); db.prepare("UPDATE cards SET status='active' WHERE id=?").run(cardV.card_id); }
+        const times = grp.map((g) => g.time).filter(Boolean).sort();
+        L.saveVisit({
+          customer_id: keep.customer_id, date: keep.date, time: times[0] || keep.time, main_staff_id: keep.main_staff_id, assistant_id: keep.assistant_id, items,
+          surcharge: sum('surcharge'), discount: sum('discount'), discount_reason: grp.map((g) => g.discount_reason).filter(Boolean).join('; ') || null,
+          tip: sum('tip'), tip_private: keep.tip_private, tip_private_to: keep.tip_private_to,
+          payment_method: grp.map((g) => g.payment_method).find(Boolean) || null,
+          card_id: cardV ? cardV.card_id : null, card_paid: cardV ? cardV.card_paid : 0,
+          hair_before: keep.hair_before, wish: keep.wish, formula: grp.map((g) => g.formula).find(Boolean) || null, result: keep.result,
+          note: [keep.note, ...others.map((o) => 'gộp ' + (o.code || '') + ': ' + String(o.note || '').replace(/^Sổ đặt lịch: /, ''))].join(' · '),
+          next_visit_date: keep.next_visit_date,
+        }, sys, db.prepare('SELECT * FROM visits WHERE id=?').get(keep.id), { imported: true });
+        for (const o of others) {
+          if (!cardV || cardV.id !== o.id) db.prepare('DELETE FROM card_txns WHERE visit_id=?').run(o.id);
+          db.prepare("UPDATE visits SET status='deleted', delete_reason=?, card_id=NULL, card_paid=0, updated_at=? WHERE id=?")
+            .run('Gộp vào lượt ' + (keep.code || keep.id) + ' (cùng khách, làm nhiều dịch vụ cùng lúc)', new Date().toISOString(), o.id);
+          require('./stock').clearVisit(o.id);
+          db.prepare('UPDATE appointments SET visit_id=? WHERE visit_id=?').run(keep.id, o.id);
+          merged++;
+        }
+      })();
+    }
+  }
+  // Lượt Lãnh đạo/nhân viên tự ghi trong app (vd lúc thu tiền Mây) trùng với lượt nhập từ sổ cùng ngày, cùng khách, cùng thợ → bỏ lượt sổ
+  for (const s of db.prepare(`SELECT v.*, c.name cname FROM visits v JOIN customers c ON c.id=v.customer_id WHERE v.status='done' AND v.import_ref LIKE 'SO:%' AND IFNULL(v.manual_edit,0)=0`).all()) {
+    const m = db.prepare(`SELECT v.*, c.name cname FROM visits v JOIN customers c ON c.id=v.customer_id WHERE v.status='done' AND v.import_ref IS NULL AND v.date=? AND v.main_staff_id=?`).all(s.date, s.main_staff_id)
+      .find((x) => samePerson(x, s, x.time === s.time));
+    if (!m) continue;
+    L.deleteVisit(s.id, 'Trùng với lượt ghi trong app ' + (m.code || m.id) + ' (cùng ngày, cùng khách, cùng thợ)', { id: 1 });
+    db.prepare('UPDATE appointments SET visit_id=? WHERE visit_id=?').run(m.id, s.id);
+    merged++;
+  }
+  return merged;
+}
 function closeUsedGifts() {
   repairDedupedCards();
   let n = 0;
@@ -859,6 +951,7 @@ async function importWorkbook(buffer, opts, user) {
     if (e !== ROLLBACK) throw e;
   }
   if (!opts.dryRun) try { summary.visits_deduped = dedupeVisits(); } catch (e) { summary.warnings.push('Dọn lượt trùng: ' + e.message); }
+  if (!opts.dryRun) try { summary.visits_merged = mergeSameVisits(); } catch (e) { summary.warnings.push('Gộp lượt cùng khách: ' + e.message); }
   if (!opts.dryRun) try { summary.gifts_closed = closeUsedGifts(); } catch (e) { summary.warnings.push('Đóng thẻ tri ân: ' + e.message); }
   if (!opts.dryRun) try { summary.appointments_deduped = dedupeAppointments(); } catch (e) { summary.warnings.push('Dọn lịch trùng: ' + e.message); }
   if (!opts.dryRun) try { require('./datafix').apply(); } catch (e) { summary.warnings.push('Bổ sung công thức: ' + e.message); }
@@ -867,4 +960,4 @@ async function importWorkbook(buffer, opts, user) {
 }
 
 const VERSION = 3; // 2: không ghép "E Quang" vào "Quang Anh"
-module.exports = { VERSION, dedupeVisits, closeUsedGifts, dedupeAppointments, apptKey, importWorkbook, asDate, asTime };
+module.exports = { VERSION, dedupeVisits, closeUsedGifts, mergeSameVisits, dedupeAppointments, apptKey, importWorkbook, asDate, asTime };

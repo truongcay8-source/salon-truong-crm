@@ -367,6 +367,22 @@ function nextCode(table, prefix, width) {
   return prefix + String(max + 1).padStart(width, '0');
 }
 
+// Người nhà chủ (Vinh, Beo…): giảm 50%, không tính vào doanh số tổng xét thưởng của thợ.
+// Tài khoản không làm dịch vụ (Vinh) → ẩn khỏi danh sách thợ
+{
+  const cc = db.prepare('PRAGMA table_info(customers)').all().map((c) => c.name);
+  if (!cc.includes('owner_family')) {
+    db.exec('ALTER TABLE customers ADD COLUMN owner_family INTEGER NOT NULL DEFAULT 0');
+    // Vinh 16/11: Vinh (Vinh Phạm) và Beo là người nhà
+    const fold = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase().trim();
+    for (const c of db.prepare('SELECT id, name FROM customers').all()) if (['vinh pham', 'vinh', 'beo', 'e beo'].includes(fold(c.name))) db.prepare('UPDATE customers SET owner_family=1 WHERE id=?').run(c.id);
+  }
+  const uc = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+  if (!uc.includes('works')) {
+    db.exec('ALTER TABLE users ADD COLUMN works INTEGER NOT NULL DEFAULT 1');
+    db.prepare("UPDATE users SET works=0 WHERE username='vinh'").run();
+  }
+}
 // Khách cắt định kỳ (vd anh Minh PH 14 ngày/lần, gọi trước hỏi giờ) + thợ không áp bảo hành chỉnh form cắt
 {
   const cc = db.prepare('PRAGMA table_info(customers)').all().map((c) => c.name);

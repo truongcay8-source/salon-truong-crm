@@ -14,7 +14,7 @@ const isMgr = () => S.me && S.me.role !== 'staff';
 const isOwner = () => S.me && S.me.role === 'owner';
 function addDays(d, n) { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + n); const z = new Date(x.getTime() - x.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 10); }
 function staffName(id) { const s = S.staff.find((x) => x.id === id); return s ? s.full_name : ''; }
-function activeStaff() { return S.staff.filter((s) => s.active); }
+function activeStaff() { return S.staff.filter((s) => s.active && s.works !== 0); }
 function staffOptions(sel, withEmpty = '— Chọn —') {
   return (withEmpty ? `<option value="">${withEmpty}</option>` : '') + activeStaff().map((s) => `<option value="${s.id}" ${s.id === sel ? 'selected' : ''}>${esc(s.full_name)}${s.level ? ' · ' + s.level : ''}</option>`).join('');
 }
@@ -1062,7 +1062,8 @@ function customerForm(c = {}, after) {
     <div class="full"><label>Ghi chú / sở thích</label><textarea name="notes">${esc(c.notes || '')}</textarea></div>
     <div><label>🔁 Khách định kỳ: bao nhiêu ngày làm 1 lần</label><input type="number" name="cycle_days" min="0" max="365" placeholder="vd 14 = 2 tuần" value="${c.cycle_days || ''}"></div>
     <div><label>&nbsp;</label><label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="cycle_call" style="width:auto" ${c.cycle_call ? 'checked' : ''}> Gọi điện trước hỏi khách muốn mấy giờ</label></div>
-    <div class="full"><label>Ghi chú khi gọi (giờ hay đặt, cách gọi…)</label><input name="cycle_note" value="${esc(c.cycle_note || '')}" placeholder="vd: hay đặt chiều thứ 7, gọi sau 10h"></div></div>
+    <div class="full"><label>Ghi chú khi gọi (giờ hay đặt, cách gọi…)</label><input name="cycle_note" value="${esc(c.cycle_note || '')}" placeholder="vd: hay đặt chiều thứ 7, gọi sau 10h"></div>
+    ${isOwner() ? `<div class="full"><label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="owner_family" style="width:auto" ${c.owner_family ? 'checked' : ''}> 👪 Người nhà chủ: tự giảm 50%, không tính vào doanh số tổng xét thưởng của thợ</label></div>` : ''}</div>
     ${c.birthday && c.birthday.length === 5 ? `<div class="small muted">Sinh nhật đang lưu: ${c.birthday.split('-').reverse().join('/')} (không có năm). Để trống ô trên nếu không đổi.</div>` : ''}
     <div class="err"></div><div class="modal-foot">${isEdit && isOwner() ? '<button type="button" class="btn danger" id="delC">Xóa khách</button><span class="spacer"></span>' : ''}<button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu</button></div></form>`);
   $('#cf').onsubmit = (e) => {
@@ -1990,19 +1991,21 @@ VIEWS.sales = async (main) => {
       <div class="stat-line"><span class="muted">Lượt làm chính / phụ</span><b>${x.main_count} / ${x.assist_count}</b></div>
       ${G.map((g) => `<div class="stat-line"><span class="muted">DS ${esc(g)}</span><b>${money(x.by_group[g])}</b></div>`).join('')}
       <div class="stat-line"><span>Tổng doanh số</span><b>${money(x.sales)}</b></div>
-      ${x.gift_sales ? `<div class="stat-line"><span class="muted">− trong đó khách trả bằng thẻ tri ân</span><b>${money(x.gift_sales)}</b></div><div class="stat-line"><span>Doanh số tính thưởng</span><b>${money(x.bonus_sales)}</b></div>` : ''}
+      ${x.gift_sales ? `<div class="stat-line"><span class="muted">− trong đó khách trả bằng thẻ tri ân</span><b>${money(x.gift_sales)}</b></div>` : ''}
+      ${x.family_sales ? `<div class="stat-line"><span class="muted">− trong đó người nhà chủ</span><b>${money(x.family_sales)}</b></div>` : ''}
+      ${x.gift_sales || x.family_sales ? `<div class="stat-line"><span>Doanh số tính thưởng</span><b>${money(x.bonus_sales)}</b></div>` : ''}
       <div class="stat-line"><span class="muted">HH dịch vụ</span><b>${money(x.main_commission)}</b></div>
       <div class="stat-line"><span class="muted">HH làm phụ</span><b>${money(x.assistant_commission)}</b></div>
       <div class="stat-line"><span class="muted">HH bán thẻ (${x.cards_count} thẻ)</span><b>${money(x.card_commission)}</b></div>
       ${x.surcharge_share ? `<div class="stat-line"><span class="muted">Phần phụ thu được chia</span><b>${money(x.surcharge_share)}</b></div>` : ''}
       <div class="stat-line"><span>Tổng hoa hồng (tạm tính)</span><b>${money(x.total_commission)}</b></div>
       <div class="stat-line"><span class="muted">Tip khách ghi ở lượt</span><b>${money(x.tip)}</b></div></div>`).join('') : ''}
-    <div class="card ${!isMgr() ? 'hidden' : ''}"><h3>Theo nhân viên</h3><div class="table-wrap"><table><thead><tr><th>Nhân viên</th><th class="num">Lượt chính</th><th class="num">Lượt phụ</th>${G.map((g) => `<th class="num">${esc(g)}</th>`).join('')}<th class="num">Tổng DS</th><th class="num">Thẻ tri ân</th><th class="num">DS tính thưởng</th>
+    <div class="card ${!isMgr() ? 'hidden' : ''}"><h3>Theo nhân viên</h3><div class="table-wrap"><table><thead><tr><th>Nhân viên</th><th class="num">Lượt chính</th><th class="num">Lượt phụ</th>${G.map((g) => `<th class="num">${esc(g)}</th>`).join('')}<th class="num">Tổng DS</th><th class="num">Thẻ tri ân</th><th class="num">Người nhà</th><th class="num">DS tính thưởng</th>
       <th class="num">HH dịch vụ</th><th class="num">HH phụ</th><th class="num">Thẻ bán</th><th class="num">HH thẻ</th><th class="num">Phụ thu</th><th class="num">Tổng HH</th><th class="num">Tip</th></tr></thead>
       <tbody>${r.rows.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td class="num">${x.main_count}</td><td class="num">${x.assist_count}</td>${G.map((g) => `<td class="num">${money(x.by_group[g])}</td>`).join('')}
-      <td class="num"><b>${money(x.sales)}</b></td><td class="num">${x.gift_sales ? '−' + money(x.gift_sales) : '–'}</td><td class="num"><b>${money(x.bonus_sales)}</b></td><td class="num">${money(x.main_commission)}</td><td class="num">${money(x.assistant_commission)}</td><td class="num">${x.cards_count} · ${money(x.cards_amount)}</td>
+      <td class="num"><b>${money(x.sales)}</b></td><td class="num">${x.gift_sales ? '−' + money(x.gift_sales) : '–'}</td><td class="num">${x.family_sales ? '−' + money(x.family_sales) : '–'}</td><td class="num"><b>${money(x.bonus_sales)}</b></td><td class="num">${money(x.main_commission)}</td><td class="num">${money(x.assistant_commission)}</td><td class="num">${x.cards_count} · ${money(x.cards_amount)}</td>
       <td class="num">${money(x.card_commission)}</td><td class="num">${money(x.surcharge_share)}</td><td class="num"><b>${money(x.total_commission)}</b></td><td class="num">${money(x.tip)}</td></tr>`).join('')}</tbody></table></div>
-      <div class="small muted" style="margin-top:8px">Hoa hồng tạm tính theo % từng dịch vụ (Cài đặt › Dịch vụ) và % người phụ, bán thẻ (Cài đặt › Tham số). Phụ thu: cửa hàng giữ ${Math.round((S.settings.surcharge_salon_rate ?? 0.33) * 100)}%, còn lại chia thợ chính / người phụ của lượt đó. Chưa gồm lương cứng, thưởng mốc doanh số. <b>DS tính thưởng</b> = Tổng DS trừ phần khách trả bằng thẻ tri ân (chi phí cửa hàng); hoa hồng % từng dịch vụ vẫn tính đủ. Tip được chia chung ở trang <a href="#tips">Chia tip</a>.</div></div>
+      <div class="small muted" style="margin-top:8px">Hoa hồng tạm tính theo % từng dịch vụ (Cài đặt › Dịch vụ) và % người phụ, bán thẻ (Cài đặt › Tham số). Phụ thu: cửa hàng giữ ${Math.round((S.settings.surcharge_salon_rate ?? 0.33) * 100)}%, còn lại chia thợ chính / người phụ của lượt đó. Chưa gồm lương cứng, thưởng mốc doanh số. <b>DS tính thưởng</b> = Tổng DS trừ phần khách trả bằng thẻ tri ân (chi phí cửa hàng) và lượt của người nhà chủ; hoa hồng % từng dịch vụ vẫn tính đủ. Tip được chia chung ở trang <a href="#tips">Chia tip</a>.</div></div>
     ${staffCustomerCard(sc)}`;
   const set = (a, b) => go('sales', { from: a, to: b });
   $('#f').onchange = (e) => set(e.target.value, to); $('#t').onchange = (e) => set(from, e.target.value);
@@ -2100,6 +2103,7 @@ function showImport(r, sel) {
           ${s.book.locked ? `<div class="stat-line"><span>🔒 Lượt đã có trong máy (khóa, không nhập lại / không đổi tiền)</span><b>${s.book.locked}</b></div>` : ''}
           ${s.visits_deduped ? `<div class="stat-line"><span>🧹 Lượt làm bị nhập 2 lần trước đây → đã xóa bản trùng</span><b>${s.visits_deduped}</b></div>` : ''}
           ${s.gifts_closed ? `<div class="stat-line"><span>🎁 Thẻ tri ân đã dùng 1 lần → đã đóng (bỏ phần dư)</span><b>${s.gifts_closed}</b></div>` : ''}
+          ${s.visits_merged ? `<div class="stat-line"><span>🔗 Gộp lượt: 1 khách làm nhiều dịch vụ cùng lúc / trùng lượt ghi tay</span><b>${s.visits_merged}</b></div>` : ''}
           ${s.book.relinked ? `<div class="stat-line"><span>Ô sổ bị sửa chữ, nhận ra lượt cũ (không tạo trùng)</span><b>${s.book.relinked}</b></div>` : ''}
           ${s.book.customer_fixed ? `<div class="stat-line"><span>Lượt chuyển về đúng khách</span><b>${s.book.customer_fixed}</b></div>` : ''}
           ${s.book.kept_manual ? `<div class="stat-line"><span>Ô đã có lượt nhân viên tự ghi (giữ nguyên)</span><b>${s.book.kept_manual}</b></div>` : ''}
@@ -2244,6 +2248,7 @@ VIEWS.settings = async (main) => {
         <label style="display:flex;gap:8px;color:var(--text)"><input type="checkbox" name="active" ${u.active !== 0 ? 'checked' : ''}> Đang làm (bỏ tick = khóa tài khoản)</label>
         <label style="display:flex;gap:8px;color:var(--text)"><input type="checkbox" name="can_login" ${u.can_login !== 0 ? 'checked' : ''}> Được đăng nhập</label>
         <label style="display:flex;gap:8px;color:var(--text)"><input type="checkbox" name="commission_enabled" ${u.commission_enabled !== 0 ? 'checked' : ''}> Tính hoa hồng</label>
+        <label style="display:flex;gap:8px;color:var(--text)"><input type="checkbox" name="works" ${u.works !== 0 ? 'checked' : ''}> Làm dịch vụ (bỏ tick = ẩn khỏi danh sách thợ, lịch, báo cáo)</label>
         <div class="small muted">Lãnh đạo: toàn quyền. Quản lý: xem doanh số toàn tiệm, nhập/xuất Excel, sửa/xóa lượt, giá dịch vụ. Nhân viên: lịch hẹn, khách, ghi lượt trong ngày, chỉ xem doanh số của mình, không xuất dữ liệu.</div>
         <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu</button></div></form>`);
       $('#uf').onsubmit = (e) => { e.preventDefault(); guard($('#uf button'), async () => { await api(u.id ? '/users/' + u.id : '/users', { method: u.id ? 'PUT' : 'POST', body: formData($('#uf')) }); closeModal(); S.staff = await api('/staff'); reload(); }); };
