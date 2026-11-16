@@ -317,6 +317,14 @@ app.delete('/api/customers/:id/family', (req, res) => {
   audit(req.user.id, 'update_customer', 'customer', id, { family: 'gỡ khỏi nhóm' });
   res.json({ ok: true });
 });
+const famgroup = require('./famgroup');
+// Cả nhà / đi cùng trong ngày: ai cũng xem được (tiền ẩn theo quyền), gắn người nhà cả nhóm, Lãnh đạo chia tiền
+app.get('/api/appointments/:id/group', (req, res) => res.json(famgroup.group(int(req.params.id), req.user)));
+app.post('/api/appointments/:id/group/link', (req, res) => res.json({ linked: famgroup.linkAll(int(req.params.id), req.user), group: famgroup.group(int(req.params.id), req.user) }));
+app.post('/api/appointments/:id/group/split', OWNER, (req, res) => {
+  famgroup.moveAmount(req.body, req.user);
+  res.json(famgroup.group(int(req.params.id), req.user));
+});
 app.get('/api/family/suggest', MGR, (req, res) => res.json(family.suggest(100)));
 app.post('/api/family/ignore', MGR, (req, res) => { family.ignore(int(req.body.a), int(req.body.b)); res.json({ ok: true }); });
 app.delete('/api/customers/:id', OWNER, (req, res) => {
@@ -373,12 +381,13 @@ app.get('/api/appointments', (req, res) => {
   let extra = '';
   if (req.query.staff_id) { extra = ' AND a.staff_id=?'; params.push(int(req.query.staff_id)); }
   const u = req.user;
-  res.json(db.prepare(`SELECT a.*, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, c.code customer_code, u.full_name staff_name,
+  const rows = db.prepare(`SELECT a.*, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, c.code customer_code, u.full_name staff_name,
       v.total visit_total, v.main_staff_id v_main, v.assistant_id v_asst, (SELECT GROUP_CONCAT(name, ' + ') FROM visit_items WHERE visit_id=v.id) visit_services
     FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id
     LEFT JOIN visits v ON v.id=a.visit_id AND v.status='done'
-    WHERE a.date BETWEEN ? AND ?${extra} ORDER BY a.date, a.time`).all(...params)
-    .map(({ v_main, v_asst, ...a }) => (u.role === 'staff' && v_main !== u.id && v_asst !== u.id ? { ...a, visit_total: null } : a)));
+    WHERE a.date BETWEEN ? AND ?${extra} ORDER BY a.date, a.time`).all(...params);
+  if (!req.query.staff_id) require('./famgroup').tag(rows);
+  res.json(rows.map(({ v_main, v_asst, ...a }) => (u.role === 'staff' && v_main !== u.id && v_asst !== u.id ? { ...a, visit_total: null } : a)));
 });
 function offWarning(a) {
   const o = staffMod.offAt(a.staff_id, a.date, a.time, a.duration);
@@ -515,7 +524,11 @@ app.put('/api/visits/:id', (req, res) => {
   if (!v) throw new HttpError(404, 'Không tìm thấy lượt làm');
   // Hóa đơn đã hoàn thành: chỉ Lãnh đạo (nick Vinh) sửa tiền, dịch vụ, giảm giá; người khác chỉ sửa ghi chú
   if (req.user.role !== 'owner') L.updateVisitNotes(req.body, req.user, v);
-  else L.saveVisit(req.body, req.user, v);
+  else {
+    L.saveVisit(req.body, req.user, v);
+    // Hóa đơn nhập từ sổ đã sửa tay → đồng bộ sổ lần sau không ghi đè
+    if (v.import_ref) db.prepare('UPDATE visits SET manual_edit=1 WHERE id=?').run(v.id);
+  }
   res.json(L.getVisit(v.id));
 });
 app.delete('/api/visits/:id', OWNER, (req, res) => {

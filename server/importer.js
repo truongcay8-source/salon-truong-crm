@@ -595,6 +595,7 @@ async function importWorkbook(buffer, opts, user) {
               note: 'Sổ đặt lịch: ' + e.text + (e.extraTip ? ` · khách trả dư ${e.extraTip.toLocaleString('vi-VN')} → tip chung` : '') + (e.pay === 'Chưa thanh toán' ? ' · CHƯA THANH TOÁN (ô hồng), giá theo bảng giá' : '') + (!row.amount && e.pay !== 'Chưa thanh toán' ? ' · sổ không ghi tiền thu (trả bằng thẻ?), giá theo bảng giá' : '') + (e.check === 'more' ? ' · ⚠ sổ thu nhiều hơn giá dịch vụ, chưa rõ khoản thêm – kiểm tra lại' : e.check ? ' · ⚠ giá ghi cao hơn tiền thu (thẻ/voucher?) – kiểm tra lại' : ''), import_ref: ref, appointment_id: e.apptId };
             const ex = db.prepare('SELECT * FROM visits WHERE import_ref=?').get(ref);
             if (ex && ex.status === 'deleted') continue; // quản lý đã xóa lượt này → không tạo lại
+            if (ex && ex.manual_edit) { st.kept_manual++; continue; } // Lãnh đạo đã sửa tay (chia tiền, đổi dịch vụ) → giữ nguyên
             let card = null;
             if (e.voucher > 0) {
               // Trừ thẻ tri ân 1tr: gắn đúng thẻ của khách (thay dòng "đã dùng" nhập từ tab Quản lý Thẻ 1Tr), doanh số giữ đủ cho thợ

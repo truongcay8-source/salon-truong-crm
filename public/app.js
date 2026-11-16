@@ -431,10 +431,82 @@ function apptList(rows, showDate) {
       ${a.cancel_reason && ['cancelled', 'noshow'].includes(a.status) ? `<div class="small" style="color:var(--bad)">Lý do: ${esc(a.cancel_reason)}</div>` : ''}</div>
     <div style="text-align:right"><span class="badge ${APPT[a.status][1]}">${APPT[a.status][0]}</span>
       <div class="row" style="justify-content:flex-end;margin-top:6px">
+      ${a.grp ? `<button class="btn sm" data-agrp="${a.id}" title="Xem cả nhà / người đi cùng trong ngày">👨‍👩‍👧 Cả nhà (${a.grp})</button>` : ''}
       ${a.status === 'booked' ? `<button class="btn sm" data-ast="arrived" data-id="${a.id}">Đã đến</button>` : ''}
       ${a.customer_id ? `<button class="btn sm" data-acust="${a.customer_id}" title="Sửa tên, SĐT, sinh nhật, lưu ý tóc của khách">✏️ Sửa thông tin khách</button>` : ''}
       ${['booked', 'arrived'].includes(a.status) ? `<button class="btn sm primary" data-avisit="${a.id}">Thu tiền</button><button class="btn sm" data-aedit="${a.id}">Sửa</button><button class="btn sm" data-acancel="${a.id}">Hủy / không đến</button>` : ''}
       </div></div></div>`).join('');
+}
+// ---------- Cả nhà / người đi cùng trong ngày ----------
+// Thợ xem chung cả nhóm (ai làm gì, ai đã thu); Lãnh đạo chia khoản "Chưa rõ dịch vụ" sang đúng người, tổng tiền giữ nguyên
+async function familyDay(apptId, after) {
+  let g = await api(`/appointments/${apptId}/group`);
+  let dirty = false;
+  const act = S.services.filter((x) => x.active);
+  const render = () => {
+    const live = g.rows.filter((r) => !['cancelled', 'noshow'].includes(r.status));
+    const seen = new Map();
+    const html = `${g.total != null ? `<div class="daysum" style="margin-bottom:8px"><div><span class="muted small">Tổng cả nhà đã thu</span><b>${money(g.total)}</b></div>
+        ${g.unknown ? `<div><span class="muted small">Còn "chưa rõ dịch vụ"</span><b style="color:var(--bad)">${money(g.unknown)}</b></div>` : ''}</div>` : ''}
+      ${g.unknown && isOwner() ? `<div class="small" style="margin-bottom:8px">⚠ Sổ ghi tổng tiền chung cho cả nhà nên app dồn phần chênh vào 1 người. Bấm <b>Chia</b> để chuyển đúng số tiền sang người đã làm, tổng không đổi.</div>`
+        : g.unknown ? '<div class="small muted" style="margin-bottom:8px">Có khoản chưa rõ dịch vụ, nhờ anh/chị Vinh chia lại.</div>' : ''}
+      ${!g.linked ? `<div class="row" style="margin-bottom:8px"><button class="btn sm primary" id="fgLink">🔗 Lưu thành 1 gia đình</button><span class="small muted">để lần sau mở hồ sơ ai cũng thấy cả nhà, công thức tóc</span></div>` : '<div class="small muted" style="margin-bottom:8px">✓ Đã gắn chung 1 gia đình</div>'}
+      ${g.rows.map((r) => {
+        const k = r.time + '|' + (r.customer_id || r.name);
+        const dupOf = !r.visit && ['booked', 'arrived'].includes(r.status) ? seen.get(k) : null;
+        if (!seen.has(k) && !['cancelled', 'noshow'].includes(r.status)) seen.set(k, r);
+        const dupLater = !r.visit && ['booked', 'arrived'].includes(r.status) && !dupOf && g.rows.some((o) => o !== r && o.time === r.time && (o.customer_id || o.name) === (r.customer_id || r.name) && !['cancelled', 'noshow'].includes(o.status) && (o.visit || o.id < r.id));
+        return `<div class="list-item" style="${['cancelled', 'noshow'].includes(r.status) ? 'opacity:.5' : ''}"><div class="time-pill">${esc(r.time)}</div>
+        <div style="flex:1;min-width:0"><div class="t">${r.customer_id ? `<a href="#customer?id=${r.customer_id}">${esc(r.name)}</a>` : esc(r.name)}
+          ${r.is_root ? '<span class="badge">người gốc</span>' : r.relation ? `<span class="badge">${esc(r.relation)}</span>` : ''}</div>
+          <div class="small muted">${esc(r.staff_name || 'Chưa xếp thợ')}${r.assistant_id ? ' + phụ ' + esc(staffName(r.assistant_id)) : ''} · ${APPT[r.status][0]}</div>
+          ${r.visit ? r.visit.items.map((i) => `<div class="small" ${i.unknown ? 'style="color:var(--bad)"' : ''}>• ${esc(i.name)}${i.price != null ? ' · <b>' + money(i.price) + '</b>' : ''}
+            ${i.unknown && isOwner() ? ` <button class="btn sm" data-fgsplit="${i.id}" data-max="${i.price}">Chia</button>` : ''}</div>`).join('')
+            : `<div class="small muted">${r.service ? esc(r.service) : 'Chưa thu tiền'}${r.note ? ' · ' + esc(r.note) : ''}</div>`}
+          <div id="fgf${r.visit ? r.visit.items.filter((i) => i.unknown).map((i) => i.id).join('_') : 'x' + r.id}"></div></div>
+        <div style="text-align:right">${r.visit ? `${r.visit.total != null ? `<b>${money(r.visit.total)}</b><br>` : ''}<a href="#" data-rcpt="${r.visit.id}" class="small">Hóa đơn</a>` : ''}
+          ${(dupOf || dupLater) && isMgr() ? `<div><button class="btn sm" data-fgdup="${r.id}" title="2 dòng cùng giờ cùng khách, dòng này chưa thu tiền">Bỏ lịch trùng</button></div>` : ''}</div></div>`;
+      }).join('')}
+      <div class="small muted" style="margin-top:8px">${live.length} người · ${dmy(g.date)}. Thợ xem được cả nhóm; tiền chỉ hiện với người làm lượt đó và quản lý.</div>`;
+    $('#fgBody').innerHTML = html;
+    $$('[data-rcpt]', $('#fgBody')).forEach((b) => (b.onclick = (e) => { e.preventDefault(); showReceipt(Number(b.dataset.rcpt)); }));
+    const link = $('#fgLink');
+    if (link) link.onclick = () => guard(link, async () => { const r = await api(`/appointments/${apptId}/group/link`, { method: 'POST' }); g = r.group; dirty = true; toast(`Đã gắn ${r.linked} người vào gia đình`); render(); });
+    $$('[data-fgdup]', $('#fgBody')).forEach((b) => (b.onclick = () => guard(b, async () => {
+      await api(`/appointments/${b.dataset.fgdup}/status`, { method: 'POST', body: { status: 'cancelled', reason: 'Trùng lịch (cả nhà)' } });
+      g = await api(`/appointments/${apptId}/group`); dirty = true; toast('Đã bỏ lịch trùng'); render();
+    })));
+    $$('[data-fgsplit]', $('#fgBody')).forEach((b) => (b.onclick = () => {
+      const box = b.closest('.list-item').querySelector('[id^="fgf"]');
+      const max = Number(b.dataset.max);
+      const opts = g.rows.filter((r) => !['cancelled', 'noshow'].includes(r.status));
+      box.innerHTML = `<div class="card" style="margin:6px 0;padding:8px"><div class="small"><b>Chia ${money(max)} chưa rõ</b></div>
+        <label class="small">Chuyển cho</label><select id="fgTo">${opts.map((r) => `<option value="${r.id}">${esc(r.time)} · ${esc(r.name)} (${esc(r.staff_name || '?')})${r.visit ? '' : ' · chưa có hóa đơn'}</option>`).join('')}</select>
+        <label class="small">Dịch vụ</label><select id="fgSvc"><option value="">Khác (gõ tên)</option>${act.map((x) => `<option value="${x.id}" data-p="${x.price || ''}">${esc(x.name)}${x.price ? ' · ' + kMoney(x.price) : ''}</option>`).join('')}</select>
+        <input id="fgName" placeholder="Tên dịch vụ (nếu chọn Khác)">
+        <label class="small">Số tiền</label><input type="number" id="fgAmt" min="1000" step="1000" max="${max}" value="${max}">
+        <div class="row" style="margin-top:6px"><button class="btn sm primary" id="fgSave">Lưu chia tiền</button><button class="btn sm" id="fgCancel">Thôi</button></div></div>`;
+      $('#fgSvc').onchange = () => { const o = $('#fgSvc').selectedOptions[0]; const pr = Number(o.dataset.p || 0); if (pr && pr <= max) $('#fgAmt').value = pr; $('#fgName').style.display = $('#fgSvc').value ? 'none' : ''; };
+      // Gợi ý: người chưa có hóa đơn trước, tên dịch vụ lấy từ chữ ghi trong sổ của người đó
+      const firstNo = opts.find((r) => !r.visit);
+      if (firstNo) $('#fgTo').value = firstNo.id;
+      const fillName = () => { const r = opts.find((x) => x.id === Number($('#fgTo').value)); if (!$('#fgSvc').value) $('#fgName').value = r && !r.visit && r.note ? r.note.replace(new RegExp('^' + r.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*', 'i'), '').slice(0, 60) : ''; };
+      $('#fgTo').onchange = fillName; fillName();
+      $('#fgCancel').onclick = () => (box.innerHTML = '');
+      $('#fgSave').onclick = () => guard($('#fgSave'), async () => {
+        g = await api(`/appointments/${apptId}/group/split`, { method: 'POST', body: { item_id: Number(b.dataset.fgsplit), to_appointment_id: Number($('#fgTo').value), service_id: Number($('#fgSvc').value) || null, name: $('#fgName').value, amount: Number($('#fgAmt').value) } });
+        dirty = true; toast('Đã chia tiền, tổng cả nhà giữ nguyên'); render();
+      });
+    }));
+  };
+  const root = g.rows.find((r) => r.is_root) || g.rows[0];
+  openModal(`👨‍👩‍👧 Cả nhà ${root.name} · ${dmy(g.date)}`, '<div id="fgBody"></div>');
+  render();
+  // Đóng cửa sổ sau khi đã chia tiền / gắn gia đình → tải lại lịch
+  let fired = false;
+  const onClose = (e) => { if (fired || (e.currentTarget.id === 'modal' && e.target.id !== 'modal')) return; fired = true; if (dirty && after) after(); };
+  $('#modalClose').addEventListener('click', onClose, { once: true });
+  $('#modal').addEventListener('click', onClose);
 }
 // Thu tiền từ lịch hẹn: mở phiếu có sẵn dịch vụ + giá → lưu là vào doanh số. Khách vãng lai tự tạo hồ sơ.
 async function checkout(a, after) {
@@ -455,6 +527,7 @@ function bindApptList(root, reload, rows) {
   $$('[data-acust]', root).forEach((b) => (b.onclick = () => guard(b, async () => { const c = await api('/customers/' + b.dataset.acust); customerForm(c, () => reload()); })));
   $$('[data-apaid]', root).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/appointments/${b.dataset.apaid}/pay-note`, { method: 'POST', body: { pay_note: b.dataset.m } }); toast('Đã ghi thu: ' + b.dataset.m); reload(); refreshReminderBadge(); })));
   $$('[data-aedit]', root).forEach((b) => (b.onclick = async () => apptForm(await find(b.dataset.aedit), reload)));
+  $$('[data-agrp]', root).forEach((b) => (b.onclick = () => guard(b, () => familyDay(Number(b.dataset.agrp), reload))));
   $$('[data-acancel]', root).forEach((b) => (b.onclick = async () => cancelForm(await find(b.dataset.acancel), reload)));
 }
 
@@ -626,7 +699,7 @@ function scheduleGrid(sc) {
       const ap = sc.appointments.filter((a) => (a.staff_id || 0) === c.id && slot(toMin(a.time)) === t);
       const vs = sc.visits.filter((v) => v.main_staff_id === c.id && slot(toMin(v.time)) === t);
       const off = c.id && offOf(c.id, t);
-      const inner = ap.map((a) => `<div class="ev ${a.status}" data-ap="${a.id}"><b>${esc(a.time)}</b> ${esc(a.name)}${a.visit_services || a.service ? `<div class="small">${a.visit_services ? esc(a.visit_services) : svcWithPrice(a.service)}</div>` : ''}${evMoney(a)}</div>`).join('')
+      const inner = ap.map((a) => `<div class="ev ${a.status}" data-ap="${a.id}"><b>${esc(a.time)}</b> ${esc(a.name)}${a.grp ? ` <span title="Đi cùng người nhà: ${a.grp} người">👨‍👩‍👧</span>` : ''}${a.visit_services || a.service ? `<div class="small">${a.visit_services ? esc(a.visit_services) : svcWithPrice(a.service)}</div>` : ''}${evMoney(a)}</div>`).join('')
         + vs.map((v) => `<div class="ev done" data-vv="${v.customer_id}"><b>✓ ${esc(v.time || '')}</b> ${esc(v.customer_name)}<div class="small">${esc(v.services || '')}</div>${v.total != null ? `<div class="small"><b>${money(v.total)}</b></div>` : ''}</div>`).join('');
       return `<td class="${off ? 'offc' : ''} ${c.id === S.me.id ? 'me' : ''}" data-slot="${fromMin(t)}|${c.id}">${inner || (off ? '<span class="small">Nghỉ</span>' : '')}</td>`;
     }).join('') + '</tr>';

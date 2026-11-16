@@ -71,3 +71,44 @@ test('người nhà: gắn, tìm 1 người ra cả nhà, gợi ý từ tên, g�
   assert.equal((await o.get(`/customers/${k}`)).data.family.length, 1);
   assert.equal((await o.post(`/customers/${k}/family`, { other_id: k })).status, 400);
 });
+
+test('cả nhà trong ngày: gom lịch "cháu Nhung", gắn gia đình, Lãnh đạo chia khoản chưa rõ (tổng giữ nguyên)', async () => {
+  const c = client();
+  let r = await c.post('/login', { username: 'vinh', password: 'moi-vinh' });
+  assert.equal(r.status, 200);
+  const d = '2026-11-15';
+  const svc = db.prepare('SELECT id FROM services WHERE active=1 ORDER BY id LIMIT 1').get().id;
+  const n = (await c.post('/customers', { name: 'Nhung', phone: '0948000111' })).data.id;
+  const mk = (b) => db.prepare("INSERT INTO appointments(customer_id,guest_name,staff_id,date,time,status,created_by) VALUES (?,?,?,?,?,?,1)").run(b.cid || null, b.guest || null, b.staff, d, b.time, 'booked').lastInsertRowid;
+  const a1 = mk({ cid: n, staff: 2, time: '17:30' });
+  const a2 = mk({ guest: 'cháu Nhung', staff: 3, time: '17:30' });
+  const a3 = mk({ guest: 'c gái Nhung', staff: 2, time: '18:00' });
+  const a4 = mk({ guest: 'C Lan', staff: 3, time: '18:00' });
+  r = await c.post('/visits', { customer_id: n, date: d, time: '17:30', main_staff_id: 2, appointment_id: a1, payment_method: 'Chuyển khoản',
+    items: [{ service_id: svc, price: 100000 }, { name: 'Chưa rõ dịch vụ (sổ thu thêm)', price: 340000 }] });
+  assert.equal(r.status, 200);
+  const list = (await c.get(`/appointments?from=${d}`)).data;
+  assert.equal(list.find((a) => a.id === a2).grp, 3);
+  assert.ok(!list.find((a) => a.id === a4).grp, 'C Lan không phải người nhà');
+  let g = (await c.get(`/appointments/${a3}/group`)).data;
+  assert.equal(g.root_id, a1); assert.equal(g.total, 440000); assert.equal(g.unknown, 340000); assert.equal(g.linked, false);
+  r = await c.post(`/appointments/${a2}/group/link`);
+  assert.equal(r.data.linked, 2); assert.ok(r.data.group.linked);
+  assert.match(r.data.group.rows.find((x) => x.id === a2).relation, /cháu của Nhung/);
+  const item = () => (g.rows.find((x) => x.id === a1).visit.items.find((i) => i.unknown) || {}).id;
+  g = (await c.post(`/appointments/${a1}/group/split`, { item_id: item(), to_appointment_id: a3, service_id: svc, amount: 100000 })).data;
+  g = (await c.post(`/appointments/${a1}/group/split`, { item_id: item(), to_appointment_id: a2, name: 'Gội', amount: 240000 })).data;
+  assert.equal(g.total, 440000); assert.equal(g.unknown, 0);
+  assert.equal(g.rows.find((x) => x.id === a3).visit.total, 100000);
+  assert.equal(g.rows.find((x) => x.id === a2).visit.total, 240000);
+  assert.equal(g.rows.find((x) => x.id === a1).visit.total, 100000);
+  assert.equal(db.prepare('SELECT status FROM appointments WHERE id=?').get(a2).status, 'done');
+  // Quản lý (không phải Lãnh đạo) không chia tiền được
+  const m = db.prepare("SELECT username FROM users WHERE role='manager' LIMIT 1").get();
+  if (m) {
+    const mc = client(); await mc.post('/login', { username: m.username, password: 'tam12345' });
+    await mc.post('/me/password', { old_password: 'tam12345', new_password: 'moi-' + m.username });
+    await mc.post('/login', { username: m.username, password: 'moi-' + m.username });
+    assert.equal((await mc.post(`/appointments/${a1}/group/split`, { item_id: 1, to_appointment_id: a2, amount: 1000 })).status, 403);
+  }
+});

@@ -245,6 +245,7 @@ function mount(app, { MGR, OWNER }) {
     const byId = new Map(visits.map((v) => [v.id, v]));
     for (const a of appts) if (a.visit_id && byId.has(a.visit_id)) { a.visit_total = byId.get(a.visit_id).total; a.visit_services = byId.get(a.visit_id).services; }
     const free = visits.filter((v) => !linked.has(v.id));
+    require('./famgroup').tag(appts);
     res.json({ date, appointments: appts, visits: free, offs: offRows(date, date, req.user) });
   });
 }
