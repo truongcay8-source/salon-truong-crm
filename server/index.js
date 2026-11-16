@@ -354,13 +354,15 @@ app.get('/api/search', (req, res) => {
 
 // ---------- Lịch hẹn ----------
 // Khách chưa thanh toán (ô hồng): quản lý ghi đã thu bằng hình thức nào
-app.post('/api/appointments/:id/pay-note', MGR, (req, res) => {
-  const a = db.prepare('SELECT id, pay_note FROM appointments WHERE id=?').get(int(req.params.id));
+// Ghi khách đã trả tiền: chỉ Lãnh đạo (sửa tiền hóa đơn)
+app.post('/api/appointments/:id/pay-note', OWNER, (req, res) => {
+  const a = db.prepare('SELECT id, pay_note, visit_id FROM appointments WHERE id=?').get(int(req.params.id));
   if (!a) throw new HttpError(404, 'Không tìm thấy lịch hẹn');
   const methods = getSettings().payment_methods.split(',').map((s) => s.trim());
   const v = str(req.body.pay_note);
   if (v && v !== 'Chưa thanh toán' && !methods.includes(v)) throw bad('Hình thức thanh toán không hợp lệ');
   db.prepare('UPDATE appointments SET pay_note=? WHERE id=?').run(v, a.id);
+  if (a.visit_id && v && v !== 'Chưa thanh toán') db.prepare('UPDATE visits SET payment_method=? WHERE id=?').run(v, a.visit_id);
   audit(req.user.id, 'appointment_pay', 'appointment', a.id, { pay_note: [a.pay_note, v] });
   res.json({ ok: true });
 });
@@ -511,11 +513,12 @@ app.post('/api/visits', (req, res) => {
 app.put('/api/visits/:id', (req, res) => {
   const v = db.prepare("SELECT * FROM visits WHERE id=? AND status='done'").get(int(req.params.id));
   if (!v) throw new HttpError(404, 'Không tìm thấy lượt làm');
-  if (req.user.role === 'staff') L.updateVisitNotes(req.body, req.user, v); // nhân viên: chỉ ghi chú, không sửa tiền
+  // Hóa đơn đã hoàn thành: chỉ Lãnh đạo (nick Vinh) sửa tiền, dịch vụ, giảm giá; người khác chỉ sửa ghi chú
+  if (req.user.role !== 'owner') L.updateVisitNotes(req.body, req.user, v);
   else L.saveVisit(req.body, req.user, v);
   res.json(L.getVisit(v.id));
 });
-app.delete('/api/visits/:id', MGR, (req, res) => {
+app.delete('/api/visits/:id', OWNER, (req, res) => {
   L.deleteVisit(int(req.params.id), req.body && req.body.reason, req.user);
   res.json({ ok: true });
 });

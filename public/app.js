@@ -423,14 +423,16 @@ function apptList(rows, showDate) {
   return rows.map((a) => `<div class="list-item"><div class="time-pill">${esc(a.time)}${showDate ? `<div class="small muted">${dmy(a.date).slice(0, 5)}</div>` : ''}</div>
     <div style="flex:1;min-width:0"><div class="t">${a.customer_id ? `<a href="#customer?id=${a.customer_id}">${esc(a.name)}</a>` : esc(a.name) + ' <span class="badge">khách mới</span>'}</div>
       <div class="small muted">${a.visit_services ? esc(a.visit_services) : svcWithPrice(a.service)}${a.staff_name ? ' · ' + esc(a.staff_name) : ''}${a.assistant_id ? ' + phụ ' + esc(staffName(a.assistant_id)) : ''} · ${telLinks(a.phone)}</div>
-      ${a.visit_id && a.visit_total != null ? `<div class="small"><b style="color:var(--ok)">✓ Đã thu ${money(a.visit_total)}</b> · <a href="#" data-rcpt="${a.visit_id}">Hóa đơn</a></div>`
+      ${a.visit_id && a.visit_total != null ? (a.pay_note === 'Chưa thanh toán' ? `<div class="small"><b style="color:var(--bad)">⚠ Đã làm, khách chưa trả ${money(a.visit_total)}</b> · <a href="#" data-rcpt="${a.visit_id}">Hóa đơn</a></div>${isOwner() ? `<div class="row" style="margin-top:4px">${S.settings.payment_methods.slice(0, 3).map((m) => `<button class="btn sm" data-apaid="${a.id}" data-m="${esc(m)}">Đã thu: ${esc(m)}</button>`).join('')}</div>` : ''}`
+        : `<div class="small"><b style="color:var(--ok)">✓ Đã thu ${money(a.visit_total)}</b>${a.pay_note ? ' · ' + esc(a.pay_note) : ''} · <a href="#" data-rcpt="${a.visit_id}">Hóa đơn</a></div>`)
         : a.service && estTotal(a.service) && !['cancelled', 'noshow'].includes(a.status) ? `<div class="small">Dự kiến: <b>${money(estTotal(a.service))}</b></div>` : ''}
       ${a.note ? `<div class="small">${esc(a.note)}</div>` : ''}
-      ${a.pay_note && a.status !== 'cancelled' ? `<div class="small"><span class="badge ${a.pay_note === 'Chưa thanh toán' ? 'bad' : 'ok'}">${a.pay_note === 'Chưa thanh toán' ? '⚠ Chưa thanh toán' : '💵 ' + esc(a.pay_note)}</span></div>` : ''}
+      ${a.pay_note && a.status !== 'cancelled' && !(a.visit_id && a.visit_total != null) ? `<div class="small"><span class="badge ${a.pay_note === 'Chưa thanh toán' ? 'bad' : 'ok'}">${a.pay_note === 'Chưa thanh toán' ? '⚠ Chưa thanh toán' : '💵 ' + esc(a.pay_note)}</span></div>` : ''}
       ${a.cancel_reason && ['cancelled', 'noshow'].includes(a.status) ? `<div class="small" style="color:var(--bad)">Lý do: ${esc(a.cancel_reason)}</div>` : ''}</div>
     <div style="text-align:right"><span class="badge ${APPT[a.status][1]}">${APPT[a.status][0]}</span>
       <div class="row" style="justify-content:flex-end;margin-top:6px">
       ${a.status === 'booked' ? `<button class="btn sm" data-ast="arrived" data-id="${a.id}">Đã đến</button>` : ''}
+      ${a.customer_id ? `<button class="btn sm" data-acust="${a.customer_id}" title="Sửa tên, SĐT, sinh nhật, lưu ý tóc của khách">✏️ Sửa thông tin khách</button>` : ''}
       ${['booked', 'arrived'].includes(a.status) ? `<button class="btn sm primary" data-avisit="${a.id}">Thu tiền</button><button class="btn sm" data-aedit="${a.id}">Sửa</button><button class="btn sm" data-acancel="${a.id}">Hủy / không đến</button>` : ''}
       </div></div></div>`).join('');
 }
@@ -450,6 +452,8 @@ function bindApptList(root, reload, rows) {
     guard(b, async () => checkout(await find(b.dataset.avisit), reload));
   }));
   $$('[data-rcpt]', root).forEach((b) => (b.onclick = (e) => { e.preventDefault(); showReceipt(Number(b.dataset.rcpt)); }));
+  $$('[data-acust]', root).forEach((b) => (b.onclick = () => guard(b, async () => { const c = await api('/customers/' + b.dataset.acust); customerForm(c, () => reload()); })));
+  $$('[data-apaid]', root).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/appointments/${b.dataset.apaid}/pay-note`, { method: 'POST', body: { pay_note: b.dataset.m } }); toast('Đã ghi thu: ' + b.dataset.m); reload(); refreshReminderBadge(); })));
   $$('[data-aedit]', root).forEach((b) => (b.onclick = async () => apptForm(await find(b.dataset.aedit), reload)));
   $$('[data-acancel]', root).forEach((b) => (b.onclick = async () => cancelForm(await find(b.dataset.acancel), reload)));
 }
@@ -1119,7 +1123,7 @@ function visitBlock(v, photos) {
   const ps = photos.filter((p) => p.visit_id === v.id);
   return `<div class="list-item" style="display:block"><div class="row"><b>${dmy(v.date)}${v.time ? ' ' + esc(v.time) : ''}</b>
     <span>${v.items.map((i) => esc(i.name)).join(' + ')}</span><span class="badge brand">${esc(v.main_staff_name || '')}${v.assistant_name ? ' + ' + esc(v.assistant_name) : ''}</span>
-    <span class="spacer"></span>${v.masked ? '' : `<b>${money(v.total)}</b><button class="btn sm" data-rc-id="${v.id}">Hóa đơn</button>`}${v.can_edit ? `<button class="btn sm" data-vedit="${v.id}">${isMgr() ? 'Sửa' : 'Sửa ghi chú'}</button>` : ''}</div>
+    <span class="spacer"></span>${v.masked ? '' : `<b>${money(v.total)}</b><button class="btn sm" data-rc-id="${v.id}">Hóa đơn</button>`}${v.can_edit ? `<button class="btn sm" data-vedit="${v.id}">${isOwner() ? 'Sửa' : 'Sửa ghi chú'}</button>` : ''}</div>
     ${v.hair_before ? `<div class="small"><span class="muted">Tóc trước:</span> ${esc(v.hair_before)}</div>` : ''}
     ${v.wish ? `<div class="small"><span class="muted">Mong muốn:</span> ${esc(v.wish)}</div>` : ''}
     ${v.formula ? `<div class="small pre"><span class="muted">Công thức:</span> ${esc(v.formula)}</div>` : ''}
@@ -1134,7 +1138,7 @@ function visitBlock(v, photos) {
 // ---------- Ghi lượt làm (thu tiền) ----------
 // Nhân viên sửa hóa đơn đã hoàn thành: chỉ ghi chú, tiền khóa (quản lý mới sửa được)
 function visitNotesForm(v, after) {
-  openModal('Sửa ghi chú lượt ' + (v.code || ''), `<form id="vn"><div class="small" style="margin-bottom:8px">🔒 Hóa đơn đã hoàn thành: <b>dịch vụ, giá, giảm giá, tip, thanh toán</b> chỉ quản lý sửa được. Cần sửa tiền thì nhắn quản lý.</div>
+  openModal('Sửa ghi chú lượt ' + (v.code || ''), `<form id="vn"><div class="small" style="margin-bottom:8px">🔒 Hóa đơn đã hoàn thành: <b>dịch vụ, giá, giảm giá, tip, thanh toán</b> chỉ Lãnh đạo (Vinh) sửa được. Cần sửa tiền thì nhắn Vinh. Thông tin khách (tên, SĐT, lưu ý tóc) sửa ở hồ sơ khách.</div>
     <div class="totals small">${esc((v.items || []).map((i) => i.name).join(' + '))}${v.total != null ? ` · <b>${money(v.total)}</b>` : ''}${v.tip ? ' · tip ' + money(v.tip) : ''}${v.tip_private ? ' · tip riêng ' + money(v.tip_private) : ''}</div>
     <div class="form-grid" style="margin-top:8px">
     <div class="full"><label>Tình trạng tóc trước khi làm</label>${hairChips()}<textarea name="hair_before">${esc(v.hair_before || '')}</textarea></div>
@@ -1148,7 +1152,7 @@ function visitNotesForm(v, after) {
 }
 async function visitForm(v = {}, after) {
   const isEdit = !!v.id;
-  if (isEdit && !isMgr()) return visitNotesForm(v, after);
+  if (isEdit && !isOwner()) return visitNotesForm(v, after);
   const methods = S.settings.payment_methods;
   const svcOpts = (sel) => `<option value="">— Dịch vụ —</option>` + S.groups.map((g) => `<optgroup label="${esc(g)}">${S.services.filter((s) => s.grp === g && (s.active || s.id === sel))
     .map((s) => `<option value="${s.id}" data-price="${s.price}" ${s.id === sel ? 'selected' : ''}>${esc(s.name)}${s.price ? ' · ' + (s.price / 1000) + 'k' : ''}</option>`).join('')}</optgroup>`).join('')
@@ -1198,7 +1202,7 @@ async function visitForm(v = {}, after) {
     <div><label>Hẹn chăm sóc lại</label><input type="date" name="next_visit_date" value="${v.next_visit_date || ''}"></div>
     <div><label>Ghi chú</label><input name="note" value="${esc(v.note || '')}"></div>
     ${!isEdit ? `<div><label>📷 Ảnh trước</label><input type="file" accept="image/*" multiple id="phB"></div><div><label>📷 Ảnh sau</label><input type="file" accept="image/*" multiple id="phA"></div>` : ''}
-    </div><div class="err"></div><div class="modal-foot">${isEdit && isMgr() ? '<button type="button" class="btn danger" id="delV">Xóa lượt</button><span class="spacer"></span>' : ''}
+    </div><div class="err"></div><div class="modal-foot">${isEdit && isOwner() ? '<button type="button" class="btn danger" id="delV">Xóa lượt</button><span class="spacer"></span>' : ''}
     <button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu lượt làm</button></div></form>`, true);
   const f = $('#vf');
   let cards = [];
@@ -1412,7 +1416,7 @@ VIEWS.visits = async (main) => {
     <tbody>${rows.map((v) => `<tr><td>${dmy(v.date).slice(0, 5)} ${esc(v.time || '')}</td><td><a href="#customer?id=${v.customer_id}">${esc(v.customer_name)}</a></td>
       <td>${v.items.map((i) => esc(i.name)).join(' + ')}</td><td>${esc(v.main_staff_name)}${v.assistant_name ? ' <span class="muted small">+' + esc(v.assistant_name) + '</span>' : ''}</td>
       <td class="num">${money(v.total)}</td><td class="num">${v.card_paid ? money(v.card_paid) : ''}</td><td class="num">${money(v.cash_paid)}</td><td class="small">${esc(v.payment_method || '')}</td><td class="num">${v.tip ? money(v.tip) : ''}${v.tip_private ? `<div class="small muted">riêng ${money(v.tip_private)}</div>` : ''}</td>
-      <td class="nowrap">${v.masked ? '' : `<button class="btn sm" data-rc-id="${v.id}">Hóa đơn</button>`}${v.can_edit ? `<button class="btn sm" data-ev="${v.id}">${isMgr() ? 'Sửa' : 'Ghi chú'}</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="empty">Chưa có lượt nào</td></tr>'}</tbody>
+      <td class="nowrap">${v.masked ? '' : `<button class="btn sm" data-rc-id="${v.id}">Hóa đơn</button>`}${v.can_edit ? `<button class="btn sm" data-ev="${v.id}">${isOwner() ? 'Sửa' : 'Ghi chú'}</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="empty">Chưa có lượt nào</td></tr>'}</tbody>
     ${rows.length ? `<tfoot><tr><td colspan="4">${rows.length} lượt${rows.some((r) => r.masked) ? ' <span class="muted small">(chỉ cộng lượt của bạn)</span>' : ''}</td><td class="num">${money(sum.total)}</td><td class="num">${money(sum.card)}</td><td class="num">${money(sum.cash)}</td><td></td><td class="num">${money(sum.tip)}</td><td></td></tr></tfoot>` : ''}
     </table></div></div>`;
   const set = (p) => go('visits', { from, to, ...(staffId ? { staff: staffId } : {}), ...p });
@@ -1466,7 +1470,7 @@ VIEWS.reminders = async (main) => {
     ${r.unpaid && r.unpaid.length ? `<div class="card"><h3>💰 Khách chưa thanh toán <span class="badge bad">${r.unpaid.length}</span></h3><div class="small muted">Từ ô màu hồng trong sổ đặt lịch Excel. Thu xong bấm hình thức đã thu.</div>
       ${r.unpaid.map((a) => `<div class="list-item"><div style="flex:1;min-width:0"><b>${dmy(a.date)} ${esc(a.time)} · ${a.customer_id ? `<a href="#customer?id=${a.customer_id}">${esc(a.name || '')}</a>` : esc(a.name || '')}</b>
         <div class="small muted">${esc(a.note || '')}${a.staff_name ? ' · ' + esc(a.staff_name) : ''} ${telLinks(a.phone)}</div></div>
-        <div class="row" style="justify-content:flex-end">${S.settings.payment_methods.slice(0, 3).map((m) => `<button class="btn sm" data-paid="${a.id}" data-m="${esc(m)}">Đã thu: ${esc(m)}</button>`).join('')}</div></div>`).join('')}</div>` : ''}
+        <div class="row" style="justify-content:flex-end">${!isOwner() ? '<span class="small muted">Vinh ghi đã thu</span>' : ''}${(isOwner() ? S.settings.payment_methods.slice(0, 3) : []).map((m) => `<button class="btn sm" data-paid="${a.id}" data-m="${esc(m)}">Đã thu: ${esc(m)}</button>`).join('')}</div></div>`).join('')}</div>` : ''}
     ${r.backup && r.backup.due ? `<div class="card">${backupBox(r.backup)}</div>` : ''}
     ${r.warranty && r.warranty.length ? `<div class="card"><h3>🛡 Khách đang trong hạn bảo hành <span class="badge">${r.warranty.length}</span></h3><div class="small muted">Khách quay lại báo lỗi trong hạn: sửa miễn phí theo chính sách. ${esc(WARRANTY_EXCLUDE)}</div>
       ${r.warranty.map((x) => `<div class="list-item"><div style="flex:1;min-width:0"><b>${x.customer_id ? `<a href="#customer?id=${x.customer_id}">${esc(x.customer_name || '')}</a>` : ''}</b> <span class="small muted">lượt ${esc(x.code)} · ${dmy(x.date)}${x.staff_name ? ' · ' + esc(x.staff_name) : ''}</span>
