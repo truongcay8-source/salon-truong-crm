@@ -489,7 +489,7 @@ app.get('/api/visits', (req, res) => {
   const to = L.isDate(req.query.to) ? req.query.to : from;
   const params = [from, to];
   let extra = '';
-  if (req.query.staff_id) { extra += ' AND (v.main_staff_id=? OR v.assistant_id=?)'; params.push(int(req.query.staff_id), int(req.query.staff_id)); }
+  if (req.query.staff_id) { extra += ' AND (v.main_staff_id=? OR v.assistant_id=? OR EXISTS (SELECT 1 FROM visit_items i WHERE i.visit_id=v.id AND i.staff_id=?))'; params.push(int(req.query.staff_id), int(req.query.staff_id), int(req.query.staff_id)); }
   const rows = db.prepare(`SELECT v.id FROM visits v WHERE v.status='done' AND v.date BETWEEN ? AND ?${extra} ORDER BY v.date DESC, v.time DESC, v.id DESC LIMIT 1000`).all(...params);
   res.json(rows.map((r) => {
     const v = L.maskVisitMoney(L.getVisit(r.id), req.user);

@@ -112,3 +112,29 @@ test('cả nhà trong ngày: gom lịch "cháu Nhung", gắn gia đình, Lãnh �
     assert.equal((await mc.post(`/appointments/${a1}/group/split`, { item_id: 1, to_appointment_id: a2, amount: 1000 })).status, 403);
   }
 });
+
+test('từng dòng dịch vụ chọn người làm: doanh số + hoa hồng dòng đó tính cho người làm', async () => {
+  const c = client();
+  assert.equal((await c.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const L = require('../server/logic');
+  db.prepare('UPDATE users SET commission_enabled=1 WHERE id IN (2,4)').run();
+  const svc = db.prepare("SELECT id, commission_rate FROM services WHERE active=1 AND commission_rate>0 ORDER BY id LIMIT 1").get();
+  const cid = (await c.post('/customers', { name: 'Khách test dòng', phone: '0912345999' })).data.id;
+  const d = '2026-11-20';
+  const before = L.salesReport(d, d, { role: 'owner' }).rows;
+  const r = await c.post('/visits', { customer_id: cid, date: d, time: '10:00', main_staff_id: 2, payment_method: 'Tiền mặt',
+    items: [{ service_id: svc.id, price: 200000 }, { service_id: svc.id, price: 100000, staff_id: 4 }] });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const it = r.data.items.find((i) => i.staff_id === 4);
+  assert.ok(it && it.staff_name, 'dòng ghi người làm');
+  assert.equal(it.commission, Math.round(100000 * svc.commission_rate));
+  assert.equal(r.data.main_commission, Math.round(200000 * svc.commission_rate));
+  const rows = L.salesReport(d, d, { role: 'owner' }).rows;
+  const g = (rows, id) => rows.find((x) => x.user_id === id) || { sales: 0, main_commission: 0 };
+  assert.equal(g(rows, 4).sales - g(before, 4).sales, 100000);
+  assert.equal(g(rows, 2).sales - g(before, 2).sales, 200000);
+  assert.equal(g(rows, 4).main_commission - g(before, 4).main_commission, it.commission);
+  // chọn lại đúng thợ chính → coi như thợ chính
+  const r2 = await c.put('/visits/' + r.data.id, { ...r.data, items: [{ service_id: svc.id, price: 300000, staff_id: 2 }] });
+  assert.equal(r2.data.items[0].staff_id, null);
+});

@@ -367,5 +367,11 @@ function nextCode(table, prefix, width) {
   return prefix + String(max + 1).padStart(width, '0');
 }
 
+// Người làm từng dòng dịch vụ (trống = thợ chính) + hoa hồng của dòng
+{
+  const ic = db.prepare('PRAGMA table_info(visit_items)').all().map((c) => c.name);
+  if (!ic.includes('staff_id')) db.exec('ALTER TABLE visit_items ADD COLUMN staff_id INTEGER');
+  if (!ic.includes('commission')) db.exec('ALTER TABLE visit_items ADD COLUMN commission INTEGER');
+}
 module.exports = {
   diffObj, db, DATA_DIR, getSettings, num, audit, nextCode, GROUPS, GIFT_CARD };
