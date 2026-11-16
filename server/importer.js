@@ -261,8 +261,45 @@ function mergeSameVisits() {
   }
   return merged;
 }
+// Gộp 2 hồ sơ cùng 1 người (tạo ra từ 2 ô sổ ghi tên khác nhau): dồn lượt, lịch, thẻ, ảnh về hồ sơ giữ lại
+function mergeCustomer(fromId, toId) {
+  if (!fromId || !toId || fromId === toId) return false;
+  const f = db.prepare('SELECT * FROM customers WHERE id=? AND deleted=0').get(fromId), t = db.prepare('SELECT * FROM customers WHERE id=? AND deleted=0').get(toId);
+  if (!f || !t || (f.phone && t.phone && f.phone !== t.phone)) return false;
+  db.transaction(() => {
+    for (const tb of ['visits', 'appointments', 'cards', 'photos']) db.prepare(`UPDATE ${tb} SET customer_id=? WHERE customer_id=?`).run(toId, fromId);
+    const fill = {};
+    for (const k of ['phone', 'gender', 'birthday', 'source', 'hair_notes', 'formula', 'staff_id', 'family_id', 'cycle_days', 'cycle_note']) if (!t[k] && f[k]) fill[k] = f[k];
+    if (f.notes && f.notes !== t.notes) fill.notes = [t.notes, f.notes].filter(Boolean).join(' · ');
+    if (f.owner_family) fill.owner_family = 1;
+    const ks = Object.keys(fill);
+    if (ks.length) db.prepare(`UPDATE customers SET ${ks.map((k) => k + '=?').join(',')} WHERE id=?`).run(...ks.map((k) => fill[k]), toId);
+    db.prepare("UPDATE customers SET deleted=1, notes=COALESCE(notes,'') || ? WHERE id=?").run(' · Đã gộp vào ' + t.code + ' ' + t.name, fromId);
+  })();
+  return true;
+}
+// Hồ sơ giữ lại: có SĐT > tên đầy đủ hơn ("Nhi con c Khánh Chi" hơn "Nhi") > hồ sơ cũ hơn
+function pickCustomer(a, b) {
+  const x = db.prepare('SELECT id, name, phone FROM customers WHERE id=?').get(a), y = db.prepare('SELECT id, name, phone FROM customers WHERE id=?').get(b);
+  if (!x || !y) return [a, b];
+  const score = (c) => (c.phone ? 1000 : 0) + String(c.name || '').length;
+  return score(x) > score(y) || (score(x) === score(y) && x.id < y.id) ? [x.id, y.id] : [y.id, x.id];
+}
+function mergeMergedCustomers() {
+  let n = 0;
+  const rows = db.prepare("SELECT v.customer_id, v.delete_reason FROM visits v WHERE v.status='deleted' AND v.delete_reason LIKE 'Gộp vào lượt %'").all();
+  for (const d of rows) {
+    const code = (/^Gộp vào lượt (\S+)/.exec(d.delete_reason) || [])[1];
+    const k = code && (db.prepare('SELECT customer_id FROM visits WHERE code=?').get(code) || db.prepare('SELECT customer_id FROM visits WHERE id=?').get(Number(code) || 0));
+    if (!k || k.customer_id === d.customer_id) continue;
+    const [keep, drop] = pickCustomer(k.customer_id, d.customer_id);
+    if (mergeCustomer(drop, keep)) n++;
+  }
+  return n;
+}
 function closeUsedGifts() {
   repairDedupedCards();
+  try { mergeMergedCustomers(); } catch (e) { console.error('Gộp hồ sơ khách lỗi:', e.message); }
   let n = 0;
   for (const c of db.prepare(`SELECT c.id FROM cards c WHERE c.sale_type='gift' AND EXISTS (SELECT 1 FROM card_txns t WHERE t.card_id=c.id AND t.amount<0 AND t.note<>?)`).all(L.GIFT_WRITE_OFF)) {
     const last = db.prepare('SELECT visit_id FROM card_txns WHERE card_id=? AND amount<0 AND note<>? ORDER BY (visit_id IS NULL), id DESC LIMIT 1').get(c.id, L.GIFT_WRITE_OFF);

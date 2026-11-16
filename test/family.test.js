@@ -317,3 +317,17 @@ test('gộp lượt: 1 khách làm 2 dịch vụ cùng lúc ở 2 cột thợ �
   assert.equal(lines.length, 2); assert.ok(lines.some((l) => l.staff_id === 5));
   assert.equal(db.prepare("SELECT COUNT(*) n FROM visits WHERE import_ref IN ('SO:t3','SO:t4') AND status='done'").get().n, 2, 'Bố Long ≠ E Long');
 });
+
+test('lỡ tay xóa lượt → Lãnh đạo khôi phục được', async () => {
+  const c = client();
+  assert.equal((await c.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const svc = db.prepare("SELECT id FROM services WHERE active=1 AND price>0 ORDER BY id LIMIT 1").get();
+  const cid = (await c.post('/customers', { name: 'Mây test', phone: '0913777444' })).data.id;
+  const r = await c.post('/visits', { customer_id: cid, date: '2026-11-28', time: '10:30', main_staff_id: 3, payment_method: 'Tiền mặt', items: [{ service_id: svc.id, price: 3704000 }] });
+  assert.equal((await c.del('/visits/' + r.data.id, { reason: 'lỡ tay' })).status, 200);
+  const del = (await c.get('/visits-deleted?from=2026-11-28&to=2026-11-28')).data;
+  assert.ok(del.some((v) => v.id === r.data.id));
+  assert.equal((await c.post(`/visits/${r.data.id}/restore`)).status, 200);
+  const v = db.prepare('SELECT status, total FROM visits WHERE id=?').get(r.data.id);
+  assert.equal(v.status, 'done'); assert.equal(v.total, 3704000);
+});

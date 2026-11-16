@@ -271,8 +271,12 @@ app.get('/api/customers/:id', (req, res) => {
   c.visits = visits;
   c.photos = db.prepare('SELECT p.id,p.kind,p.visit_id,p.created_at,v.date FROM photos p LEFT JOIN visits v ON v.id=p.visit_id WHERE p.customer_id=? ORDER BY p.id DESC').all(id);
   c.cards = db.prepare('SELECT * FROM cards WHERE customer_id=? ORDER BY id DESC').all(id).map(L.cardRow);
-  c.appointments = db.prepare(`SELECT a.*, u.full_name staff_name FROM appointments a LEFT JOIN users u ON u.id=a.staff_id
+  // Lịch hẹn kèm tiền + dịch vụ của lượt đã làm (giống trang Lịch hẹn)
+  c.appointments = db.prepare(`SELECT a.*, u.full_name staff_name, v.total visit_total, v.main_staff_id v_main, v.assistant_id v_asst,
+      (SELECT GROUP_CONCAT(name, ' + ') FROM visit_items WHERE visit_id=v.id) visit_services
+    FROM appointments a LEFT JOIN users u ON u.id=a.staff_id LEFT JOIN visits v ON v.id=a.visit_id AND v.status='done'
     WHERE a.customer_id=? ORDER BY a.date DESC, a.time DESC LIMIT 30`).all(id);
+  if (req.user.role === 'staff') for (const a of c.appointments) if (![a.v_main, a.v_asst, a.staff_id].includes(req.user.id)) a.visit_total = null;
   c.family = family.members(id);
   c.hair_log = visits.filter((v) => v.hair_before || v.result || v.formula).slice(0, 20)
     .map((v) => ({ id: v.id, date: v.date, staff: v.main_staff_name, services: v.items.map((i) => i.name).join(' + '), hair_before: v.hair_before, result: v.result, formula: v.formula }));
@@ -503,6 +507,30 @@ app.get('/api/visits', (req, res) => {
     v.can_edit = L.canEditVisit(req.user, v);
     return v;
   }));
+});
+// Lượt đã xóa (Lãnh đạo xem lại / khôi phục khi lỡ tay xóa)
+app.get('/api/visits-deleted', OWNER, (req, res) => {
+  const from = L.isDate(req.query.from) ? req.query.from : '2000-01-01';
+  const to = L.isDate(req.query.to) ? req.query.to : '2999-12-31';
+  res.json(db.prepare(`SELECT v.id, v.code, v.date, v.time, v.total, v.delete_reason, v.updated_at, c.name customer_name, u.full_name main_staff_name,
+      (SELECT GROUP_CONCAT(name, ' + ') FROM visit_items WHERE visit_id=v.id) services
+    FROM visits v LEFT JOIN customers c ON c.id=v.customer_id LEFT JOIN users u ON u.id=v.main_staff_id
+    WHERE v.status='deleted' AND v.date BETWEEN ? AND ? ORDER BY v.updated_at DESC, v.id DESC LIMIT 300`).all(from, to));
+});
+app.post('/api/visits/:id/restore', OWNER, (req, res) => {
+  const v = db.prepare("SELECT * FROM visits WHERE id=? AND status='deleted'").get(int(req.params.id));
+  if (!v) throw new HttpError(404, 'Không tìm thấy lượt đã xóa');
+  db.transaction(() => {
+    db.prepare("UPDATE visits SET status='done', delete_reason=NULL, manual_edit=1, updated_at=? WHERE id=?").run(new Date().toISOString(), v.id);
+    if (v.card_id && v.card_paid > 0) {
+      const pay = Math.min(v.card_paid, Math.max(0, L.cardBalance(v.card_id)));
+      if (pay > 0) { db.prepare('INSERT INTO card_txns(card_id,visit_id,amount,note,created_by) VALUES (?,?,?,?,?)').run(v.card_id, v.id, -pay, 'Dùng cho lượt làm (khôi phục)', req.user.id); L.closeGiftAfterUse(v.card_id, v.id, req.user.id); }
+      if (pay !== v.card_paid) db.prepare('UPDATE visits SET card_paid=?, cash_paid=?, card_id=? WHERE id=?').run(pay, v.total - pay, pay ? v.card_id : null, v.id);
+    }
+    db.prepare("UPDATE appointments SET status='done', visit_id=? WHERE id=(SELECT id FROM appointments WHERE customer_id=? AND date=? AND IFNULL(time,'')=IFNULL(?,'') AND visit_id IS NULL LIMIT 1)").run(v.id, v.customer_id, v.date, v.time);
+    audit(req.user.id, 'restore_visit', 'visit', v.id, { code: v.code, total: v.total, reason_was: v.delete_reason });
+  })();
+  res.json({ ok: true });
 });
 // Hóa đơn cho khách: dữ liệu lượt + thông tin salon + số dư thẻ sau khi trừ
 app.get('/api/visits/:id/receipt', (req, res) => {

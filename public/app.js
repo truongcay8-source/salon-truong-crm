@@ -1512,7 +1512,7 @@ VIEWS.visits = async (main) => {
   const staffId = S.params.staff || '';
   const rows = await api(`/visits?from=${from}&to=${to}${staffId ? '&staff_id=' + staffId : ''}`);
   const sum = rows.filter((r) => !r.masked).reduce((a, r) => ({ total: a.total + r.total, cash: a.cash + r.cash_paid, card: a.card + r.card_paid, tip: a.tip + r.tip }), { total: 0, cash: 0, card: 0, tip: 0 });
-  main.innerHTML = header('Lượt làm', 'Mỗi lượt khách = 1 dòng, thay sổ thu tiền', `<button class="btn primary" id="nv">+ Ghi lượt làm</button>`) +
+  main.innerHTML = header('Lượt làm', 'Mỗi lượt khách = 1 dòng, thay sổ thu tiền', `${isOwner() ? '<button class="btn" id="delv">🗑 Lượt đã xóa</button>' : ''}<button class="btn primary" id="nv">+ Ghi lượt làm</button>`) +
     `<div class="card"><div class="row"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="t" value="${to}" style="width:auto">
       <button class="btn sm" id="tod">Hôm nay</button><span class="spacer"></span><select id="st" style="width:auto">${staffOptions(Number(staffId), 'Tất cả thợ')}</select></div></div>
     <div class="card"><div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Khách</th><th>Dịch vụ</th><th>Thợ</th><th class="num">Doanh số</th><th class="num">Trừ thẻ</th><th class="num">Thu</th><th>TT</th><th class="num">Tip</th><th></th></tr></thead>
@@ -1528,9 +1528,26 @@ VIEWS.visits = async (main) => {
   $('#tod').onclick = () => set({ from: S.today, to: S.today });
   $('#st').onchange = (e) => go('visits', { from, to, ...(e.target.value ? { staff: e.target.value } : {}) });
   $('#nv').onclick = () => visitForm({}, () => VIEWS.visits(main));
+  if ($('#delv')) $('#delv').onclick = () => deletedVisits(from, to, () => VIEWS.visits(main));
   $$('[data-ev]', main).forEach((b) => (b.onclick = () => visitForm(rows.find((r) => r.id === Number(b.dataset.ev)), () => VIEWS.visits(main))));
   $$('[data-rc-id]', main).forEach((b) => (b.onclick = () => showReceipt(b.dataset.rcId)));
 };
+
+// Lượt đã xóa → khôi phục (lỡ tay xóa)
+async function deletedVisits(from, to, after) {
+  const show = async (all) => {
+    const rows = await api('/visits-deleted' + (all ? '' : `?from=${from}&to=${to}`));
+    openModal('🗑 Lượt đã xóa', `<div class="small muted" style="margin-bottom:8px">${all ? 'Tất cả lượt đã xóa (mới xóa lên trước).' : `Từ ${dmy(from)} đến ${dmy(to)}.`} Lỡ tay xóa thì bấm <b>Khôi phục</b>: lượt quay lại đủ dịch vụ, tiền, trừ thẻ; lần đồng bộ sổ sau không ghi đè.
+      ${all ? '' : ' <a href="#" id="dvAll">Xem tất cả ngày</a>'}</div>
+      <div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Khách</th><th>Dịch vụ</th><th>Thợ</th><th class="num">Tiền</th><th>Lý do xóa</th><th></th></tr></thead><tbody>
+      ${rows.map((v) => `<tr><td class="nowrap">${dmy(v.date).slice(0, 5)} ${esc(v.time || '')}</td><td>${esc(v.customer_name || '')}</td><td class="small">${esc(v.services || '')}</td><td>${esc(v.main_staff_name || '')}</td>
+        <td class="num">${money(v.total)}</td><td class="small muted">${esc(v.delete_reason || '')}</td><td><button class="btn sm" data-rs="${v.id}">Khôi phục</button></td></tr>`).join('') || '<tr><td colspan="7" class="empty">Không có lượt nào bị xóa</td></tr>'}
+      </tbody></table></div>`);
+    const a = $('#dvAll'); if (a) a.onclick = (e) => { e.preventDefault(); show(true); };
+    $$('[data-rs]').forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/visits/${b.dataset.rs}/restore`, { method: 'POST' }); toast('Đã khôi phục lượt làm'); closeModal(); after && after(); })));
+  };
+  show(false);
+}
 
 // ---------- Nhắc nhở ----------
 VIEWS.reminders = async (main) => {
