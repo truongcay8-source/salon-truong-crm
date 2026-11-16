@@ -274,3 +274,46 @@ test('sổ: "+tt 2/11 685" là trả nợ ngày trước, không tính doanh s�
   assert.equal(row.entries[0].amount, 685000);
   assert.ok(!(row.entries[0].extraTip > 0), 'tiền trả nợ không thành tip');
 });
+
+test('người nhà chủ: tự giảm 50%, không tính DS thưởng; tài khoản không làm dịch vụ ẩn khỏi danh sách thợ', async () => {
+  const c = client();
+  assert.equal((await c.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const L = require('../server/logic');
+  const svc = db.prepare("SELECT id FROM services WHERE active=1 AND price>0 ORDER BY id LIMIT 1").get();
+  const cr = await c.post('/customers', { name: 'Người nhà test', phone: '0913777333' });
+  assert.equal(cr.status, 200, JSON.stringify(cr.data));
+  const cid = cr.data.id;
+  const pr = await c.put('/customers/' + cid, { name: 'Người nhà test', phone: '0913777333', owner_family: true });
+  assert.equal(pr.status, 200, JSON.stringify(pr.data));
+  assert.equal(db.prepare('SELECT owner_family FROM customers WHERE id=?').get(cid).owner_family, 1);
+  const d = '2026-11-26';
+  const before = L.salesReport(d, d, { role: 'owner' });
+  const r = await c.post('/visits', { customer_id: cid, date: d, time: '10:00', main_staff_id: 2, payment_method: 'Tiền mặt', items: [{ service_id: svc.id, price: 400000 }] });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.discount, 200000); assert.equal(r.data.total, 200000);
+  const rep = L.salesReport(d, d, { role: 'owner' });
+  const g = (x) => x.rows.find((y) => y.user_id === 2) || { family_sales: 0, bonus_sales: 0 };
+  assert.equal(g(rep).family_sales - g(before).family_sales, 200000);
+  assert.equal(g(rep).bonus_sales - g(before).bonus_sales, 0);
+  // ẩn tài khoản không làm dịch vụ
+  const vinh = db.prepare("SELECT id FROM users WHERE username='vinh'").get();
+  const st = (await c.get('/staff')).data.find((u) => u.id === vinh.id);
+  assert.equal(st.works, 0);
+});
+
+test('gộp lượt: 1 khách làm 2 dịch vụ cùng lúc ở 2 cột thợ → 1 phiếu, dòng ghi người làm, tổng giữ nguyên', () => {
+  const L = require('../server/logic'); const I = require('../server/importer');
+  const svc = db.prepare("SELECT id FROM services WHERE active=1 AND price>0 ORDER BY id LIMIT 1").get();
+  const mk = (name) => db.prepare("INSERT INTO customers(code,name) VALUES (?,?)").run('T' + Math.random().toString(36).slice(2, 8), name).lastInsertRowid;
+  const beo = mk('Beo test'), ebeo = mk('e Beo test'), son = mk('E Long test'), bo = mk('Bố Long test');
+  const sys = { id: 1, role: 'owner' };
+  const v = (cust, staff, price, time, ref) => L.saveVisit({ customer_id: cust, date: '2026-11-27', time, main_staff_id: staff, items: [{ service_id: svc.id, price }], payment_method: 'Tiền mặt', import_ref: ref }, sys, null, { imported: true });
+  const a = v(beo, 3, 327000, '11:30', 'SO:t1'), b = v(ebeo, 5, 78000, '11:30', 'SO:t2');
+  const x = v(son, 2, 685000, '11:00', 'SO:t3'), y = v(bo, 4, 240000, '11:00', 'SO:t4');
+  I.mergeSameVisits();
+  const live = db.prepare("SELECT id, total FROM visits WHERE import_ref IN ('SO:t1','SO:t2') AND status='done'").all();
+  assert.equal(live.length, 1); assert.equal(live[0].total, 405000);
+  const lines = db.prepare('SELECT staff_id FROM visit_items WHERE visit_id=?').all(live[0].id);
+  assert.equal(lines.length, 2); assert.ok(lines.some((l) => l.staff_id === 5));
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM visits WHERE import_ref IN ('SO:t3','SO:t4') AND status='done'").get().n, 2, 'Bố Long ≠ E Long');
+});

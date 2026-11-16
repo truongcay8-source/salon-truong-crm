@@ -117,17 +117,17 @@ app.post('/api/me/password', (req, res) => {
 
 // ---------- Tài khoản ----------
 app.get('/api/staff', (req, res) => {
-  res.json(db.prepare('SELECT id, full_name, role, active, level FROM users ORDER BY active DESC, id').all());
+  res.json(db.prepare('SELECT id, full_name, role, active, level, works FROM users ORDER BY active DESC, id').all());
 });
 app.get('/api/users', OWNER, (req, res) => {
-  res.json(db.prepare('SELECT id,username,full_name,role,active,can_login,must_change_pw,commission_enabled,aliases,level,created_at FROM users ORDER BY id').all());
+  res.json(db.prepare('SELECT id,username,full_name,role,active,can_login,must_change_pw,commission_enabled,works,aliases,level,created_at FROM users ORDER BY id').all());
 });
 const LEVELS = ['Director', 'Senior', 'Stylist', 'Junior'];
 function userInput(b) {
   const r = {};
   if (b.full_name != null) { r.full_name = str(b.full_name); if (!r.full_name) throw bad('Nhập họ tên'); }
   if (b.role != null) { if (!['owner', 'manager', 'staff'].includes(b.role)) throw bad('Vai trò không hợp lệ'); r.role = b.role; }
-  for (const k of ['active', 'can_login', 'commission_enabled']) if (b[k] != null) r[k] = b[k] ? 1 : 0;
+  for (const k of ['active', 'can_login', 'commission_enabled', 'works']) if (b[k] != null) r[k] = b[k] ? 1 : 0;
   if (b.aliases != null) r.aliases = str(b.aliases);
   if (b.level != null) { const l = str(b.level); if (l && !LEVELS.includes(l)) throw bad('Cấp bậc không hợp lệ'); r.level = l || null; }
   return r;
@@ -291,6 +291,8 @@ app.put('/api/customers/:id', (req, res) => {
   // Khách định kỳ: chỉ đổi khi form có gửi ô này (form cũ / sửa nhanh không làm mất)
   if (!('cycle_days' in req.body)) Object.assign(c, { cycle_days: before.cycle_days, cycle_call: before.cycle_call, cycle_note: before.cycle_note });
   db.prepare('UPDATE customers SET cycle_days=?, cycle_call=?, cycle_note=? WHERE id=?').run(c.cycle_days, c.cycle_call, c.cycle_note, id);
+  // Người nhà chủ (giảm 50%, không tính thưởng): chỉ Lãnh đạo đặt
+  if (req.user.role === 'owner' && 'owner_family' in req.body) db.prepare('UPDATE customers SET owner_family=? WHERE id=?').run([true, '1', 'on', 1].includes(req.body.owner_family) ? 1 : 0, id);
   if ((before.formula || null) !== (c.formula || null)) db.prepare('UPDATE customers SET formula_at=?, formula_by=? WHERE id=?').run(today(), req.user.id, id);
   const changed = {};
   for (const k of Object.keys(c)) if ((before[k] || null) !== (c[k] || null)) changed[k] = [before[k], c[k]];
@@ -859,6 +861,7 @@ if (require.main === module) {
   try { const n = db.prepare(`UPDATE appointments SET pay_note=(SELECT v.payment_method FROM visits v WHERE v.id=appointments.visit_id)
       WHERE pay_note='Chưa thanh toán' AND visit_id IN (SELECT id FROM visits WHERE status='done' AND payment_method IS NOT NULL AND payment_method<>'')`).run().changes;
     if (n) console.log(`Đã sửa ${n} lịch bị báo chưa thanh toán dù đã thu`); } catch (e) { console.error('Sửa lịch đã thu lỗi:', e.message); }
+  try { const n = require('./importer').mergeSameVisits(); if (n) console.log(`Đã gộp ${n} lượt cùng khách làm cùng lúc / trùng lượt ghi tay`); } catch (e) { console.error('Gộp lượt lỗi:', e.message); }
   try { const n = require('./importer').closeUsedGifts(); if (n) console.log(`Đã đóng ${n} thẻ tri ân đã dùng 1 lần`); } catch (e) { console.error('Đóng thẻ tri ân lỗi:', e.message); }
   try { const n = require('./importer').dedupeVisits(); if (n) console.log(`Đã dọn ${n} lượt làm trùng do sổ sửa chữ`); } catch (e) { console.error('Dọn lượt trùng lỗi:', e.message); }
   try { const n = require('./importer').dedupeAppointments(); if (n) console.log(`Đã dọn ${n} lịch hẹn trùng`); } catch (e) { console.error('Dọn lịch trùng lỗi:', e.message); }
