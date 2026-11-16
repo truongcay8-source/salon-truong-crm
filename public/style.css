@@ -243,3 +243,6 @@ tfoot td { font-weight: 700; }
 .chat-input .mic.rec { background: #e5484d; color: #fff; border-color: #e5484d; animation: micpulse 1s infinite; }
 @keyframes micpulse { 50% { opacity: .6; } }
 body:has(.chat-box) .search-fab { display: none; }
+.bubble .mention { color: var(--brand); }
+.chat-msg.to-me .bubble { box-shadow: 0 0 0 2px var(--warn); }
+.chat-card input, .chat-card select { padding: 6px 8px; font-size: 14px; }
