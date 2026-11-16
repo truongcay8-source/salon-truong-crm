@@ -109,6 +109,42 @@ function extractPhone(text) {
   const p = L.normPhone(m[0]);
   return /^0\d{9,10}$/.test(p) ? p : null;
 }
+// Khóa so khớp tên khách trong ô sổ: bỏ dấu, ngoặc, số tiền, danh xưng → 2 chữ đầu ("A thái uk 685" = "a thái uk" → "thai uk")
+function apptKey(text) {
+  const n = stripAccents(String(BM.cleanName(text) || text || '')).replace(/\(.*?\)/g, ' ').replace(/[0-9]+k?\b/g, ' ').replace(/[^a-z ]+/g, ' ').trim()
+    .replace(/^(chi|anh|em|c|a|e|b|ban|co|chu|bac|khach|kh)\s+/, '').split(/\s+/).filter(Boolean);
+  return n.slice(0, 2).join(' ');
+}
+// Dọn lịch hẹn bị tạo trùng do nhập lại sổ sau khi sửa chữ trong ô: giữ lịch đã thu tiền / hoàn thành, xóa bản "Đã đặt" trùng
+function dedupeAppointments() {
+  const rows = db.prepare(`SELECT id, date, time, staff_id, status, visit_id, note, guest_name, customer_id, pay_note, assistant_id FROM appointments WHERE date>=date('now','localtime','-60 days') ORDER BY date, time, id`).all();
+  const groups = new Map();
+  for (const a of rows) {
+    const k = apptKey(a.note || a.guest_name || '');
+    if (!k) continue;
+    const g = `${a.date}|${a.time}|${a.staff_id || 0}|${k}`;
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(a);
+  }
+  let removed = 0;
+  const rank = (a) => (a.visit_id ? 4 : 0) + (a.status === 'done' ? 2 : a.status === 'arrived' ? 1 : 0);
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    list.sort((x, y) => rank(y) - rank(x) || x.id - y.id);
+    const keep = list[0];
+    for (const a of list.slice(1)) {
+      if (a.visit_id || a.status !== 'booked') continue; // chỉ xóa bản "Đã đặt" thừa, không đụng lịch đã thu tiền / đã hủy
+      if (a.customer_id && keep.customer_id && a.customer_id !== keep.customer_id) continue;
+      try { db.prepare('UPDATE chat_messages SET appointment_id=? WHERE appointment_id=?').run(keep.id, a.id); } catch { /* chưa có bảng chat */ }
+      if (a.note && (!keep.note || a.note.length > keep.note.length)) db.prepare('UPDATE appointments SET note=? WHERE id=?').run(a.note, keep.id);
+      db.prepare('UPDATE appointments SET customer_id=COALESCE(customer_id,?), pay_note=COALESCE(pay_note,?), assistant_id=COALESCE(assistant_id,?) WHERE id=?').run(a.customer_id, a.pay_note, a.assistant_id, keep.id);
+      db.prepare('DELETE FROM appointments WHERE id=?').run(a.id);
+      removed++;
+    }
+  }
+  return removed;
+}
+
 function guessName(text) {
   let s = String(text).split(/[\n(–-]| \d/)[0];
   s = s.replace(/(?:\+?84|0)[\d.\s]{8,}/g, '').replace(/\s+/g, ' ').trim();
@@ -459,13 +495,17 @@ async function importWorkbook(buffer, opts, user) {
           // Người phụ ghi trong ngoặc: "C Điệp(Thu)", "E Ly (300)(Thoại phụ)"
           const asst = assistantIn(e.text, e.staffId);
           if (asst) summary.assistants_found++;
-          const dup = db.prepare(`SELECT id, status, pay_note FROM appointments WHERE date=? AND time=? AND IFNULL(staff_id,0)=IFNULL(?,0) AND (note=? OR service=?)`)
-            .get(b.date, e.time, e.staffId, e.text, e.text);
+          // Trùng = cùng ngày + giờ + thợ và cùng ô (chữ y hệt, hoặc cùng khách / cùng tên khách — sổ sửa thêm tiền "A thái uk" → "A thái uk 685" vẫn là 1 lịch)
+          const key = apptKey(e.text);
+          const dup = db.prepare(`SELECT id, status, pay_note, note, customer_id, guest_name FROM appointments WHERE date=? AND time=? AND IFNULL(staff_id,0)=IFNULL(?,0)
+              ORDER BY (visit_id IS NOT NULL) DESC, (status='done') DESC, id`).all(b.date, e.time, e.staffId)
+            .find((a) => a.note === e.text || (hit && a.customer_id === hit.id) || (key && apptKey(a.note || a.guest_name || '') === key));
           let apptId;
           if (dup && hit) db.prepare('UPDATE appointments SET customer_id=COALESCE(customer_id,?) WHERE id=?').run(hit.id, dup.id);
           if (dup) {
             // Nhập lại file: cập nhật theo màu ô (hủy / hình thức thanh toán), không tạo trùng
             apptId = dup.id;
+            if (dup.note !== e.text) db.prepare('UPDATE appointments SET note=? WHERE id=?').run(e.text, dup.id);
             if (cancelled && dup.status !== 'cancelled') db.prepare("UPDATE appointments SET status='cancelled', cancel_reason=COALESCE(cancel_reason,?) WHERE id=?").run(reason, dup.id);
             if (pay !== dup.pay_note && (pay || dup.pay_note)) db.prepare('UPDATE appointments SET pay_note=? WHERE id=?').run(pay, dup.id);
             if (asst) db.prepare('UPDATE appointments SET assistant_id=? WHERE id=? AND assistant_id IS NULL').run(asst, dup.id);
@@ -692,9 +732,10 @@ async function importWorkbook(buffer, opts, user) {
   } catch (e) {
     if (e !== ROLLBACK) throw e;
   }
+  if (!opts.dryRun) try { summary.appointments_deduped = dedupeAppointments(); } catch (e) { summary.warnings.push('Dọn lịch trùng: ' + e.message); }
   if (!opts.dryRun) try { require('./datafix').apply(); } catch (e) { summary.warnings.push('Bổ sung công thức: ' + e.message); }
   if (ws('Lịch sử') && !opts.includeHistory) summary.warnings.push('Chưa nhập lượt làm "Hoàn thành" từ tab "Lịch sử" (CRM Nếp Hair) vì trùng với Nhật ký dịch vụ. Tick "Nhập cả lịch sử" nếu cần.');
   return { dry_run: opts.dryRun, summary };
 }
 
-module.exports = { importWorkbook, asDate, asTime };
+module.exports = { dedupeAppointments, apptKey, importWorkbook, asDate, asTime };

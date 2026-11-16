@@ -60,3 +60,20 @@ test('bấm ✓: ghi chi quỹ chờ duyệt, báo kho, xin nghỉ', () => {
   id = ins('Thoại nghỉ mai', { kind: 'off', user_id: thoai.id, date: '2030-01-03' });
   assert.throws(() => A.apply(get(id), {}, duong), /người xin nghỉ|chính mình/);
 });
+
+test('lịch hẹn trùng do sửa chữ trong ô sổ: gộp lại, giữ lịch đã thu tiền', () => {
+  const I = require('../server/importer');
+  assert.equal(I.apptKey('A thái uk 685'), I.apptKey('A thái uk'));
+  assert.equal(I.apptKey('Thảo Đặng 300'), I.apptKey('Thảo Đặng'));
+  assert.notEqual(I.apptKey('C Lan'), I.apptKey('C Hoa'));
+  const d = require('../server/logic').today();
+  const ins = db.prepare("INSERT INTO appointments(guest_name,staff_id,date,time,status,note,pay_note,created_by) VALUES (?,2,?,'09:30',?,?,?,1)");
+  const done = ins.run('A thái uk', d, 'done', 'A thái uk', null).lastInsertRowid;
+  const dup = ins.run('A thái uk', d, 'booked', 'A thái uk 685', 'Chuyển khoản').lastInsertRowid;
+  const other = ins.run('C Hoa', d, 'booked', 'C Hoa', null).lastInsertRowid;
+  assert.equal(I.dedupeAppointments(), 1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM appointments WHERE id=?').get(dup).n, 0);
+  const k = db.prepare('SELECT * FROM appointments WHERE id=?').get(done);
+  assert.equal(k.status, 'done'); assert.equal(k.note, 'A thái uk 685'); assert.equal(k.pay_note, 'Chuyển khoản');
+  assert.ok(db.prepare('SELECT 1 FROM appointments WHERE id=?').get(other));
+});
