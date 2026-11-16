@@ -260,3 +260,17 @@ test('thẻ tri ân: hoa hồng % vẫn đủ, nhưng tách khỏi doanh số t�
   assert.equal(rep.summary.gift_by_group['Cắt'], 250000);
   assert.equal(rep.summary.gift_by_group['Hóa chất'], 750000);
 });
+
+test('sổ: "+tt 2/11 685" là trả nợ ngày trước, không tính doanh số hôm nay; ô chỉ trả nợ không tạo lượt', () => {
+  const BM = require('../server/bookmoney');
+  const svcs = db.prepare('SELECT * FROM services').all();
+  const by = (n) => svcs.find((s) => s.name === n);
+  const p = BM.parseEntry('A Quân lợn 0888386666(Thu)685+tt 2/11 685(Thu)', { level: 'Director' }, by, svcs);
+  assert.equal(p.explicit, 685000); assert.deepEqual(p.debt, { day: 2, month: 11, amount: 685000 }); assert.equal(p.debtOnly, false);
+  const q = BM.parseEntry('c Thảo trả nợ 12/11 785k', { level: 'Director' }, by, svcs);
+  assert.equal(q.debtOnly, true);
+  const row = { amount: 1370000, entries: [{ text: 'x', parsed: p }] };
+  BM.splitRow(row);
+  assert.equal(row.entries[0].amount, 685000);
+  assert.ok(!(row.entries[0].extraTip > 0), 'tiền trả nợ không thành tip');
+});

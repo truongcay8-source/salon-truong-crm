@@ -855,6 +855,10 @@ if (require.main === module) {
   app.listen(port, () => console.log(`CRM Salon Nếp chạy tại http://localhost:${port}`));
   startBackups();
   gsync.startAutoSync();
+  // Lịch đã bấm "Đã thu" nhưng lần đồng bộ sổ (ô vẫn hồng) đổi lại thành chưa thanh toán → lấy theo hình thức TT đã ghi ở hóa đơn
+  try { const n = db.prepare(`UPDATE appointments SET pay_note=(SELECT v.payment_method FROM visits v WHERE v.id=appointments.visit_id)
+      WHERE pay_note='Chưa thanh toán' AND visit_id IN (SELECT id FROM visits WHERE status='done' AND payment_method IS NOT NULL AND payment_method<>'')`).run().changes;
+    if (n) console.log(`Đã sửa ${n} lịch bị báo chưa thanh toán dù đã thu`); } catch (e) { console.error('Sửa lịch đã thu lỗi:', e.message); }
   try { const n = require('./importer').closeUsedGifts(); if (n) console.log(`Đã đóng ${n} thẻ tri ân đã dùng 1 lần`); } catch (e) { console.error('Đóng thẻ tri ân lỗi:', e.message); }
   try { const n = require('./importer').dedupeVisits(); if (n) console.log(`Đã dọn ${n} lượt làm trùng do sổ sửa chữ`); } catch (e) { console.error('Dọn lượt trùng lỗi:', e.message); }
   try { const n = require('./importer').dedupeAppointments(); if (n) console.log(`Đã dọn ${n} lịch hẹn trùng`); } catch (e) { console.error('Dọn lịch trùng lỗi:', e.message); }

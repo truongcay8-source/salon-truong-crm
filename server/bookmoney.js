@@ -63,7 +63,23 @@ function guessGender(text, svcByName, level, amt) {
 }
 
 // → { items:[{service_id,name,price,fixed}], explicit, surcharge }
+// Trả nợ ngày trước ghi kèm ô: "+tt 2/11 685", "trả nợ 2/11 685k" → không phải doanh số hôm nay
+const DEBT = /\+?\s*(?:\btt|thanh to[aá]n|tr[aả](?:\s*n[oợ])?)\s*(?:ng[aà]y\s*)?(\d{1,2})\/(\d{1,2})\s*(\d+(?:[.,]\d+)?)\s*(k|tr)?/i;
 function parseEntry(text, staff, svcByName, services, hint) {
+  let debt = null;
+  const dm = String(text).match(DEBT);
+  if (dm) {
+    const n = Number(dm[3].replace(',', '.'));
+    debt = { day: Number(dm[1]), month: Number(dm[2]), amount: dm[4] === 'tr' ? Math.round(n * 1e6) : n >= 30 || dm[4] === 'k' ? Math.round(n * 1000) : Math.round(n * 1e6) };
+    text = String(text).replace(DEBT, ' ');
+  }
+  const r = parseEntry0(text, staff, svcByName, services, hint);
+  r.debt = debt;
+  // Ô chỉ ghi trả nợ (không có dịch vụ / tiền hôm nay) → không tạo lượt làm mới
+  r.debtOnly = !!debt && !r.explicit && !KW.some(([re]) => re.test(fold(text))) && !PRODUCT.test(fold(text));
+  return r;
+}
+function parseEntry0(text, staff, svcByName, services, hint) {
   const { list, s } = amounts(text);
   // phụ thu ghi kèm: "+ 200 phụ thu"
   let surcharge = 0;
@@ -135,7 +151,8 @@ function splitRow(row) {
   const unknown = es.filter((e) => !(e.parsed.explicit > 0));
   for (const e of known) e.amount = e.parsed.explicit;
   let extraTip = 0;
-  const R = row.amount || 0;
+  // Tiền trả nợ lượt ngày trước nằm trong cột Thu tiền của dòng → trừ ra, không tính vào lượt hôm nay
+  const R = Math.max(0, (row.amount || 0) - es.reduce((t, e) => t + ((e.parsed.debt && e.parsed.debt.amount) || 0), 0));
   const knownSum = known.reduce((t, e) => t + e.amount + e.parsed.surcharge, 0);
   const vTotal = es.reduce((t, e) => t + (e.parsed.voucher || 0), 0);
   if (R > 0 && knownSum > R && vTotal && knownSum - R <= vTotal + 1000 && !unknown.length) {
@@ -176,7 +193,7 @@ function cleanName(text) {
   let s = String(text).replace(/^\s*\d{1,2}[:h]\d{2}\s*/, '').split(/\s[–-]\s/)[0];
   s = s.replace(/\([^)]*\)?/g, ' ').replace(/[|/]/g, ' ').replace(/(?:\+?84|0)[\d.\s]{8,12}\d/g, ' ');
   const f = fold(s);
-  const stop = f.search(/[-=]|\b(phu|cat|ct|nhuom|uon|duoi|goi|tk|tao kieu|ep|tay|massage|masage|u lanh|hap|phuc hoi|mai|rua mat|cham chan|highlight|su dung|ck|off|tra|chuyen|tm|voucher|vc|tang (?:the )?(?:vc|voucher)|nap|kh tang|chua cap|co the|co vc|co voucher)\b|\d/);
+  const stop = f.search(/[-=]|\b(phu|cat|ct|nhuom|uon|duoi|goi|tk|tao kieu|ep|tay|massage|masage|u lanh|hap|phuc hoi|mai|rua mat|cham chan|highlight|su dung|ck|off|tra|tt|chuyen|tm|voucher|vc|tang (?:the )?(?:vc|voucher)|nap|kh tang|chua cap|co the|co vc|co voucher)\b|\d/);
   if (stop > 0) s = s.slice(0, stop);
   s = s.replace(/[+,.:;]+$/, '').replace(/\s+/g, ' ').trim();
   return s.length >= 2 ? s.slice(0, 60) : null;

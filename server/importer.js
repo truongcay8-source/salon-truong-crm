@@ -574,7 +574,9 @@ async function importWorkbook(buffer, opts, user) {
             apptId = dup.id;
             if (dup.note !== e.text) db.prepare('UPDATE appointments SET note=? WHERE id=?').run(e.text, dup.id);
             if (cancelled && dup.status !== 'cancelled') db.prepare("UPDATE appointments SET status='cancelled', cancel_reason=COALESCE(cancel_reason,?) WHERE id=?").run(reason, dup.id);
-            if (pay !== dup.pay_note && (pay || dup.pay_note)) db.prepare('UPDATE appointments SET pay_note=? WHERE id=?').run(pay, dup.id);
+            // Lãnh đạo đã bấm "Đã thu" trong app → giữ, sổ còn màu hồng cũng không đổi lại thành chưa thanh toán
+            const appPaid = dup.pay_note && dup.pay_note !== 'Chưa thanh toán';
+            if (pay !== dup.pay_note && (pay || dup.pay_note) && !(appPaid && (!pay || pay === 'Chưa thanh toán'))) db.prepare('UPDATE appointments SET pay_note=? WHERE id=?').run(pay, dup.id);
             if (asst) db.prepare('UPDATE appointments SET assistant_id=? WHERE id=? AND assistant_id IS NULL').run(asst, dup.id);
             summary.appointments_skipped++;
           } else {
@@ -649,13 +651,29 @@ async function importWorkbook(buffer, opts, user) {
           if (es.some((e) => e.check) || (row.amount && Math.abs(row.amount - sum + es.reduce((t, e) => t + (e.voucher || 0), 0) - es.reduce((t, e) => t + e.extraTip, 0)) >= 1000)) st.rows_check.push(`${b.date.slice(8)}/${b.date.slice(5, 7)} ${row.time}: sổ thu ${row.amount.toLocaleString('vi-VN')}, giá ghi trong ô ${es.reduce((t, e) => t + (e.parsed.explicit || e.est) + e.parsed.surcharge, 0).toLocaleString('vi-VN')} (${es.map((e) => e.text).join(' | ').slice(0, 90)})`);
           for (const e of es) {
             if (!e.customerId) { const id = cust.upsert('APP', { name: BM.cleanName(e.text) || ('Khách ' + e.time), phone: null }, false); e.customerId = id; }
+            // "+tt 2/11 685": khách trả nợ lượt ngày 2/11 → ghi lượt đó đã thu (không cộng doanh số hôm nay)
+            const STOP = new Set(['a', 'anh', 'e', 'em', 'c', 'chi', 'co', 'b', 'ban', 'cua', 'chu', 'vc', 'voucher', 'the', 'kh', 'nap', 'tra', 'truoc', 'chau', 'tt', 'ck', 'sau', 'thu', 'no']);
+            const tk = (x) => BM.fold(x).replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w && !STOP.has(w) && !/\d/.test(w));
+            if (e.parsed.debt && e.customerId) {
+              const dd = `${b.date.slice(0, 4)}-${String(e.parsed.debt.month).padStart(2, '0')}-${String(e.parsed.debt.day).padStart(2, '0')}`;
+              const open = db.prepare(`SELECT v.id, v.customer_id, c.name FROM visits v JOIN customers c ON c.id=v.customer_id
+                WHERE v.date=? AND v.status='done' AND v.payment_method IS NULL AND v.cash_paid>0 ORDER BY v.id`).all(dd);
+              const mine = new Set(tk(e.text));
+              // cùng khách; hoặc tên ngày đó gọn hơn ("A quân ck sau" ↔ "A Quân lợn … +tt 2/11")
+              const dv = open.find((v) => v.customer_id === e.customerId) || open.find((v) => { const t = tk(v.name); return t.length && t.every((w) => mine.has(w)); });
+              if (dv) {
+                const pm = e.pay && e.pay !== 'Chưa thanh toán' ? e.pay : 'Tiền mặt';
+                db.prepare("UPDATE visits SET payment_method=?, note=COALESCE(note,'') || ? WHERE id=?").run(pm, ` · đã trả ngày ${b.date.slice(8)}/${b.date.slice(5, 7)} (${pm})`, dv.id);
+                db.prepare("UPDATE appointments SET pay_note=? WHERE visit_id=?").run(pm, dv.id);
+                (st.debts_paid = st.debts_paid || []).push(`${dayLabel} trả cho ${e.parsed.debt.day}/${e.parsed.debt.month}: ${BM.cleanName(e.text) || ''} ${e.parsed.debt.amount.toLocaleString('vi-VN')}`);
+              }
+            }
+            if (e.parsed.debtOnly) continue;
             // Ô ghi "tặng vc / tặng voucher / có vc / có thẻ vc" mà khách chưa có thẻ tri ân trong máy → bổ sung thẻ (chưa dùng)
             {
               const ft = BM.fold(e.text);
               const gm = /(chua\s*cap)/.test(ft) ? null : ft.match(/\b(tang|co|cap|phat)\s*(?:the\s*)?(vc|voucher|vocher|the tri an)\b/);
               // Tên ghi trong ô khác tên trong tab thẻ ("e duy anh" / "A Duy Anh") → coi là cùng người, không tạo thẻ thứ 2
-              const STOP = new Set(['a', 'anh', 'e', 'em', 'c', 'chi', 'co', 'b', 'ban', 'cua', 'chu', 'vc', 'voucher', 'the', 'kh', 'nap', 'tra', 'truoc', 'chau']);
-              const tk = (x) => BM.fold(x).replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w && !STOP.has(w) && !/\d/.test(w));
               const mine = new Set(tk(e.text));
               const sameName = () => db.prepare("SELECT cu.name FROM cards c JOIN customers cu ON cu.id=c.customer_id WHERE c.sale_type='gift'").all()
                 .some((r) => { const t = tk(r.name); return t.length && t.every((w) => mine.has(w)); });
