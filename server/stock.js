@@ -100,13 +100,14 @@ function stockLevels() {
   const lastCount = db.prepare("SELECT s.date, s.created_at, u.full_name by_name FROM stock_moves s LEFT JOIN users u ON u.id=s.created_by WHERE s.material_id=? AND s.kind='adjust' AND s.note LIKE 'Kiểm kho%' ORDER BY s.id DESC LIMIT 1");
   return db.prepare(`SELECT m.*, u.full_name ordered_by_name FROM materials m LEFT JOIN users u ON u.id=m.ordered_by WHERE m.active=1 ORDER BY m.kind, m.grp, m.name`).all().map((m) => {
     const stock = r2(stockOf(m.id));
-    const status = stock <= 0 ? 'out' : m.min_qty != null && stock <= m.min_qty ? 'low' : 'ok';
     const li = lastIn.get(m.id).t;
+    const reported = m.reported_at && !(li && li > m.reported_at) ? m.reported_at : null; // nhân viên báo hết qua chat, chưa nhập hàng lại
+    const status = stock <= 0 ? 'out' : m.min_qty != null && stock <= m.min_qty ? 'low' : reported ? 'low' : 'ok';
     const ordered = m.ordered_at && !(li && li > m.ordered_at) ? m.ordered_at : null;
     const lc = lastCount.get(m.id);
     return { id: m.id, code: m.code, name: m.name, kind: m.kind, grp: m.grp, unit: m.unit, size: m.size, size_unit: m.size_unit,
       stock, min_qty: m.min_qty, status, ordered_at: ordered, ordered_by_name: ordered ? m.ordered_by_name : null,
-      last_count: lc ? lc.date : null, last_count_by: lc ? lc.by_name : null };
+      last_count: lc ? lc.date : null, last_count_by: lc ? lc.by_name : null, reported_at: reported };
   });
 }
 function stockAlerts() { return stockLevels().filter((m) => m.status !== 'ok'); }

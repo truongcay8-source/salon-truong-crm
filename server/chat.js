@@ -178,14 +178,15 @@ function msgRows(where, params, limit) {
   return db.prepare(`SELECT m.*, u.full_name user_name, lb.full_name linked_by_name, a.date appt_date, a.time appt_time, a.status appt_status
     FROM chat_messages m JOIN users u ON u.id=m.user_id LEFT JOIN users lb ON lb.id=m.linked_by LEFT JOIN appointments a ON a.id=m.appointment_id
     WHERE m.deleted=0 AND ${where} ORDER BY m.id DESC LIMIT ?`).all(...params, limit).reverse()
-    .map((m) => ({ ...m, draft: m.draft ? JSON.parse(m.draft) : null }));
+    .map((m) => ({ ...m, draft: m.draft ? JSON.parse(m.draft) : null, action: m.action ? JSON.parse(m.action) : null, action_done: m.action_done ? JSON.parse(m.action_done) : null,
+      mentions: m.mentions ? m.mentions.split(',').map(Number) : [] }));
 }
 function ctxNow() {
   const since = L.addDays(today(), -180);
   const use = db.prepare(`SELECT v.main_staff_id sid, vi.name, COUNT(*) n FROM visit_items vi JOIN visits v ON v.id=vi.visit_id WHERE v.status='done' AND v.date>=? GROUP BY 1,2`).all(since);
   const usage = {}, staffUsage = {};
   for (const r of use) { usage[r.name] = (usage[r.name] || 0) + r.n; staffUsage[`${r.sid}|${r.name}`] = r.n; }
-  return { today: today(), staff: db.prepare('SELECT id, full_name, aliases, level FROM users WHERE active=1').all(), services: db.prepare('SELECT name, active FROM services').all(), usage, staffUsage };
+  return { today: today(), staff: db.prepare('SELECT id, username, full_name, aliases, level, role FROM users WHERE active=1').all(), services: db.prepare('SELECT name, active FROM services').all(), usage, staffUsage };
 }
 
 // Tóm tắt chat 1 ngày bằng Claude. Số điện thoại được che trước khi gửi đi.
@@ -220,6 +221,11 @@ async function summarize(day, msgs) {
 }
 
 function mount(app, { MGR, OWNER }) {
+  const act = require('./chatact');
+  const push = require('./push');
+  const short = (t, n = 120) => { t = String(t || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+  const mgrIds = () => db.prepare("SELECT id FROM users WHERE active=1 AND role IN ('owner','manager')").all().map((u) => u.id);
+  const stockIds = () => { const st = require('./stock'); return db.prepare('SELECT * FROM users WHERE active=1').all().filter((u) => st.perm(u).stock_view && u.role === 'staff').map((u) => u.id); };
   app.get('/api/chat', (req, res) => {
     purge();
     const after = int(req.query.after), before = int(req.query.before);
@@ -267,7 +273,9 @@ function mount(app, { MGR, OWNER }) {
   });
   app.get('/api/chat/unread', (req, res) => {
     const r = db.prepare('SELECT last_id FROM chat_reads WHERE user_id=?').get(req.user.id);
-    res.json({ unread: db.prepare('SELECT COUNT(*) n FROM chat_messages WHERE deleted=0 AND id>? AND user_id<>?').get(r ? r.last_id : 0, req.user.id).n });
+    const last = r ? r.last_id : 0;
+    res.json({ unread: db.prepare('SELECT COUNT(*) n FROM chat_messages WHERE deleted=0 AND id>? AND user_id<>?').get(last, req.user.id).n,
+      mentions: db.prepare("SELECT COUNT(*) n FROM chat_messages WHERE deleted=0 AND id>? AND user_id<>? AND (','||mentions||',') LIKE ?").get(last, req.user.id, `%,${req.user.id},%`).n });
   });
   app.post('/api/chat', (req, res) => {
     const body = str(req.body.body);
@@ -278,7 +286,14 @@ function mount(app, { MGR, OWNER }) {
     const prev = db.prepare("SELECT body FROM chat_messages WHERE user_id=? AND deleted=0 AND created_at>=datetime('now','localtime','-15 minutes') ORDER BY id DESC LIMIT 1").get(req.user.id);
     if (prev && prev.body.length <= 40) ctx.prev = prev.body;
     const draft = parseBooking(body, ctx);
-    const id = db.prepare('INSERT INTO chat_messages(user_id,body,draft) VALUES (?,?,?)').run(req.user.id, body, draft ? JSON.stringify(draft) : null).lastInsertRowid;
+    const action = draft ? null : act.parseAction(body, ctx, req.user.id);
+    const mentions = act.parseMentions(body, ctx).filter((x) => x !== req.user.id);
+    const id = db.prepare('INSERT INTO chat_messages(user_id,body,draft,action,mentions) VALUES (?,?,?,?,?)')
+      .run(req.user.id, body, draft ? JSON.stringify(draft) : null, action ? JSON.stringify(action) : null, mentions.length ? mentions.join(',') : null).lastInsertRowid;
+    // Thông báo: người được @gọi tên luôn nhận; người chọn "mọi tin" nhận tất cả
+    const others = db.prepare('SELECT id FROM users WHERE active=1 AND can_login=1 AND id<>?').all(req.user.id).map((u) => u.id);
+    push.fire(others.map((uid) => ({ user_id: uid, important: mentions.includes(uid) })),
+      { title: (mentions.length ? '📣 ' : '💬 ') + req.user.full_name, body: short(body), url: '/#chat', tag: 'chat' });
     db.prepare('INSERT INTO chat_reads(user_id,last_id) VALUES (?,?) ON CONFLICT(user_id) DO UPDATE SET last_id=MAX(last_id, excluded.last_id)').run(req.user.id, id);
     // Chế độ tự tạo lịch: chỉ khi đủ tên khách + ngày nói rõ + giờ, và thợ không bị trùng giờ
     let auto = null;
@@ -304,6 +319,36 @@ function mount(app, { MGR, OWNER }) {
     db.prepare('UPDATE chat_messages SET appointment_id=?, linked_by=? WHERE id=?').run(aid, req.user.id, m.id);
     audit(req.user.id, 'chat_to_appointment', 'appointment', aid, { message_id: m.id });
     res.json(msgRows('m.id=?', [m.id], 1)[0]);
+  });
+  // Thẻ việc (chi quỹ, báo hết hàng, xin nghỉ, khách đến): bấm ✓ để ghi vào phần mềm
+  app.post('/api/chat/:id/act', (req, res) => {
+    const m = db.prepare('SELECT * FROM chat_messages WHERE id=? AND deleted=0').get(int(req.params.id));
+    if (!m || !m.action) throw new HttpError(404, 'Không có việc để ghi');
+    if (m.action_done) throw bad('Việc này đã được ghi rồi');
+    const r = act.apply(m, req.body || {}, req.user);
+    db.prepare('UPDATE chat_messages SET action_done=? WHERE id=?').run(JSON.stringify({ text: r.text, ref: r.ref, by: req.user.full_name, at: new Date().toISOString() }), m.id);
+    let to = [];
+    if (r.notify === 'mgr') to = mgrIds();
+    else if (r.notify === 'stock') to = stockIds();
+    else if (r.notify && r.notify.startsWith('staff:')) { const a = db.prepare('SELECT staff_id FROM appointments WHERE id=?').get(Number(r.notify.slice(6))); if (a && a.staff_id) to = [a.staff_id]; }
+    to = to.filter((x) => x !== req.user.id);
+    if (to.length) push.fire(to.map((uid) => ({ user_id: uid, important: true })), { title: '✅ ' + req.user.full_name, body: r.text, url: r.notify === 'stock' ? '/#stock' : r.notify === 'mgr' ? (r.ref || '').startsWith('off') ? '/#offs' : '/#expenses' : '/#appointments', tag: 'act' });
+    res.json(msgRows('m.id=?', [m.id], 1)[0]);
+  });
+  app.post('/api/chat/:id/act-dismiss', (req, res) => {
+    db.prepare('UPDATE chat_messages SET action=NULL WHERE id=? AND action_done IS NULL').run(int(req.params.id));
+    res.json({ ok: true });
+  });
+  // Đăng ký thông báo cho máy này
+  app.get('/api/push', (req, res) => res.json(push.state(req.user.id)));
+  app.post('/api/push/subscribe', (req, res) => {
+    try { push.subscribe(req.user.id, req.body.subscription, req.body.mode); } catch (e) { throw bad(e.message); }
+    res.json(push.state(req.user.id));
+  });
+  app.post('/api/push/unsubscribe', (req, res) => { push.unsubscribe(req.body.endpoint); res.json(push.state(req.user.id)); });
+  app.post('/api/push/test', async (req, res) => {
+    const n = await push.send([{ user_id: req.user.id, important: true }], { title: 'Salon Nếp', body: 'Thông báo đã bật ✓', url: '/#chat', tag: 'test' });
+    res.json({ sent: n });
   });
   app.post('/api/chat/:id/dismiss', (req, res) => {
     db.prepare('UPDATE chat_messages SET draft=NULL WHERE id=? AND appointment_id IS NULL').run(int(req.params.id));
