@@ -38,6 +38,19 @@ function cardBalance(cardId) {
   const used = db.prepare('SELECT COALESCE(SUM(amount),0) s FROM card_txns WHERE card_id=?').get(cardId).s;
   return c.value + used;
 }
+// Thẻ tri ân 1tr: chỉ dùng 1 lần. Dùng chưa hết cũng coi như xong → bỏ phần dư (gắn với lượt, xóa lượt thì thẻ mở lại)
+const GIFT_WRITE_OFF = 'Thẻ tri ân chỉ dùng 1 lần – phần dư không giữ lại';
+function closeGiftAfterUse(cardId, visitId, userId) {
+  const c = db.prepare('SELECT sale_type FROM cards WHERE id=?').get(cardId);
+  if (!c || c.sale_type !== 'gift') return;
+  const rest = cardBalance(cardId);
+  if (rest > 0) db.prepare('INSERT INTO card_txns(card_id,visit_id,amount,note,created_by) VALUES (?,?,?,?,?)').run(cardId, visitId, -rest, GIFT_WRITE_OFF, userId);
+  db.prepare("UPDATE cards SET status='closed' WHERE id=?").run(cardId);
+}
+function reopenGift(cardId) {
+  const c = db.prepare('SELECT sale_type, status FROM cards WHERE id=?').get(cardId);
+  if (c && c.sale_type === 'gift' && c.status === 'closed' && cardBalance(cardId) > 0) db.prepare("UPDATE cards SET status='active' WHERE id=?").run(cardId);
+}
 function cardRow(c) {
   return { ...c, balance: cardBalance(c.id) };
 }
@@ -153,10 +166,12 @@ function saveVisit(input, user, existing, opts = {}) {
     const card = db.prepare('SELECT * FROM cards WHERE id=?').get(cardId);
     // Thẻ tặng được phép cho người khác dùng (khách tặng lại bạn bè/người nhà); thẻ mua thì chỉ chủ thẻ dùng
     if (!card || (card.customer_id !== customerId && card.sale_type !== 'gift')) throw bad('Thẻ không thuộc khách này');
-    if (card.status !== 'active') throw bad('Thẻ đã đóng/hoàn');
+    const sameCard = !isNew && existing.card_id === cardId;
+    if (card.status !== 'active' && !sameCard) throw bad('Thẻ đã đóng/hoàn');
     if (card.expires_at && card.expires_at < date && (isNew || existing.card_id !== cardId)) throw bad('Thẻ đã hết hạn ' + card.expires_at + ' — nhờ quản lý gia hạn');
     let bal = cardBalance(cardId);
-    if (!isNew && existing.card_id === cardId) bal += existing.card_paid;
+    // Sửa lại lượt đã trừ thẻ: hoàn lại mọi khoản của lượt này (tiền trừ + phần dư thẻ tri ân đã bỏ) rồi tính lại
+    if (sameCard) bal -= db.prepare('SELECT COALESCE(SUM(amount),0) s FROM card_txns WHERE visit_id=? AND card_id=?').get(existing.id, cardId).s;
     if (cardPaid === 0) cardPaid = Math.min(bal, total);
     if (cardPaid > bal) throw bad('Số dư thẻ chỉ còn ' + bal.toLocaleString('vi-VN') + 'đ');
     if (cardPaid > total) throw bad('Tiền trừ thẻ lớn hơn tổng tiền');
@@ -241,7 +256,9 @@ function saveVisit(input, user, existing, opts = {}) {
       const owner = db.prepare('SELECT customer_id FROM cards WHERE id=?').get(cardId).customer_id;
       const forName = owner !== customerId ? db.prepare('SELECT name FROM customers WHERE id=?').get(customerId).name : null;
       db.prepare('INSERT INTO card_txns(card_id,visit_id,amount,note,created_by) VALUES (?,?,?,?,?)').run(cardId, id, -cardPaid, forName ? 'Dùng cho ' + forName + ' (được tặng lại)' : 'Dùng cho lượt làm', user.id);
+      closeGiftAfterUse(cardId, id, user.id);
     }
+    if (!isNew && existing.card_id && existing.card_id !== cardId) reopenGift(existing.card_id);
     if (input.appointment_id) {
       db.prepare("UPDATE appointments SET status='done', visit_id=?, customer_id=?, guest_name=NULL, guest_phone=NULL WHERE id=?").run(id, customerId, int(input.appointment_id));
     }
@@ -275,6 +292,7 @@ function deleteVisit(id, reason, user) {
   db.transaction(() => {
     db.prepare("UPDATE visits SET status='deleted', delete_reason=?, updated_at=? WHERE id=?").run(str(reason), new Date().toISOString(), id);
     db.prepare('DELETE FROM card_txns WHERE visit_id=?').run(id);
+    if (v.card_id) reopenGift(v.card_id);
     require('./stock').clearVisit(id);
     audit(user.id, 'delete_visit', 'visit', id, { reason, total: v.total, cash_paid: v.cash_paid, date: v.date });
   })();
@@ -368,7 +386,9 @@ function salesReport(from, to, user) {
     service_sales: visits.reduce((s, v) => s + v.total, 0),
     paid_by_card: visits.reduce((s, v) => s + v.card_paid, 0),
     paid_by_gift: visits.reduce((s, v) => s + (v.card_id && giftCards.has(v.card_id) ? v.card_paid : 0), 0),
-    service_cash: visits.reduce((s, v) => s + v.cash_paid, 0),
+    // Ô hồng trên sổ (khách chưa trả) → vẫn là doanh số đã làm, nhưng CHƯA phải tiền vào; trả rồi (chọn hình thức TT) thì tính
+    unpaid: visits.reduce((s, v) => s + (!v.payment_method && /CHƯA THANH TOÁN/.test(v.note || '') ? v.cash_paid : 0), 0),
+    service_cash: visits.reduce((s, v) => s + (!v.payment_method && /CHƯA THANH TOÁN/.test(v.note || '') ? 0 : v.cash_paid), 0),
     card_sales: cards.reduce((s, c) => s + c.price, 0),
     tips: visits.reduce((s, v) => s + v.tip, 0),
     discounts: visits.reduce((s, v) => s + v.discount, 0),
@@ -514,6 +534,6 @@ module.exports = {
   cardCommission, cardSplit,
   staffCustomerReport,
   HttpError, bad, int, str, today, addDays, addMonths, isDate, normPhone, localDate,
-  cardBalance, cardRow, sellCard, saveVisit, surchargeSplit, updateVisitNotes, deleteVisit, getVisit, maskVisitMoney, canEditVisit,
+  cardBalance, cardRow, closeGiftAfterUse, GIFT_WRITE_OFF, sellCard, saveVisit, surchargeSplit, updateVisitNotes, deleteVisit, getVisit, maskVisitMoney, canEditVisit,
   salesReport, reminders, nextBirthday,
 };

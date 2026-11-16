@@ -855,6 +855,7 @@ if (require.main === module) {
   app.listen(port, () => console.log(`CRM Salon Nếp chạy tại http://localhost:${port}`));
   startBackups();
   gsync.startAutoSync();
+  try { const n = require('./importer').closeUsedGifts(); if (n) console.log(`Đã đóng ${n} thẻ tri ân đã dùng 1 lần`); } catch (e) { console.error('Đóng thẻ tri ân lỗi:', e.message); }
   try { const n = require('./importer').dedupeVisits(); if (n) console.log(`Đã dọn ${n} lượt làm trùng do sổ sửa chữ`); } catch (e) { console.error('Dọn lượt trùng lỗi:', e.message); }
   try { const n = require('./importer').dedupeAppointments(); if (n) console.log(`Đã dọn ${n} lịch hẹn trùng`); } catch (e) { console.error('Dọn lịch trùng lỗi:', e.message); }
 }

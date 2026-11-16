@@ -146,6 +146,40 @@ function dedupeAppointments() {
 }
 
 // Dọn lượt làm bị tạo 2 lần do ô sổ sửa chữ trước đây (cùng ngày, giờ, thợ, cùng khách/tên): giữ lượt đã sửa tay hoặc lượt mới nhất, xóa bản còn lại
+// Lượt trùng bị xóa đang giữ phần trừ thẻ (thẻ tri ân…) mà lượt giữ lại chưa trừ → chuyển phần trừ thẻ sang lượt giữ lại
+function moveCardUse(fromId, toId) {
+  const d = db.prepare('SELECT * FROM visits WHERE id=?').get(fromId), k = db.prepare("SELECT * FROM visits WHERE id=? AND status='done'").get(toId);
+  if (!d || !k || !d.card_id || !(d.card_paid > 0) || k.card_id) return false;
+  const live = db.prepare('SELECT COALESCE(SUM(amount),0) s FROM card_txns WHERE visit_id=?').get(fromId).s;
+  const pay = Math.min(d.card_paid, k.total, L.cardBalance(d.card_id) - live);
+  if (!(pay > 0)) return false;
+  db.prepare('UPDATE card_txns SET visit_id=? WHERE visit_id=?').run(toId, fromId);
+  db.prepare('DELETE FROM card_txns WHERE visit_id=? AND card_id=?').run(toId, d.card_id);
+  db.prepare('UPDATE visits SET card_id=?, card_paid=?, cash_paid=? WHERE id=?').run(d.card_id, pay, Math.max(0, k.total - pay), toId);
+  db.prepare('INSERT INTO card_txns(card_id,visit_id,amount,note,created_by) VALUES (?,?,?,?,1)').run(d.card_id, toId, -pay, 'Dùng cho lượt làm (chuyển từ lượt trùng ' + fromId + ')');
+  L.closeGiftAfterUse(d.card_id, toId, 1);
+  return true;
+}
+// Sửa dữ liệu bản trước: dọn trùng đã xóa lượt cũ có trừ thẻ → thẻ tri ân bị "hoàn" lại như chưa dùng
+function repairDedupedCards() {
+  let n = 0;
+  for (const d of db.prepare("SELECT id, delete_reason FROM visits WHERE status='deleted' AND card_id IS NOT NULL AND card_paid>0 AND delete_reason LIKE 'Trùng: ô sổ đặt lịch%'").all()) {
+    const m = /giữ lượt (\d+)/.exec(d.delete_reason || '');
+    if (m && moveCardUse(d.id, Number(m[1]))) n++;
+  }
+  return n;
+}
+function closeUsedGifts() {
+  repairDedupedCards();
+  let n = 0;
+  for (const c of db.prepare(`SELECT c.id FROM cards c WHERE c.sale_type='gift' AND EXISTS (SELECT 1 FROM card_txns t WHERE t.card_id=c.id AND t.amount<0 AND t.note<>?)`).all(L.GIFT_WRITE_OFF)) {
+    const last = db.prepare('SELECT visit_id FROM card_txns WHERE card_id=? AND amount<0 AND note<>? ORDER BY (visit_id IS NULL), id DESC LIMIT 1').get(c.id, L.GIFT_WRITE_OFF);
+    const before = L.cardBalance(c.id);
+    L.closeGiftAfterUse(c.id, last ? last.visit_id : null, 1);
+    if (before > 0) n++;
+  }
+  return n;
+}
 function dedupeVisits() {
   const cellText = (v) => String(v.note || '').replace(/^Sổ đặt lịch: /, '').split(' · ')[0];
   const rows = db.prepare("SELECT id, date, time, main_staff_id, customer_id, note, manual_edit FROM visits WHERE status='done' AND import_ref LIKE 'SO:%' ORDER BY id").all();
@@ -165,6 +199,7 @@ function dedupeVisits() {
       if (same.length < 2) continue;
       same.sort((x, y) => (y.manual_edit || 0) - (x.manual_edit || 0) || y.id - x.id);
       for (const d of same.slice(1)) {
+        moveCardUse(d.id, same[0].id);
         L.deleteVisit(d.id, 'Trùng: ô sổ đặt lịch bị sửa chữ nên nhập 2 lần (giữ lượt ' + same[0].id + ')', { id: 1 });
         db.prepare('UPDATE appointments SET visit_id=? WHERE visit_id=?').run(same[0].id, d.id);
         removed++;
@@ -661,11 +696,12 @@ async function importWorkbook(buffer, opts, user) {
                 st.cards_created.push(`${dayLabel} ${BM.cleanName(e.text) || e.text.slice(0, 30)}`);
               }
               if (!ex || ex.card_id !== card.id) {
-                const loose = db.prepare('SELECT id FROM card_txns WHERE card_id=? AND visit_id IS NULL AND amount<0 ORDER BY id LIMIT 1').get(card.id);
+                const loose = db.prepare('SELECT id FROM card_txns WHERE card_id=? AND visit_id IS NULL AND amount<0 AND note<>? ORDER BY id LIMIT 1').get(card.id, L.GIFT_WRITE_OFF);
+                if (loose) db.prepare('DELETE FROM card_txns WHERE card_id=? AND visit_id IS NULL AND note=?').run(card.id, L.GIFT_WRITE_OFF);
                 if (loose) db.prepare('DELETE FROM card_txns WHERE id=?').run(loose.id);
               }
               db.prepare("UPDATE cards SET status='active' WHERE id=?").run(card.id);
-              const bal = L.cardBalance(card.id) + (ex && ex.card_id === card.id ? ex.card_paid : 0);
+              const bal = L.cardBalance(card.id) - (ex && ex.card_id === card.id ? db.prepare('SELECT COALESCE(SUM(amount),0) s FROM card_txns WHERE visit_id=? AND card_id=?').get(ex.id, card.id).s : 0);
               input.card_id = card.id; input.card_paid = Math.min(e.voucher, Math.max(0, bal));
               if (!input.card_paid) { input.card_id = null; delete input.card_paid; }
               else { st.voucher += input.card_paid; input.note += ` · trừ thẻ tri ân ${card.code} ${input.card_paid.toLocaleString('vi-VN')}`; }
@@ -784,6 +820,7 @@ async function importWorkbook(buffer, opts, user) {
     if (e !== ROLLBACK) throw e;
   }
   if (!opts.dryRun) try { summary.visits_deduped = dedupeVisits(); } catch (e) { summary.warnings.push('Dọn lượt trùng: ' + e.message); }
+  if (!opts.dryRun) try { summary.gifts_closed = closeUsedGifts(); } catch (e) { summary.warnings.push('Đóng thẻ tri ân: ' + e.message); }
   if (!opts.dryRun) try { summary.appointments_deduped = dedupeAppointments(); } catch (e) { summary.warnings.push('Dọn lịch trùng: ' + e.message); }
   if (!opts.dryRun) try { require('./datafix').apply(); } catch (e) { summary.warnings.push('Bổ sung công thức: ' + e.message); }
   if (ws('Lịch sử') && !opts.includeHistory) summary.warnings.push('Chưa nhập lượt làm "Hoàn thành" từ tab "Lịch sử" (CRM Nếp Hair) vì trùng với Nhật ký dịch vụ. Tick "Nhập cả lịch sử" nếu cần.');
@@ -791,4 +828,4 @@ async function importWorkbook(buffer, opts, user) {
 }
 
 const VERSION = 3; // 2: không ghép "E Quang" vào "Quang Anh"
-module.exports = { VERSION, dedupeVisits, dedupeAppointments, apptKey, importWorkbook, asDate, asTime };
+module.exports = { VERSION, dedupeVisits, closeUsedGifts, dedupeAppointments, apptKey, importWorkbook, asDate, asTime };
