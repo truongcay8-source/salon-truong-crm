@@ -57,6 +57,31 @@ for (const c of ['min_qty REAL', 'ordered_at TEXT', 'ordered_by INTEGER']) {
 if (!db.prepare('PRAGMA table_info(materials)').all().some((x) => x.name === 'formula_keys')) {
   db.exec('ALTER TABLE materials ADD COLUMN formula_keys TEXT; ALTER TABLE materials ADD COLUMN formula_default INTEGER NOT NULL DEFAULT 0');
 }
+// Giá thị trường 1 đơn vị: dùng tính giá cốt khi hàng nhập 0đ (hàng tặng) – tiền thật phải bỏ ra nếu mua lại
+if (!db.prepare('PRAGMA table_info(materials)').all().some((x) => x.name === 'ref_cost')) db.exec('ALTER TABLE materials ADD COLUMN ref_cost INTEGER');
+// Dung tích / giá tham chiếu tra từ web hãng & shop (17/11/2026). Chỉ điền ô đang trống, quản lý sửa được ở Kho.
+// [mẫu tên, dung tích, đơn vị, giá thị trường 1 đơn vị nếu nhập 0đ, ghi chú nguồn]
+const SIZE_FILL = [
+  [/^màu davines mask$/i, 100, 'ml', null, 'Davines Mask with Vibrachrom tuýp 100ml (davinespro.com)'],
+  [/^màu guytang$/i, 57, 'g', null, 'Guy Tang #mydentity tuýp 2oz ≈ 57g (giả định đúng dòng #mydentity)'],
+  [/^màu jaas$/i, 100, 'ml', null, 'Giả định 100ml như tuýp màu salon phổ thông – chưa tìm thấy thông tin hãng'],
+  [/^bột tẩy$/i, 500, 'g', null, 'Giả định hộp 500g (cỡ phổ biến) – kiểm tra nhãn hộp'],
+  [/^strong gel davines$/i, 125, 'ml', null, 'Davines More Inside Strong Hold Cream Gel 125ml'],
+  [/^moisture mousse davines$/i, 250, 'ml', null, 'Davines Curl Moisturizing Mousse 250ml'],
+  [/activator 20vol/i, 900, 'ml', 306000, 'Nhập 0đ → lấy giá Activator 10/40vol cùng NCC 306.000đ/900ml'],
+  [/activator 30vol/i, 900, 'ml', 306000, 'Nhập 0đ → lấy giá Activator 10/40vol cùng NCC 306.000đ/900ml'],
+  [/blonde perfecting purple.*1000ml/i, 1000, 'ml', 1220000, 'Hàng tặng → ước tính ≈ 3 × chai 200ml (408.000đ), theo tỷ lệ giá 200ml/1L ở các shop nước ngoài'],
+];
+function fillSizes() {
+  const rows = db.prepare('SELECT id, name, size, ref_cost, note FROM materials').all();
+  for (const m of rows) {
+    const f = SIZE_FILL.find(([re]) => re.test(String(m.name || '').trim()));
+    if (!f) continue;
+    const [, size, unit, ref, src] = f;
+    if (m.size == null) db.prepare('UPDATE materials SET size=?, size_unit=?, note=? WHERE id=?').run(size, unit, [m.note, 'Dung tích: ' + src].filter(Boolean).join(' · '), m.id);
+    if (ref && m.ref_cost == null) db.prepare('UPDATE materials SET ref_cost=? WHERE id=?').run(ref, m.id);
+  }
+}
 function seedFormulaKeys() {
   const SEED = [
     [/^màu milbon addicthy/i, 'addicthy,graypearl,gray pearl,cobalt,colbalt,blue,silver,moonstone,sapphire,amethyst,ocean,purple,pink,red'],
@@ -78,6 +103,7 @@ function seedFormulaKeys() {
   }
 }
 seedFormulaKeys();
+fillSizes();
 
 const isMgr = (u) => u.role !== 'staff';
 // Quyền kho cho nhân viên: xem tồn + báo hàng hết (mặc định Chị Thu, Dương), kiểm kho đếm hàng (mặc định Dương)
@@ -116,7 +142,10 @@ const r2 = (x) => Math.round(x * 1000) / 1000;
 // Giá vốn bình quân 1 đơn vị (tuýp/chai/hộp)
 function avgCost(mid) {
   const r = db.prepare("SELECT SUM(qty) q, SUM(qty*unit_cost) a FROM stock_moves WHERE material_id=? AND kind='in'").get(mid);
-  return r.q > 0 ? r.a / r.q : 0;
+  const avg = r.q > 0 ? r.a / r.q : 0;
+  if (avg > 0) return avg;
+  const m = db.prepare('SELECT ref_cost FROM materials WHERE id=?').get(mid);
+  return m && m.ref_cost > 0 ? m.ref_cost : 0;
 }
 function stockOf(mid) { return db.prepare('SELECT COALESCE(SUM(qty),0) q FROM stock_moves WHERE material_id=?').get(mid).q; }
 
@@ -140,7 +169,7 @@ function materialRows(user, opts = {}) {
       formula_keys: m.formula_keys, formula_default: m.formula_default };
     if (!isMgr(user)) return base;
     const cost = avgCost(m.id), stock = stockOf(m.id);
-    return { ...base, note: m.note, avg_cost: Math.round(cost), cost_per_size: m.size ? cost / m.size : null, stock: r2(stock), stock_value: Math.round(stock * cost) };
+    return { ...base, note: m.note, ref_cost: m.ref_cost, avg_cost: Math.round(cost), cost_per_size: m.size ? cost / m.size : null, stock: r2(stock), stock_value: Math.round(stock * cost) };
   });
 }
 
@@ -267,6 +296,7 @@ function mount(app, { MGR }) {
     const sz = Number(b.size) > 0 ? Number(b.size) : null;
     return { name, kind: b.kind === 'retail' ? 'retail' : 'service', grp: str(b.grp), unit: str(b.unit), size: sz, size_unit: sz ? (b.size_unit === 'g' ? 'g' : 'ml') : null,
       sell_price: b.sell_price === '' || b.sell_price == null ? null : Math.max(0, int(b.sell_price)), active: b.active === false || b.active === 0 || b.active === '0' ? 0 : 1, note: str(b.note),
+      ref_cost: b.ref_cost === '' || b.ref_cost == null ? null : Math.max(0, int(b.ref_cost)) || null,
       formula_keys: str(b.formula_keys), formula_default: b.formula_default === '1' || b.formula_default === 1 || b.formula_default === true ? 1 : 0 };
   };
   const oneDefault = (id, m) => { if (m.formula_default) db.prepare('UPDATE materials SET formula_default=0 WHERE id<>?').run(id); };
@@ -353,4 +383,4 @@ function mount(app, { MGR }) {
 }
 
 module.exports = {
-  perm, stockAlerts, mount, applyVisit, clearVisit, visitMaterials, importPurchases: (...a) => { const r = importPurchases(...a); seedFormulaKeys(); return r; }, avgCost, parseSize, seedFormulaKeys };
+  perm, stockAlerts, mount, applyVisit, clearVisit, visitMaterials, importPurchases: (...a) => { const r = importPurchases(...a); seedFormulaKeys(); fillSizes(); return r; }, avgCost, parseSize, seedFormulaKeys, fillSizes };
