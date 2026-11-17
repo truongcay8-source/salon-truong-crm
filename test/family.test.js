@@ -399,3 +399,20 @@ test('kho: tự điền dung tích hàng thiếu + giá thị trường cho hàn
   assert.equal(St.avgCost(a), 306000, 'nhập 0đ → lấy giá thị trường');
   assert.equal(db.prepare('SELECT size FROM materials WHERE id=?').get(k).size, 60, 'không ghi đè dung tích đã khai');
 });
+
+test('doanh số: bán sản phẩm, bán thẻ, làm phụ tách riêng – không cộng vào DS tính thưởng', async () => {
+  const o = client();
+  assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const duong = db.prepare("SELECT id FROM users WHERE username='duong'").get().id;
+  const cut = db.prepare("SELECT id FROM services WHERE active=1 AND grp='Cắt' AND price>0 ORDER BY id LIMIT 1").get();
+  const prod = db.prepare("SELECT id FROM services WHERE grp='Bán sản phẩm' ORDER BY id LIMIT 1").get();
+  const cid = (await o.post('/customers', { name: 'Khách tách DS', phone: '0913999666' })).data.id;
+  const r = await o.post('/visits', { customer_id: cid, date: '2026-08-12', time: '10:00', main_staff_id: duong, payment_method: 'Tiền mặt',
+    items: [{ service_id: cut.id, price: 500000 }, { service_id: prod.id, name: 'Sáp', grp: 'Bán sản phẩm', price: 400000 }] });
+  assert.equal(r.status, 200);
+  const rep = (await o.get('/reports/sales?from=2026-08-12&to=2026-08-12')).data;
+  const x = rep.rows.find((y) => y.user_id === duong);
+  assert.equal(x.product_sales, 400000);
+  assert.equal(x.service_sales, 500000);
+  assert.equal(x.bonus_sales, 500000, 'sản phẩm không vào DS tính thưởng');
+});

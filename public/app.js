@@ -2013,6 +2013,13 @@ VIEWS.sales = async (main) => {
   const [r, sc] = await Promise.all([api(`/reports/sales?from=${from}&to=${to}`), api(`/reports/staff-customers?from=${from}&to=${to}`)]);
   const s = r.summary;
   const G = S.groups;
+  const GS = G.filter((g) => g !== 'Bán sản phẩm'); // nhóm dịch vụ (bán sản phẩm tách riêng)
+  for (const x of r.rows) {
+    // Khác + phụ thu = phần DS dịch vụ không thuộc nhóm nào (dịch vụ chưa rõ, phụ thu sau 19h…) → cộng đủ ra "DS dịch vụ"
+    x.other_sales = x.service_sales - GS.reduce((a, g) => a + (x.by_group[g] || 0), 0);
+    x.product_commission = x.product_commission || 0;
+    x.service_commission = x.main_commission - x.product_commission;
+  }
   main.innerHTML = header('Doanh số & hoa hồng', isMgr() ? 'Toàn tiệm' : 'Chỉ hiển thị số liệu của bạn') +
     `<div class="card"><div class="row"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="t" value="${to}" style="width:auto">
       <button class="btn sm" data-p="today">Hôm nay</button><button class="btn sm" data-p="month">Tháng này</button><button class="btn sm" data-p="last">Tháng trước</button><button class="btn sm" data-p="all">Từ khai trương</button></div></div>
@@ -2025,23 +2032,34 @@ VIEWS.sales = async (main) => {
       <div class="card"><h3>Tiền vào theo hình thức</h3>${Object.entries(s.by_method).map(([k, v]) => `<div class="stat-line"><span>${esc(k)}</span><b>${money(v)}</b></div>`).join('') || '<div class="empty">—</div>'}</div>` : ''}
     ${!isMgr() ? r.rows.map((x) => `<div class="card"><h3>${esc(x.name)}</h3>
       <div class="stat-line"><span class="muted">Lượt làm chính / phụ</span><b>${x.main_count} / ${x.assist_count}</b></div>
-      ${G.map((g) => `<div class="stat-line"><span class="muted">DS ${esc(g)}</span><b>${money(x.by_group[g])}</b></div>`).join('')}
-      <div class="stat-line"><span>Tổng doanh số</span><b>${money(x.sales)}</b></div>
-      ${x.gift_sales ? `<div class="stat-line"><span class="muted">− trong đó khách trả bằng thẻ tri ân</span><b>${money(x.gift_sales)}</b></div>` : ''}
-      ${x.family_sales ? `<div class="stat-line"><span class="muted">− trong đó người nhà chủ</span><b>${money(x.family_sales)}</b></div>` : ''}
-      ${x.gift_sales || x.family_sales ? `<div class="stat-line"><span>Doanh số tính thưởng</span><b>${money(x.bonus_sales)}</b></div>` : ''}
+      <div class="small" style="margin-top:6px"><b>① Doanh số dịch vụ</b> (xét thưởng)</div>
+      ${GS.map((g) => `<div class="stat-line"><span class="muted">DS ${esc(g)}</span><b>${money(x.by_group[g])}</b></div>`).join('')}
+      ${x.other_sales ? `<div class="stat-line"><span class="muted">DS khác + phụ thu</span><b>${money(x.other_sales)}</b></div>` : ''}
+      ${x.gift_sales ? `<div class="stat-line"><span class="muted">− khách trả bằng thẻ tri ân</span><b>${money(x.gift_sales)}</b></div>` : ''}
+      ${x.family_sales ? `<div class="stat-line"><span class="muted">− người nhà chủ</span><b>${money(x.family_sales)}</b></div>` : ''}
+      <div class="stat-line"><span>DS tính thưởng</span><b>${money(x.bonus_sales)}</b></div>
+      <div class="small" style="margin-top:6px"><b>② Doanh số riêng</b> (không cộng vào ①)</div>
+      <div class="stat-line"><span class="muted">Bán sản phẩm</span><b>${money(x.product_sales)}</b></div>
+      <div class="stat-line"><span class="muted">Bán thẻ (${x.cards_count} thẻ)</span><b>${money(x.cards_amount)}</b></div>
+      <div class="stat-line"><span class="muted">Làm phụ</span><b>${money(x.assist_sales)}</b></div>
+      <div class="small" style="margin-top:6px"><b>③ Hoa hồng</b></div>
       <div class="stat-line"><span class="muted">HH dịch vụ</span><b>${money(x.main_commission)}</b></div>
       <div class="stat-line"><span class="muted">HH làm phụ</span><b>${money(x.assistant_commission)}</b></div>
       <div class="stat-line"><span class="muted">HH bán thẻ (${x.cards_count} thẻ)</span><b>${money(x.card_commission)}</b></div>
       ${x.surcharge_share ? `<div class="stat-line"><span class="muted">Phần phụ thu được chia</span><b>${money(x.surcharge_share)}</b></div>` : ''}
       <div class="stat-line"><span>Tổng hoa hồng (tạm tính)</span><b>${money(x.total_commission)}</b></div>
       <div class="stat-line"><span class="muted">Tip khách ghi ở lượt</span><b>${money(x.tip)}</b></div></div>`).join('') : ''}
-    <div class="card ${!isMgr() ? 'hidden' : ''}"><h3>Theo nhân viên</h3><div class="table-wrap"><table><thead><tr><th>Nhân viên</th><th class="num">Lượt chính</th><th class="num">Lượt phụ</th>${G.map((g) => `<th class="num">${esc(g)}</th>`).join('')}<th class="num">Tổng DS</th><th class="num">Thẻ tri ân</th><th class="num">Người nhà</th><th class="num">DS tính thưởng</th>
-      <th class="num">HH dịch vụ</th><th class="num">HH phụ</th><th class="num">Thẻ bán</th><th class="num">HH thẻ</th><th class="num">Phụ thu</th><th class="num">Tổng HH</th><th class="num">Tip</th></tr></thead>
-      <tbody>${r.rows.map((x) => `<tr><td><a href="#" data-sl="${x.user_id}" data-g=""><b>${esc(x.name)}</b></a></td><td class="num">${x.main_count}</td><td class="num">${x.assist_count}</td>${G.map((g) => `<td class="num">${x.by_group[g] ? `<a href="#" data-sl="${x.user_id}" data-g="${esc(g)}">${money(x.by_group[g])}</a>` : money(0)}</td>`).join('')}
-      <td class="num"><a href="#" data-sl="${x.user_id}" data-g=""><b>${money(x.sales)}</b></a></td><td class="num">${x.gift_sales ? '−' + money(x.gift_sales) : '–'}</td><td class="num">${x.family_sales ? '−' + money(x.family_sales) : '–'}</td><td class="num"><b>${money(x.bonus_sales)}</b></td><td class="num">${money(x.main_commission)}</td><td class="num">${money(x.assistant_commission)}</td><td class="num">${x.cards_count} · ${money(x.cards_amount)}</td>
-      <td class="num">${money(x.card_commission)}</td><td class="num">${money(x.surcharge_share)}</td><td class="num"><b>${money(x.total_commission)}</b></td><td class="num">${money(x.tip)}</td></tr>`).join('')}</tbody></table></div>
-      <div class="small muted" style="margin-top:8px">Hoa hồng tạm tính theo % từng dịch vụ (Cài đặt › Dịch vụ) và % người phụ, bán thẻ (Cài đặt › Tham số). Phụ thu: cửa hàng giữ ${Math.round((S.settings.surcharge_salon_rate ?? 0.33) * 100)}%, còn lại chia thợ chính / người phụ của lượt đó. Chưa gồm lương cứng, thưởng mốc doanh số. <b>DS tính thưởng</b> = Tổng DS trừ phần khách trả bằng thẻ tri ân (chi phí cửa hàng) và lượt của người nhà chủ; hoa hồng % từng dịch vụ vẫn tính đủ. Tip được chia chung ở trang <a href="#tips">Chia tip</a>.</div></div>
+    <div class="card ${!isMgr() ? 'hidden' : ''}"><h3>Theo nhân viên</h3><div class="table-wrap"><table class="sales-split"><thead>
+      <tr><th rowspan="2">Nhân viên</th><th class="grp-svc" colspan="${GS.length + 5}">① DOANH SỐ DỊCH VỤ tự làm → xét thưởng / nhân hệ số</th><th class="grp-own" colspan="3">② DOANH SỐ RIÊNG – KHÔNG cộng vào ①</th><th class="grp-hh" colspan="6">③ HOA HỒNG</th><th rowspan="2" class="num">Tip</th></tr>
+      <tr>${GS.map((g) => `<th class="num grp-svc">${esc(g)}</th>`).join('')}<th class="num grp-svc">Khác + phụ thu</th><th class="num grp-svc">DS dịch vụ</th><th class="num grp-svc">− Tri ân</th><th class="num grp-svc">− Người nhà</th><th class="num grp-svc">DS tính thưởng</th>
+        <th class="num grp-own">Bán sản phẩm</th><th class="num grp-own">Bán thẻ</th><th class="num grp-own">Làm phụ (${'lượt'})</th>
+        <th class="num grp-hh">HH dịch vụ</th><th class="num grp-hh">HH phụ</th><th class="num grp-hh">HH thẻ</th><th class="num grp-hh">HH SP</th><th class="num grp-hh">Phụ thu</th><th class="num grp-hh">Tổng HH</th></tr></thead>
+      <tbody>${r.rows.map((x) => `<tr><td><a href="#" data-sl="${x.user_id}" data-g=""><b>${esc(x.name)}</b></a><div class="small muted">${x.main_count} lượt chính</div></td>
+        ${GS.map((g) => `<td class="num">${x.by_group[g] ? `<a href="#" data-sl="${x.user_id}" data-g="${esc(g)}">${money(x.by_group[g])}</a>` : '–'}</td>`).join('')}
+        <td class="num">${x.other_sales ? `<a href="#" data-sl="${x.user_id}" data-g="Khác">${money(x.other_sales)}</a>` : '–'}</td><td class="num">${money(x.service_sales)}</td><td class="num">${x.gift_sales ? '−' + money(x.gift_sales) : '–'}</td><td class="num">${x.family_sales ? '−' + money(x.family_sales) : '–'}</td><td class="num grp-key"><b>${money(x.bonus_sales)}</b></td>
+        <td class="num">${x.product_sales ? `<a href="#" data-sl="${x.user_id}" data-g="Bán sản phẩm">${money(x.product_sales)}</a>` : '–'}</td><td class="num">${x.cards_count ? `${money(x.cards_amount)}<div class="small muted">${x.cards_count} thẻ</div>` : '–'}</td><td class="num">${x.assist_sales ? `${money(x.assist_sales)}<div class="small muted">${x.assist_count} lượt</div>` : '–'}</td>
+        <td class="num">${money(x.service_commission)}</td><td class="num">${money(x.assistant_commission)}</td><td class="num">${money(x.card_commission)}</td><td class="num">${money(x.product_commission)}</td><td class="num">${money(x.surcharge_share)}</td><td class="num"><b>${money(x.total_commission)}</b></td><td class="num">${money(x.tip)}</td></tr>`).join('')}</tbody></table></div>
+      <div class="small muted" style="margin-top:8px">Hoa hồng tạm tính theo % từng dịch vụ (Cài đặt › Dịch vụ) và % người phụ, bán thẻ (Cài đặt › Tham số). Phụ thu: cửa hàng giữ ${Math.round((S.settings.surcharge_salon_rate ?? 0.33) * 100)}%, còn lại chia thợ chính / người phụ của lượt đó. Chưa gồm lương cứng, thưởng mốc doanh số. <b>DS tính thưởng</b> = chỉ doanh số DỊCH VỤ tự làm, trừ phần khách trả bằng thẻ tri ân (chi phí cửa hàng) và lượt của người nhà chủ. <b>Bán sản phẩm, bán thẻ, làm phụ là doanh số riêng</b>: chỉ hưởng % hoa hồng của từng loại, KHÔNG cộng vào DS tính thưởng. Tip được chia chung ở trang <a href="#tips">Chia tip</a>.</div></div>
     ${staffCustomerCard(sc)}`;
   const set = (a, b) => go('sales', { from: a, to: b });
   $$('[data-sl]', main).forEach((a) => (a.onclick = (e) => { e.preventDefault(); salesLines(from, to, Number(a.dataset.sl), a.dataset.g, () => VIEWS.sales(main)); }));
