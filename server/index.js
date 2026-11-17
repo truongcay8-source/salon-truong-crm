@@ -702,7 +702,10 @@ app.get('/api/reports/sales', (req, res) => {
   const t = today();
   const from = L.isDate(req.query.from) ? req.query.from : t.slice(0, 8) + '01';
   const to = L.isDate(req.query.to) ? req.query.to : t;
-  res.json(L.salesReport(from, to, req.user));
+  const rep = L.salesReport(from, to, req.user);
+  // Tổng doanh số toàn tiệm (dịch vụ / sản phẩm / thẻ / tiền vào) chỉ Lãnh đạo xem
+  if (req.user.role !== 'owner') rep.summary = null;
+  res.json(rep);
 });
 // Bấm vào số trong bảng "Theo nhân viên" → các dòng hóa đơn tạo nên số đó (để tra soát, sửa người làm từng dòng)
 app.get('/api/reports/sales-lines', (req, res) => {
@@ -791,6 +794,7 @@ app.get('/api/dashboard', (req, res) => {
     WHERE a.date=? ORDER BY a.time`).all(t);
   const rep = L.salesReport(t, t, req.user);
   const month = L.salesReport(t.slice(0, 8) + '01', t, req.user);
+  if (req.user.role !== 'owner') { rep.summary = null; month.summary = null; } // tổng tiệm chỉ Lãnh đạo xem
   const rem = L.reminders();
   res.json({ today: t, appointments: appts, today_report: rep, month_report: month, reminder_counts: rem.counts,
     customers: db.prepare('SELECT COUNT(*) n FROM customers WHERE deleted=0').get().n });

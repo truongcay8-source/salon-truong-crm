@@ -127,8 +127,10 @@ test('luồng chính và phân quyền', async () => {
   // Doanh số: nhân viên chỉ thấy dòng của mình, không có tổng tiệm
   r = await duong.get('/reports/sales');
   assert.equal(r.data.summary, null); assert.equal(r.data.rows.length, 1); assert.equal(r.data.rows[0].sales, 1600000);
-  r = await mgr.get('/reports/sales');
+  assert.equal((await mgr.get('/reports/sales')).data.summary, null, 'tổng doanh số toàn tiệm chỉ Lãnh đạo xem');
+  r = await owner.get('/reports/sales');
   assert.equal(r.data.summary.service_sales, 1600000);
+  assert.equal(r.data.summary.shop_service_sales + r.data.summary.product_sales, 1600000);
   assert.equal(r.data.summary.money_in, 600000 + 2000000, 'tiền vào = thu dịch vụ + bán thẻ');
   assert.equal(r.data.summary.paid_by_card, 1000000);
 
@@ -142,7 +144,7 @@ test('luồng chính và phân quyền', async () => {
   r = await duong.post('/visits', { customer_id: ban, main_staff_id: staff['Dương'], items: [{ service_id: nhuom.id }], card_id: giftId, payment_method: 'Tiền mặt' });
   assert.equal(r.status, 200, JSON.stringify(r.data)); assert.equal(r.data.card_paid, 1000000); assert.equal(r.data.cash_paid, 250000, 'dịch vụ cao hơn thẻ → trả thêm');
   assert.equal((await duong.post('/visits', { customer_id: ban, main_staff_id: staff['Dương'], items: [{ service_id: nhuom.id }], card_id: ids.card })).status, 400, 'thẻ mua không cho người khác dùng');
-  assert.equal((await mgr.get('/reports/sales')).data.summary.paid_by_gift, 1000000);
+  assert.equal((await owner.get('/reports/sales')).data.summary.paid_by_gift, 1000000);
   await owner.del('/visits/' + r.data.id, { reason: 'dọn dữ liệu kiểm thử' });
 
   // Quyền Excel, tài khoản, nhật ký
