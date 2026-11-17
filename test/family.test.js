@@ -384,3 +384,18 @@ test('bảng lương: chỉ Lãnh đạo xem; lương cứng theo công, HH từ
   assert.equal(r.data.rows.find((y) => y.user_id === thu).net, x.net);
   assert.equal((await o.post('/payroll/lock', { month: '2026-09', lock: false })).status, 200);
 });
+
+test('kho: tự điền dung tích hàng thiếu + giá thị trường cho hàng nhập 0đ', () => {
+  const St = require('../server/stock');
+  const ins = db.prepare("INSERT INTO materials(code,name,kind,unit) VALUES (?,?,'service','Tuýp')");
+  const g = ins.run('VT-T1', 'Màu Guytang').lastInsertRowid;
+  const a = ins.run('VT-T2', 'Nước pha thuốc nhuộm Activator 20vol – 900ml').lastInsertRowid;
+  const k = ins.run('VT-T3', 'Màu Milbon Ordeve test').lastInsertRowid;
+  db.prepare("UPDATE materials SET size=60, size_unit='g' WHERE id=?").run(k);
+  db.prepare("INSERT INTO stock_moves(material_id,date,qty,unit_cost,kind) VALUES (?,?,?,?,'in')").run(a, '2026-11-01', 2, 0);
+  St.fillSizes();
+  const mg = db.prepare('SELECT size, size_unit FROM materials WHERE id=?').get(g);
+  assert.deepEqual([mg.size, mg.size_unit], [57, 'g']);
+  assert.equal(St.avgCost(a), 306000, 'nhập 0đ → lấy giá thị trường');
+  assert.equal(db.prepare('SELECT size FROM materials WHERE id=?').get(k).size, 60, 'không ghi đè dung tích đã khai');
+});

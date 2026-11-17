@@ -1942,6 +1942,7 @@ VIEWS.stock = async (main) => {
         <div><label>ĐVT (tuýp, chai, hộp…)</label><input name="unit" value="${esc(m.unit || '')}"></div>
         <div><label>Dung tích 1 đơn vị</label><div class="row"><input type="number" name="size" step="any" min="0" value="${m.size || ''}" style="flex:1"><select name="size_unit" style="width:auto"><option ${m.size_unit !== 'g' ? 'selected' : ''}>ml</option><option ${m.size_unit === 'g' ? 'selected' : ''}>g</option></select></div></div>
         <div><label>Giá bán cho khách (sản phẩm)</label><input type="number" name="sell_price" min="0" step="1000" value="${m.sell_price ?? ''}"></div>
+        <div><label>Giá thị trường 1 đơn vị (khi nhập 0đ / hàng tặng)</label><input type="number" name="ref_cost" min="0" step="1000" value="${m.ref_cost ?? ''}"><div class="small muted">Chỉ dùng tính giá cốt khi giá nhập = 0đ</div></div>
         <div><label>Trạng thái</label><select name="active"><option value="1">Đang dùng</option><option value="0" ${m.active ? '' : 'selected'}>Ngừng</option></select></div>
         <div class="full"><label>Ghi chú</label><input name="note" value="${esc(m.note || '')}"></div>
         ${m.kind !== 'retail' ? `<div class="full"><label>🧪 Mã viết trong công thức (cách nhau dấu phẩy)</label><input name="formula_keys" value="${esc(m.formula_keys || '')}" placeholder="VD: graypearl, cobalt, addicthy">
