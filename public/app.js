@@ -396,7 +396,10 @@ VIEWS.dashboard = async (main) => {
     <div class="kpi"><div class="l">DS dịch vụ tháng này</div><div class="v">${money(M.shop_service_sales)}</div><div class="s">bán SP ${money(M.product_sales)} · bán thẻ ${money(M.card_sales)}</div></div>
     <div class="kpi"><div class="l">Khách hàng</div><div class="v">${d.customers}</div><div class="s">trong hệ thống</div></div>`
     : `<div class="kpi"><div class="l">DS dịch vụ của bạn hôm nay</div><div class="v">${money(mine ? mine.service_sales : 0)}</div><div class="s">${mine ? mine.main_count : 0} lượt làm chính${mine && mine.product_sales ? ' · bán SP ' + money(mine.product_sales) : ''}</div></div>
-    <div class="kpi"><div class="l">DS dịch vụ tháng của bạn</div><div class="v">${money(mineMonth ? mineMonth.service_sales : 0)}</div><div class="s">${mineMonth && mineMonth.product_sales ? 'bán SP riêng ' + money(mineMonth.product_sales) : ''}</div></div>
+    <div class="kpi"><div class="l">① DS dịch vụ tháng (xét thưởng)</div><div class="v">${money(mineMonth ? mineMonth.bonus_sales : 0)}</div><div class="s">dịch vụ tự làm${mineMonth && (mineMonth.gift_sales || mineMonth.family_sales) ? ', đã trừ thẻ tri ân / người nhà' : ''}</div></div>
+    <div class="kpi"><div class="l">② DS bán sản phẩm tháng</div><div class="v">${money(mineMonth ? mineMonth.product_sales : 0)}</div><div class="s">riêng · chỉ tính % HH sản phẩm</div></div>
+    <div class="kpi"><div class="l">② DS bán thẻ tháng</div><div class="v">${money(mineMonth ? mineMonth.cards_amount : 0)}</div><div class="s">${mineMonth ? mineMonth.cards_count : 0} thẻ · riêng · chỉ tính HH thẻ</div></div>
+    <div class="kpi"><div class="l">② DS làm phụ tháng</div><div class="v">${money(mineMonth ? mineMonth.assist_sales : 0)}</div><div class="s">${mineMonth ? mineMonth.assist_count : 0} lượt · chỉ tính HH thợ phụ</div></div>
     <div class="kpi"><div class="l">Hoa hồng tháng (tạm tính)</div><div class="v">${money(mineMonth ? mineMonth.total_commission : 0)}</div></div>`;
   const rc = d.reminder_counts;
   main.innerHTML = header(`Chào ${S.me.full_name}`, `Hôm nay ${dmy(d.today)}`,
@@ -2046,7 +2049,8 @@ VIEWS.sales = async (main) => {
       <div class="stat-line"><span class="muted">Bán thẻ (${x.cards_count} thẻ)</span><b>${money(x.cards_amount)}</b></div>
       <div class="stat-line"><span class="muted">Làm phụ</span><b>${money(x.assist_sales)}</b></div>
       <div class="small" style="margin-top:6px"><b>③ Hoa hồng</b></div>
-      <div class="stat-line"><span class="muted">HH dịch vụ</span><b>${money(x.main_commission)}</b></div>
+      <div class="stat-line"><span class="muted">HH dịch vụ</span><b>${money(x.service_commission)}</b></div>
+      ${x.product_commission ? `<div class="stat-line"><span class="muted">HH bán sản phẩm</span><b>${money(x.product_commission)}</b></div>` : ''}
       <div class="stat-line"><span class="muted">HH làm phụ</span><b>${money(x.assistant_commission)}</b></div>
       <div class="stat-line"><span class="muted">HH bán thẻ (${x.cards_count} thẻ)</span><b>${money(x.card_commission)}</b></div>
       ${x.surcharge_share ? `<div class="stat-line"><span class="muted">Phần phụ thu được chia</span><b>${money(x.surcharge_share)}</b></div>` : ''}
