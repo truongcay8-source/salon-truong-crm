@@ -251,3 +251,10 @@ body:has(.chat-box) .search-fab { display: none; }
 .bubble .mention { color: var(--brand); }
 .chat-msg.to-me .bubble { box-shadow: 0 0 0 2px var(--warn); }
 .chat-card input, .chat-card select { padding: 6px 8px; font-size: 14px; }
+
+/* Nhắc nhở: dòng gọn (khách chưa thu, bảo hành) */
+.rem-pay { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.rem-pay:last-child { border-bottom: 0; }
+.rem-pay-l { flex: 1 1 220px; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.rem-pay-b { display: flex; flex-wrap: wrap; gap: 6px; }
+.rem-pay-b .btn.sm { padding: 3px 8px; }

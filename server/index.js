@@ -739,12 +739,12 @@ app.get('/api/reminders', (req, res) => {
   if (req.user.role !== 'staff') { const f = require('./expenses').fundState(); r.counts.expenses = f.pending_count; r.expenses = f; }
   if (req.user.role !== 'staff') { r.backup = pcBackupState(); r.counts.backup = r.backup.due ? 1 : 0; }
   if (req.user.role !== 'staff') {
-    r.unpaid = db.prepare(`SELECT a.id, a.date, a.time, a.note, a.customer_id, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, u.full_name staff_name
-      FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id WHERE a.pay_note='Chưa thanh toán' AND a.status<>'cancelled' ORDER BY a.date, a.time`).all();
+    r.unpaid = db.prepare(`SELECT a.id, a.date, a.time, a.note, a.customer_id, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, u.full_name staff_name, v.total amount
+      FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id LEFT JOIN visits v ON v.id=a.visit_id AND v.status='done' WHERE a.pay_note='Chưa thanh toán' AND a.status<>'cancelled' ORDER BY a.date, a.time`).all();
     r.counts.unpaid = r.unpaid.length;
   }
   // Khách đang trong hạn bảo hành: chỉ để tra cứu khi khách quay lại, không tính vào số nhắc
-  r.warranty = require('./warranty').active(today()).sort((a, b) => a.until.localeCompare(b.until));
+  r.warranty = require('./warranty').active(today(), null, true).sort((a, b) => a.until.localeCompare(b.until));
   if (req.user.role === 'staff') r.warranty = r.warranty.filter((v) => v.main_staff_id === req.user.id);
   res.json(r);
 });

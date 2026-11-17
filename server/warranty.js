@@ -37,7 +37,9 @@ function forItems(date, items, mainStaff) {
 function forVisit(v) { return v && v.date ? forItems(v.date, v.items, v.main_staff_id) : []; }
 
 // Lượt còn trong hạn bảo hành (hôm nay ≤ hạn), mới nhất trước
-function active(today, customerId) {
+// chemOnly: chỉ bảo hành hóa chất (màu, uốn/duỗi/ép) – trang Nhắc nhở không liệt kê bảo hành cắt
+const CHEM = new Set(['color', 'perm']);
+function active(today, customerId, chemOnly) {
   const from = addDays(today, -20);
   const visits = db.prepare(`SELECT v.id, v.code, v.date, v.customer_id, v.main_staff_id, c.name customer_name, c.phone, u.full_name staff_name
     FROM visits v LEFT JOIN customers c ON c.id=v.customer_id LEFT JOIN users u ON u.id=v.main_staff_id
@@ -46,7 +48,7 @@ function active(today, customerId) {
   const items = db.prepare('SELECT name, grp, staff_id FROM visit_items WHERE visit_id=?');
   const out = [];
   for (const v of visits) {
-    const w = forItems(v.date, items.all(v.id), v.main_staff_id).filter((x) => x.until >= today);
+    const w = forItems(v.date, items.all(v.id), v.main_staff_id).filter((x) => x.until >= today && (!chemOnly || CHEM.has(x.key)));
     if (w.length) out.push({ ...v, warranties: w, until: w.reduce((m, x) => (x.until > m ? x.until : m), '') });
   }
   return out;

@@ -1604,13 +1604,16 @@ VIEWS.reminders = async (main) => {
         ${m.ordered_at ? '<span class="badge ok">Đã gọi</span>' : `<button class="btn sm" data-ord="${m.id}">📞 Đã gọi hàng</button>`}</div>`).join('') : '<div class="empty">Không có</div>'}
       <div style="margin-top:6px"><a href="#stock?tab=levels&st=need">Xem tồn kho →</a></div></div>` : ''}
     ${r.unpaid && r.unpaid.length ? `<div class="card"><h3>💰 Khách chưa thanh toán <span class="badge bad">${r.unpaid.length}</span></h3><div class="small muted">Từ ô màu hồng trong sổ đặt lịch Excel. Thu xong bấm hình thức đã thu.</div>
-      ${r.unpaid.map((a) => `<div class="list-item"><div style="flex:1;min-width:0"><b>${dmy(a.date)} ${esc(a.time)} · ${a.customer_id ? `<a href="#customer?id=${a.customer_id}">${esc(a.name || '')}</a>` : esc(a.name || '')}</b>
-        <div class="small muted">${esc(a.note || '')}${a.staff_name ? ' · ' + esc(a.staff_name) : ''} ${telLinks(a.phone)}</div></div>
-        <div class="row" style="justify-content:flex-end">${!isOwner() ? '<span class="small muted">Vinh ghi đã thu</span>' : ''}${(isOwner() ? S.settings.payment_methods.slice(0, 3) : []).map((m) => `<button class="btn sm" data-paid="${a.id}" data-m="${esc(m)}">Đã thu: ${esc(m)}</button>`).join('')}</div></div>`).join('')}</div>` : ''}
+      ${r.unpaid.map((a) => `<div class="rem-pay"><div class="rem-pay-l"><span class="small muted nowrap">${dmy(a.date).slice(0, 5)} ${esc(a.time || '')}</span>
+          <b>${a.customer_id ? `<a href="#customer?id=${a.customer_id}">${esc(a.name || '')}</a>` : esc(a.name || '')}</b>${a.amount ? ` <b class="nowrap">${money(a.amount)}</b>` : ''}${a.staff_name ? ` <span class="badge">${esc(a.staff_name)}</span>` : ''}
+          ${a.phone ? `<span class="small">${telLinks(a.phone)}</span>` : ''}</div>
+        <div class="rem-pay-b">${isOwner() ? S.settings.payment_methods.slice(0, 3).map((m) => `<button class="btn sm" data-paid="${a.id}" data-m="${esc(m)}">✓ ${esc(m)}</button>`).join('') : '<span class="small muted">Vinh ghi đã thu</span>'}</div></div>`).join('')}</div>` : ''}
     ${r.backup && r.backup.due ? `<div class="card">${backupBox(r.backup)}</div>` : ''}
-    ${r.warranty && r.warranty.length ? `<div class="card"><h3>🛡 Khách đang trong hạn bảo hành <span class="badge">${r.warranty.length}</span></h3><div class="small muted">Khách quay lại báo lỗi trong hạn: sửa miễn phí theo chính sách. ${esc(WARRANTY_EXCLUDE)}</div>
-      ${r.warranty.map((x) => `<div class="list-item"><div style="flex:1;min-width:0"><b>${x.customer_id ? `<a href="#customer?id=${x.customer_id}">${esc(x.customer_name || '')}</a>` : ''}</b> <span class="small muted">lượt ${esc(x.code)} · ${dmy(x.date)}${x.staff_name ? ' · ' + esc(x.staff_name) : ''}</span>
-        ${x.warranties.map((w) => `<div class="small">${esc(w.label)}: <b>đến ${dmy(w.until)}</b></div>`).join('')}</div></div>`).join('')}</div>` : ''}
+    ${r.warranty && r.warranty.length ? `<div class="card"><h3>🛡 Bảo hành hóa chất còn hạn <span class="badge">${r.warranty.length}</span></h3><div class="small muted">Màu, uốn/duỗi/ép. Khách quay lại báo lỗi trong hạn: sửa miễn phí theo chính sách.</div>
+      ${r.warranty.map((x) => `<div class="rem-pay"><div class="rem-pay-l"><b>${x.customer_id ? `<a href="#customer?id=${x.customer_id}">${esc(x.customer_name || '')}</a>` : ''}</b>
+        <span class="small">${x.warranties.map((w) => esc(w.label.replace(/ \(.*\)/, ''))).join(', ')} · đến <b>${dmy(x.until).slice(0, 5)}</b></span>
+        <span class="small muted">${dmy(x.date).slice(0, 5)}${x.staff_name ? ' · ' + esc(x.staff_name) : ''}</span></div></div>`).join('')}
+      <div class="small muted" style="margin-top:6px">${esc(WARRANTY_EXCLUDE)}</div></div>` : ''}
     ${r.expenses && r.expenses.pending_count ? `<div class="card"><h3>💸 Khoản chi chờ duyệt <span class="badge bad">${r.expenses.pending_count}</span></h3><div class="small muted">Tổng ${money(r.expenses.pending_amount)} · quỹ còn ${money(r.expenses.balance)}</div><div style="margin-top:8px"><a class="btn sm primary" href="#expenses">Mở để duyệt →</a></div></div>` : ''}
     ${sec('returns', '🔁 Khách đến hạn quay lại', 'Đã quá số ngày cài đặt kể từ lần làm gần nhất và chưa có lịch hẹn.', r.returns, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b>${who(c)} <span class="small muted">lần cuối ${dmy(c.last_date)} · ${c.days} ngày · ${c.n} lượt</span>`)}
     </div>`;
