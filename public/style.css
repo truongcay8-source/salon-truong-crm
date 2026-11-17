@@ -258,3 +258,10 @@ body:has(.chat-box) .search-fab { display: none; }
 .rem-pay-l { flex: 1 1 220px; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
 .rem-pay-b { display: flex; flex-wrap: wrap; gap: 6px; }
 .rem-pay-b .btn.sm { padding: 3px 8px; }
+
+/* Doanh số theo nhân viên: tách 3 khối ① dịch vụ (xét thưởng) ② doanh số riêng ③ hoa hồng */
+.sales-split th.grp-svc { background: color-mix(in srgb, var(--accent, #7a4a2a) 10%, transparent); }
+.sales-split th.grp-own { background: color-mix(in srgb, #2a7a5a 12%, transparent); }
+.sales-split th.grp-hh { background: color-mix(in srgb, #2a4a7a 10%, transparent); }
+.sales-split thead tr:first-child th { text-align: center; font-size: 12px; }
+.sales-split td.grp-key { background: color-mix(in srgb, var(--accent, #7a4a2a) 8%, transparent); }
