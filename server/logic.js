@@ -351,6 +351,7 @@ function salesReport(from, to, user) {
   const giftRate = (v) => (famIds.has(v.customer_id) ? 0 : v.card_id && giftIds.has(v.card_id) && v.total > 0 ? Math.min(1, v.card_paid / v.total) : 0);
   const famRate = (v) => (famIds.has(v.customer_id) ? 1 : 0);
   const giftByGroup = {};
+  let productTotal = 0; // tiền bán sản phẩm (dòng nhóm "Bán sản phẩm") – tách khỏi DS dịch vụ tại tiệm
   // Thợ chính trên phiếu có thể chỉ là người nhận khách: chỉ tính 1 lượt cho họ nếu có làm ít nhất 1 dòng
   const mainDid = new Set(items.filter((i) => !i.staff_id || i.staff_id === i.main_staff_id).map((i) => i.visit_id));
   for (const v of visits) {
@@ -371,6 +372,7 @@ function salesReport(from, to, user) {
     const g = m.by_group[i.grp] != null ? i.grp : 'Khác';
     m.by_group[g] += net;
     // Bán sản phẩm: doanh số riêng, KHÔNG tính vào DS dịch vụ / DS tính thưởng (chỉ hưởng % HH sản phẩm)
+    if (g === 'Bán sản phẩm') productTotal += net;
     if (g === 'Bán sản phẩm') { m.prod_net += net; m.prod_excl += net * (giftRate(v) + famRate(v)); m.product_commission += i.commission || 0; }
     const gr = giftRate(v);
     if (gr) giftByGroup[g] = (giftByGroup[g] || 0) + Math.round(net * gr);
@@ -424,6 +426,9 @@ function salesReport(from, to, user) {
   }
   for (const c of cards) { const k = c.payment_method || 'Chưa ghi'; summary.by_method[k] = (summary.by_method[k] || 0) + c.price; }
   summary.money_in = summary.service_cash + summary.card_sales;
+  // Tách 3 loại doanh số (chỉ Lãnh đạo xem): dịch vụ làm tại tiệm / bán sản phẩm / bán thẻ
+  summary.product_sales = productTotal;
+  summary.shop_service_sales = summary.service_sales - productTotal;
   if (user.role === 'staff') return { from, to, rows: rows.filter((r) => r.user_id === user.id), summary: null };
   return { from, to, rows, summary };
 }
