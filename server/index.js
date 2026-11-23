@@ -170,7 +170,7 @@ app.post('/api/users/:id/reset-password', OWNER, (req, res) => {
 const publicSettings = () => { const s = { ...getSettings() }; delete s.anthropic_api_key; return s; };
 app.get('/api/settings', MGR, (req, res) => res.json(publicSettings()));
 app.put('/api/settings', OWNER, (req, res) => {
-  const allowed = ['salon_name', 'salon_address', 'salon_phone', 'bank_info', 'receipt_footer', 'return_days', 'birthday_days', 'card_expiry_days', 'card_low_balance', 'assistant_rate', 'card_new_rate', 'card_renewal_rate', 'payment_methods', 'surcharge_salon_rate'];
+  const allowed = ['salon_name', 'salon_address', 'salon_phone', 'bank_info', 'receipt_footer', 'return_days', 'birthday_days', 'card_expiry_days', 'card_low_balance', 'assistant_rate', 'card_new_rate', 'card_renewal_rate', 'payment_methods', 'surcharge_salon_rate', 'book_money_until'];
   const up = db.prepare('UPDATE settings SET value=? WHERE key=?');
   for (const k of allowed) if (req.body[k] != null) up.run(String(req.body[k]).trim(), k);
   audit(req.user.id, 'update_settings', 'settings', null, req.body);

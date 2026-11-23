@@ -219,6 +219,7 @@ const DEFAULT_SETTINGS = {
   bank_info: '',
   receipt_footer: 'Cảm ơn quý khách đã tin chọn Nếp Hair. Hẹn gặp lại!',
   surcharge_salon_rate: '0.33',
+  book_money_until: '', // từ ngày này: sổ đặt lịch chỉ lấy LỊCH HẸN, tiền tính trên app (trống = vẫn lấy tiền từ sổ)
 };
 // Nâng cấp CSDL cũ: thêm cột cho lịch hẹn (lý do hủy, ai hủy, đã mời đặt lại)
 {

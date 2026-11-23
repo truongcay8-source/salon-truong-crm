@@ -2589,7 +2589,7 @@ VIEWS.settings = async (main) => {
       ['bank_info', 'Thông tin chuyển khoản (in trên hóa đơn)', 'text'], ['receipt_footer', 'Lời cảm ơn cuối hóa đơn', 'text'], ['return_days', 'Nhắc khách quay lại sau (ngày)', 'number'], ['birthday_days', 'Nhắc sinh nhật trước (ngày)', 'number'],
       ['card_expiry_days', 'Nhắc thẻ sắp hết hạn trước (ngày)', 'number'], ['card_low_balance', 'Nhắc khi số dư thẻ ≤ (đồng)', 'number'],
       ['assistant_rate', 'Hoa hồng người phụ (tỷ lệ, 0.03 = 3%)', 'number'], ['card_new_rate', 'HH bán thẻ mới (0.05 = 5%)', 'number'],
-      ['card_renewal_rate', 'HH khách mua lại thẻ (0.03 = 3%)', 'number'], ['surcharge_salon_rate', 'Phụ thu: phần cửa hàng giữ (0.33 = 33%, còn lại chia thợ)', 'number'], ['payment_methods', 'Hình thức thanh toán (cách nhau dấu phẩy)', 'text']];
+      ['card_renewal_rate', 'HH khách mua lại thẻ (0.03 = 3%)', 'number'], ['surcharge_salon_rate', 'Phụ thu: phần cửa hàng giữ (0.33 = 33%, còn lại chia thợ)', 'number'], ['book_money_until', 'Từ ngày này sổ đặt lịch chỉ lấy lịch hẹn, tiền tính trên app (để trống = vẫn lấy tiền từ sổ)', 'date'], ['payment_methods', 'Hình thức thanh toán (cách nhau dấu phẩy)', 'text']];
     sb.innerHTML = `<form id="pf"><div class="form-grid">${F.map(([k, l, t]) => `<div><label>${l}</label><input name="${k}" type="${t}" step="any" value="${esc(s[k])}"></div>`).join('')}</div>
       <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu tham số</button></div></form>`;
     $('#pf').onsubmit = (e) => { e.preventDefault(); guard($('#pf button'), async () => { await api('/settings', { method: 'PUT', body: formData($('#pf')) }); toast('Đã lưu'); boot(); }); };
