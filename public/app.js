@@ -119,6 +119,7 @@ const PAGES = [
   ['sales', 'Doanh số', '📊', () => true],
   ['tips', 'Chia tip', '💵', () => true],
   ['payroll', 'Bảng lương', '💰', () => isOwner()],
+  ['finance', 'Báo cáo tài chính', '📈', () => isOwner()],
   ['attendance', 'Chấm công', '🕘', () => true],
   ['offs', 'Lịch off', '🌴', () => true],
   ['stock', 'Kho hàng', '🧪', () => isMgr() || S.me.stock_view],
@@ -2157,6 +2158,95 @@ VIEWS.sales = async (main) => {
 
 // ---------- Chia tip chung theo tháng ----------
 // ---------- Bảng lương (chỉ Lãnh đạo) ----------
+VIEWS.finance = async (main) => {
+  if (!isOwner()) { main.innerHTML = header('Báo cáo tài chính', '') + '<div class="card empty">Chỉ Lãnh đạo xem được báo cáo tài chính</div>'; return; }
+  const month = S.params.month || S.today.slice(0, 7);
+  const r = await api('/finance?month=' + month);
+  const shift = (n) => { const [y, m] = month.split('-').map(Number); const d = new Date(Date.UTC(y, m - 1 + n, 1)); return d.toISOString().slice(0, 7); };
+  const R = r.revenue, C = r.cogs, P = r.payroll, F = r.fixed, K = r.cash;
+  const neg = (v) => (v ? '−' + money(v) : money(0));
+  const row = (l, v, cls = '', sub = '') => `<tr class="${cls}"><td>${l}${sub ? `<div class="small muted">${sub}</div>` : ''}</td><td class="num">${v}</td></tr>`;
+  const sign = (v) => `<b style="color:${v < 0 ? 'var(--danger,#c0392b)' : 'var(--ok,#1e8449)'}">${v < 0 ? '−' + money(-v) : money(v)}</b>`;
+  const estTxt = Object.entries(C.est).map(([g, v]) => `${esc(g)} ${money(v)} (${pct(r.rates[g])})`).join(' · ');
+  const warn = [];
+  if (P.no_params.length) warn.push(`<b>${P.no_params.length} người chưa cài lương cứng</b> (${P.no_params.map(esc).join(', ')}) → chi phí lương đang thiếu phần lương cứng/phụ cấp. Vào 💰 Bảng lương › ⚙ để cài.`);
+  if (C.est_total) warn.push(`<b>${C.est_visits} lượt chưa ghi xuất kho</b> → giá vốn ${money(C.est_total)} là <b>ước tính</b> theo % doanh thu. Ghi xuất kho ở hóa đơn để số chính xác hơn.`);
+  if (F.rows.some((f) => /điện/i.test(f.name) && !f.amount)) warn.push('Chưa nhập <b>tiền điện nước</b> tháng này.');
+  if (r.fund.flags.length) warn.push(`Chi quỹ có <b>${r.fund.flags.length} khoản dễ bị tính trùng hoặc không phải chi phí</b>: ${r.fund.flags.map((x) => `${esc(x.note)} ${money(x.amount)}`).join('; ')}. Nếu điện nước/phần mềm đã chi từ quỹ thì để 0 ở chi phí cố định; khoản đổi tiền/ứng lương thì sửa hoặc bỏ duyệt bên trang Quỹ.`);
+  if (R.unpaid) warn.push(`Có ${money(R.unpaid)} khách <b>chưa thanh toán</b> (ô hồng) – đã tính vào doanh thu nhưng chưa thu tiền.`);
+  main.innerHTML = header('📈 Báo cáo tài chính', 'Chỉ tài khoản Lãnh đạo thấy. Lãi/lỗ tháng sau khi trừ giá vốn, lương, chi quỹ và chi phí cố định.', '<button class="btn" id="fcfg">⚙ Chi phí cố định & % giá vốn</button>') +
+    `<div class="card"><div class="row"><button class="btn sm" id="pm">‹</button><input type="month" id="mo" value="${month}" style="width:auto"><button class="btn sm" id="nm">›</button>
+      <span class="small muted">${r.from.split('-').reverse().join('/')} – ${r.to.split('-').reverse().join('/')} · ${R.visits} lượt khách${r.locked_payroll ? ' · lương đã chốt' : ' · lương chưa chốt (số tạm)'}</span></div></div>
+    <div class="grid kpis">
+      <div class="kpi"><div class="l">Doanh thu</div><div class="v">${money(R.total)}</div><div class="s">DV ${money(R.service)} · SP ${money(R.product)}</div></div>
+      <div class="kpi"><div class="l">Tổng chi phí</div><div class="v">${money(C.total + r.opex)}</div><div class="s">giá vốn ${money(C.total)} · vận hành ${money(r.opex)}</div></div>
+      <div class="kpi"><div class="l">${r.profit < 0 ? '🔻 LỖ' : '✅ LÃI'} sau mọi chi phí</div><div class="v">${sign(r.profit)}</div><div class="s">${pct(r.profit_pct)} doanh thu · trước khấu hao ${r.ebitda < 0 ? '−' + money(-r.ebitda) : money(r.ebitda)}</div></div>
+      <div class="kpi"><div class="l">Doanh thu hòa vốn</div><div class="v">${r.breakeven ? money(r.breakeven) : '—'}</div><div class="s">${r.breakeven ? (R.total >= r.breakeven ? 'đã vượt ' : 'còn thiếu ') + money(Math.abs(R.total - r.breakeven)) : ''}</div></div>
+    </div>
+    ${warn.length ? `<div class="card" style="border-left:4px solid var(--warn,#e0a800)"><b>Cần lưu ý</b><ul style="margin:6px 0 0 18px">${warn.map((w) => `<li class="small">${w}</li>`).join('')}</ul></div>` : ''}
+    <div class="grid2" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px">
+    <div class="card"><h3>Lãi / Lỗ tháng ${month.slice(5)}/${month.slice(0, 4)}</h3><div class="table-wrap"><table class="fin"><tbody>
+      ${row('Doanh thu dịch vụ tại tiệm', money(R.service), '', `giảm giá đã trừ ${money(R.discounts)}`)}
+      ${row('Doanh thu bán sản phẩm', money(R.product))}
+      ${R.gift ? row('− Khách dùng thẻ tri ân (không thu tiền)', neg(R.gift)) : ''}
+      ${row('<b>(1) DOANH THU</b>', `<b>${money(R.total)}</b>`, 'sum')}
+      ${row('− Hóa chất/vật tư đã xuất kho', neg(C.use))}
+      ${row('− Giá vốn sản phẩm đã bán', neg(C.sale))}
+      ${C.est_total ? row('− Giá vốn ước tính (lượt chưa ghi kho)', neg(C.est_total), '', estTxt) : ''}
+      ${row('<b>(2) LÃI GỘP</b>', `<b>${money(r.gross)}</b> <span class="small muted">${pct(r.gross_pct)}</span>`, 'sum')}
+      ${row('− Lương cứng + phụ cấp + KPI', neg(P.base + P.allowance + P.kpi + P.floor_topup), '', P.floor_topup ? 'gồm bù sàn ' + money(P.floor_topup) : '')}
+      ${row('− Hoa hồng + thưởng doanh số', neg(P.commission + P.bonus), '', 'theo Bảng lương, không tính tip')}
+      ${P.plus_minus ? row('− Cộng/trừ khác trong lương', P.plus_minus > 0 ? neg(P.plus_minus) : money(-P.plus_minus)) : ''}
+      ${row('− Chi quỹ tiền mặt (đã duyệt)', neg(r.fund.total), '', r.fund.rows.map((x) => `${esc(x.category)} ${money(x.amount)}`).join(' · '))}
+      ${F.rows.map((f) => row('− ' + esc(f.name), neg(f.amount), '', [f.cash ? '' : 'không chi tiền', f.source === 'tháng này' ? 'riêng tháng này' : '', esc(f.note)].filter(Boolean).join(' · '))).join('')}
+      ${row(`<b>(3) ${r.profit < 0 ? 'LỖ' : 'LÃI'} SAU MỌI CHI PHÍ</b>`, sign(r.profit), 'sum big')}
+      ${row('Lãi/lỗ trước khấu hao', r.ebitda < 0 ? '−' + money(-r.ebitda) : money(r.ebitda), '', 'cộng lại khấu hao – gần với tiền thật kiếm được')}
+    </tbody></table></div></div>
+    <div class="card"><h3>Dòng tiền tháng (tiền thật vào/ra)</h3><div class="table-wrap"><table class="fin"><tbody>
+      ${row('Tiền khách trả dịch vụ + SP', money(K.in_service), '', 'không gồm ô hồng chưa trả, phần trừ thẻ')}
+      ${row('Tiền bán thẻ', money(K.in_cards), '', 'thu trước – khách sẽ dùng dịch vụ sau')}
+      ${row('<b>Tiền vào</b>', `<b>${money(K.in_total)}</b>`, 'sum')}
+      ${row('− Lương (không tip)', neg(K.payroll))}
+      ${row('− Chi quỹ', neg(K.fund))}
+      ${row('− Chi phí cố định trả tiền', neg(K.fixed), '', 'tiền nhà tính đều 15tr/tháng')}
+      ${row('− Nhập hàng trong tháng', neg(K.purchases))}
+      ${row('<b>Tiền còn lại</b>', sign(K.net), 'sum big')}
+    </tbody></table></div>
+    <div class="small muted" style="margin-top:8px">Khác với lãi/lỗ: bán thẻ là tiền thu trước (chưa phải doanh thu); khách dùng thẻ thì có doanh thu nhưng không có tiền vào. Tip ${money(R.tips)} là tiền khách cho thợ nên không tính.</div></div></div>
+    <div class="card"><h3>Khoản chi riêng tháng này</h3><div class="small muted">Nhập điện nước, sửa chữa, quảng cáo… của riêng tháng ${month.slice(5)}. Trùng tên với khoản mặc định thì <b>thay</b> khoản mặc định (vd "Điện, nước, internet").</div>
+      <form id="fi" class="row" style="margin-top:8px;flex-wrap:wrap;gap:6px"><input name="name" placeholder="Tên khoản" list="fnames" style="flex:2;min-width:160px"><datalist id="fnames">${r.defaults.fixed.map((f) => `<option value="${esc(f.name)}">`).join('')}</datalist>
+        <input name="amount" inputmode="numeric" placeholder="Số tiền" style="flex:1;min-width:110px"><input name="note" placeholder="Ghi chú" style="flex:2;min-width:140px">
+        <label class="small" style="display:flex;align-items:center;gap:4px"><input type="checkbox" name="cash" checked style="width:auto">chi tiền</label><button class="btn primary">+ Thêm</button></form><div class="err"></div>
+      ${F.rows.filter((f) => f.id).map((f) => `<div class="stat-line"><span>${esc(f.name)}${f.note ? ` <span class="small muted">${esc(f.note)}</span>` : ''}</span><span><b>${money(f.amount)}</b> <button class="btn sm" data-del="${f.id}">✕</button></span></div>`).join('')}
+    </div>
+    <div class="card small muted">Cách tính: Doanh thu = tiền dịch vụ + sản phẩm đã làm trong tháng (cả phần khách trừ thẻ trả trước), bỏ phần dùng thẻ tri ân. Giá vốn = hóa chất/SP xuất kho theo giá nhập bình quân; lượt chưa ghi kho thì ước theo %. Lương lấy từ Bảng lương (chốt rồi thì lấy số chốt). Hòa vốn = chi phí cố định ÷ (1 − giá vốn và hoa hồng/doanh thu).</div>`;
+  const go2 = (m) => go('finance', { month: m });
+  $('#pm').onclick = () => go2(shift(-1)); $('#nm').onclick = () => go2(shift(1)); $('#mo').onchange = (e) => e.target.value && go2(e.target.value);
+  $('#fi').onsubmit = (e) => { e.preventDefault(); const b = formData(e.target); guard($('button.primary', e.target), async () => {
+    await api('/finance/items', { method: 'POST', body: { month, name: b.name, amount: String(b.amount).replace(/\D/g, ''), note: b.note, cash: b.cash ? 1 : 0 } });
+    toast('Đã thêm khoản chi'); VIEWS.finance(main); }); };
+  $$('[data-del]', main).forEach((x) => (x.onclick = () => guard(x, async () => { if (!confirm('Xóa khoản chi này?')) return; await api('/finance/items/' + x.dataset.del, { method: 'DELETE' }); VIEWS.finance(main); })));
+  $('#fcfg').onclick = () => finConfig(r.defaults, () => VIEWS.finance(main));
+};
+function finConfig(d, after) {
+  const line = (f = {}) => `<div class="row fx" style="gap:6px;margin-bottom:6px;flex-wrap:wrap"><input name="n" value="${esc(f.name || '')}" placeholder="Tên khoản" style="flex:2;min-width:150px">
+    <input name="a" inputmode="numeric" value="${f.amount ? Number(f.amount).toLocaleString('vi-VN') : ''}" placeholder="Số tiền/tháng" style="flex:1;min-width:110px">
+    <input name="t" value="${esc(f.note || '')}" placeholder="Ghi chú" style="flex:2;min-width:120px">
+    <label class="small" style="display:flex;align-items:center;gap:4px"><input type="checkbox" name="c" ${f.cash === 0 ? '' : 'checked'} style="width:auto">chi tiền</label></div>`;
+  const groups = ['Hóa chất', 'Gội & chăm sóc', 'Cắt', 'Bán sản phẩm'];
+  openModal('Chi phí cố định hàng tháng & % giá vốn ước tính', `<form id="fc">
+    <h3>Chi phí cố định mỗi tháng</h3><div class="small muted">Bỏ tích "chi tiền" với khoản không phải tiền ra thật (vd khấu hao). Để trống tên để xóa dòng.</div>
+    <div id="fxl" style="margin-top:8px">${d.fixed.map(line).join('')}${line()}</div><button type="button" class="btn sm" id="fadd">+ Dòng</button>
+    <h3 style="margin-top:14px">% giá vốn ước tính (lượt chưa ghi xuất kho)</h3><div class="form-grid">
+    ${groups.map((g) => `<label>${esc(g)} (%)<input name="r_${esc(g)}" type="number" min="0" max="100" step="0.5" value="${Math.round((d.rates[g] || 0) * 1000) / 10}"></label>`).join('')}</div>
+    <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu</button></div></form>`, true);
+  $('#fadd').onclick = () => $('#fxl').insertAdjacentHTML('beforeend', line());
+  $('#fc').onsubmit = (e) => { e.preventDefault(); guard($('button.primary', e.target), async () => {
+    const fixed = $$('.fx', e.target).map((x) => ({ name: $('[name=n]', x).value.trim(), amount: $('[name=a]', x).value.replace(/\D/g, ''), note: $('[name=t]', x).value, cash: $('[name=c]', x).checked ? 1 : 0 })).filter((f) => f.name);
+    const rates = {}; for (const g of groups) rates[g] = (Number($(`[name="r_${g}"]`, e.target).value) || 0) / 100;
+    await api('/finance/config', { method: 'PUT', body: { fixed, rates } });
+    toast('Đã lưu'); closeModal(); after(); }); };
+}
 VIEWS.payroll = async (main) => {
   if (!isOwner()) { main.innerHTML = header('Bảng lương', '') + '<div class="card empty">Chỉ Lãnh đạo xem được bảng lương</div>'; return; }
   const month = S.params.month || S.today.slice(0, 7);

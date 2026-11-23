@@ -273,3 +273,8 @@ body:has(.chat-box) .search-fab { display: none; }
 .scan-reader video { width: 100% !important; height: auto !important; display: block; }
 .scan-msg { margin-top: 8px; min-height: 1.4em; }
 .cnt-row.hit { background: var(--surface-2); }
+
+/* Báo cáo tài chính */
+table.fin td{padding:6px 8px}
+table.fin tr.sum td{border-top:2px solid var(--line,#ddd);background:var(--soft,rgba(0,0,0,.03))}
+table.fin tr.big td{font-size:1.1em}

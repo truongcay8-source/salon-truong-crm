@@ -416,3 +416,28 @@ test('doanh số: bán sản phẩm, bán thẻ, làm phụ tách riêng – kh�
   assert.equal(x.service_sales, 500000);
   assert.equal(x.bonus_sales, 500000, 'sản phẩm không vào DS tính thưởng');
 });
+
+test('báo cáo tài chính: chỉ Lãnh đạo; lãi/lỗ = doanh thu − giá vốn − lương − chi quỹ − chi phí cố định', async () => {
+  const o = client();
+  assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const duong = db.prepare("SELECT id FROM users WHERE username='duong'").get().id;
+  const chem = db.prepare("SELECT id FROM services WHERE active=1 AND grp='Hóa chất' ORDER BY id LIMIT 1").get();
+  const cid = (await o.post('/customers', { name: 'Khách tài chính', phone: '0913999777' })).data.id;
+  assert.equal((await o.post('/visits', { customer_id: cid, date: '2026-07-10', time: '10:00', main_staff_id: duong, payment_method: 'Tiền mặt',
+    items: [{ service_id: chem.id, price: 1000000 }] })).status, 200);
+  // cố định: chỉ tiền nhà 10tr + khấu hao 2tr
+  assert.equal((await o.put('/finance/config', { fixed: [{ name: 'Tiền nhà', amount: 10000000, cash: 1 }, { name: 'Khấu hao', amount: 2000000, cash: 0 }], rates: { 'Hóa chất': 0.2 } })).status, 200);
+  assert.equal((await o.post('/finance/items', { month: '2026-07', name: 'Tiền nhà', amount: 12000000 })).status, 200);
+  assert.equal((await o.post('/finance/items', { month: '2026-07', name: 'Điện nước', amount: 1500000 })).status, 200);
+  const r = (await o.get('/finance?month=2026-07')).data;
+  assert.equal(r.revenue.total, 1000000);
+  assert.equal(r.cogs.est_total, 200000, 'chưa ghi kho → ước 20%');
+  assert.equal(r.fixed.total, 12000000 + 2000000 + 1500000, 'khoản tháng thay khoản mặc định cùng tên');
+  assert.equal(r.fixed.depreciation, 2000000);
+  assert.equal(r.profit, r.gross - r.payroll.total - r.fund.total - r.fixed.total);
+  assert.equal(r.ebitda, r.profit + 2000000);
+  assert.ok(r.profit < 0);
+  const t = client(); assert.equal((await t.post('/login', { username: 'truong', password: 'moi-truong' })).status, 200);
+  assert.equal((await t.get('/finance?month=2026-07')).status, 403);
+  assert.equal((await t.post('/finance/items', { month: '2026-07', name: 'x', amount: 1 })).status, 403);
+});
