@@ -1268,7 +1268,7 @@ async function visitForm(v = {}, after) {
     <div><label>Giờ</label><input type="time" name="time" value="${v.time || new Date().toTimeString().slice(0, 5)}"></div>
     <div><label>Thợ chính / người ghi lịch *</label><select name="main_staff_id" required>${staffOptions(v.main_staff_id || (!isMgr() ? S.me.id : null))}</select></div>
     <div><label>Người phụ</label><select name="assistant_id">${staffOptions(v.assistant_id, 'Không có')}</select></div>
-    <div class="full"><label>Dịch vụ / sản phẩm bán (giá sửa được)</label><div id="items"></div><div class="row"><div style="flex:1;min-width:200px" id="vSvcS"></div><button type="button" class="btn sm" id="addItem">+ Thêm dòng</button></div></div>
+    <div class="full"><label>Dịch vụ / sản phẩm bán (giá sửa được)</label><div id="items"></div><div class="row"><div style="flex:1;min-width:200px" id="vSvcS"></div><button type="button" class="btn sm" id="addItem">+ Thêm dòng</button><button type="button" class="btn sm" id="scanItem">📷 Quét SP bán</button></div></div>
     ${S.materials.some((m) => m.kind === 'service') ? `<div class="full"><label>🧪 Hóa chất đã dùng (ghi để tính giá cốt, trừ kho)</label><div id="used"></div>
       <div class="row"><button type="button" class="btn sm" id="addUsed">+ Thêm hóa chất</button><button type="button" class="btn sm" id="recipeFill">↻ Lấy theo định mức dịch vụ</button><button type="button" class="btn sm" id="formulaFill">🧪 Tính từ công thức</button></div></div>` : ''}
     <div><label>Phụ thu</label><input type="number" name="surcharge" min="0" step="1000" value="${v.surcharge || ''}"></div>
@@ -1461,6 +1461,22 @@ async function visitForm(v = {}, after) {
   bindPicker(f, (cid) => { loadCards(cid); showBrief(cid); });
   showBrief(custSel && custSel.id);
   $('#addItem').onclick = () => { items.push({ service_id: '', price: '' }); renderItems(); };
+  // Quét mã sản phẩm bán lẻ → thêm dòng (quét lại cùng SP = tăng số lượng)
+  $('#scanItem').onclick = () => scanBarcode({ title: 'Quét sản phẩm bán cho khách', continuous: true, hint: 'Quét từng sản phẩm khách mua, xong bấm “Xong”.', onCode: async (code) => {
+    let m = S.materials.find((x) => x.active && hasCode(x, code));
+    if (!m) { const r = await api('/stock/barcode/' + encodeURIComponent(code)); if (r.found) m = matById(r.id) || r; }
+    if (!m) return `⚠ Mã <b>${esc(code)}</b> chưa gắn sản phẩm. Người giữ kho gắn mã ở trang Kho › 📷 Quét mã vạch.`;
+    if (m.kind !== 'retail') return `⚠ <b>${esc(m.name)}</b> là hóa chất làm dịch vụ, không bán lẻ.`;
+    const blank = items.findIndex((i) => !i.service_id && !i.material_id && !i.name);
+    const ex = items.find((i) => i.material_id === m.id);
+    if (ex) { ex.qty = (ex.qty || 1) + 1; if (m.sell_price) ex.price = m.sell_price * ex.qty; }
+    else {
+      const row = { material_id: m.id, qty: 1, price: m.sell_price || '', staff_id: '', assistant_id: '' };
+      if (blank >= 0) items[blank] = row; else items.push(row);
+    }
+    renderItems();
+    return `✓ <b>${esc(m.name)}</b>${ex ? ' × ' + ex.qty : ''}${m.sell_price ? ' · ' + money(m.sell_price) : ' · chưa có giá bán, nhập tay'}`;
+  } });
   if ($('#used')) {
     $('#used').addEventListener('input', () => { usedTouched = true; fromFormula = false; });
     $('#used').addEventListener('change', () => { usedTouched = true; fromFormula = false; });
@@ -1815,6 +1831,52 @@ VIEWS.cards = async (main) => {
 // Tồn kho cho người kiểm / gọi hàng (không có giá nhập)
 const STK = { out: ['Hết hàng', 'bad'], low: ['Sắp hết', 'warn'], ok: ['Đủ', 'ok'] };
 const qtyFmt = (q) => (Math.round(q * 100) / 100).toLocaleString('vi-VN');
+const normCode = (c) => String(c || '').replace(/[^0-9A-Za-z\-._]/g, '').toUpperCase();
+const hasCode = (m, code) => !!m.barcode && m.barcode.split(/[,;\s]+/).map(normCode).includes(normCode(code));
+// Quét 1 mã ở trang Kho: tìm thấy → kiểm đếm / nhập thêm; chưa gắn → chọn sản phẩm để gắn mã
+function stockScan(rows, reload) {
+  scanBarcode({ title: 'Quét mã sản phẩm', onCode: (code) => {
+    const m = rows.find((x) => hasCode(x, code));
+    if (m) return stockScanItem(m, rows, reload);
+    openModal('Mã chưa gắn sản phẩm', `<form id="bcf"><div>Mã <b>${esc(code)}</b> chưa gắn với sản phẩm nào. Chọn đúng sản phẩm để gắn (lần sau quét là ra luôn):</div>
+      <input id="bcq" type="search" placeholder="🔍 Gõ tên để lọc…" style="margin:8px 0">
+      <select name="mid" size="8" required style="height:auto">${rows.map((x) => `<option value="${x.id}">${esc(x.name)}${x.barcode ? ' 🏷' : ''}</option>`).join('')}</select>
+      <div class="small muted" style="margin-top:6px">Không có trong danh sách? ${isMgr() ? 'Thêm sản phẩm mới ở Kho › Hóa chất & sản phẩm (ô Mã vạch).' : 'Báo quản lý thêm sản phẩm mới.'}</div>
+      <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Gắn mã</button></div></form>`);
+    const sel = $('#bcf [name=mid]');
+    $('#bcq').oninput = (e) => { const q = e.target.value.toLowerCase(); [...sel.options].forEach((o) => (o.hidden = !o.textContent.toLowerCase().includes(q))); };
+    $('#bcf').onsubmit = (e) => { e.preventDefault(); guard($('#bcf button.primary'), async () => {
+      const id = Number(sel.value); if (!id) throw new Error('Chọn sản phẩm');
+      await api(`/stock/${id}/barcode`, { method: 'POST', body: { code } });
+      const m2 = rows.find((x) => x.id === id); m2.barcode = [m2.barcode, code].filter(Boolean).join(',');
+      const sm = matById(id); if (sm) sm.barcode = m2.barcode;
+      toast('Đã gắn mã'); stockScanItem(m2, rows, reload);
+    }); };
+  } });
+}
+function stockScanItem(m, rows, reload) {
+  const canCount = S.me.stock_count || isMgr();
+  openModal(m.name, `<div class="stat-line"><span class="muted">Tồn trên máy</span><b>${qtyFmt(m.stock)} ${esc(m.unit || '')}</b></div>
+    <div class="stat-line"><span class="muted">Trạng thái</span><span class="badge ${STK[m.status][1]}">${STK[m.status][0]}</span></div>
+    ${m.kind === 'retail' && m.sell_price ? `<div class="stat-line"><span class="muted">Giá bán</span><b>${money(m.sell_price)}</b></div>` : ''}
+    ${canCount ? `<form id="scc" style="margin-top:10px"><label>🧮 Kiểm kho: số đếm thực tế (${esc(m.unit || 'đơn vị')})</label><div class="row"><input type="number" name="counted" step="0.01" min="0" inputmode="decimal" style="flex:1"><button class="btn sm primary">Lưu số đếm</button></div></form>
+    <form id="sci" style="margin-top:10px"><label>📦 Nhập thêm hàng mới về</label><div class="row"><input type="number" name="qty" step="any" min="0" placeholder="Số lượng" inputmode="decimal" style="flex:1">
+      ${isMgr() ? '<input type="number" name="unit_cost" min="0" step="1000" placeholder="Giá nhập/đv" style="flex:1">' : ''}<button class="btn sm primary">Nhập kho</button></div>
+      <input name="supplier" placeholder="Nhà cung cấp / ghi chú" style="margin-top:6px">${isMgr() ? '' : '<div class="small muted">Giá nhập quản lý sẽ cập nhật sau.</div>'}</form>` : '<div class="small muted" style="margin-top:8px">Bạn chỉ có quyền xem tồn. Kiểm kho / nhập hàng do người được giao.</div>'}
+    <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Đóng</button><button type="button" class="btn" id="scNext">📷 Quét tiếp</button></div>`);
+  $('#scNext').onclick = () => { closeModal(); stockScan(rows, reload); };
+  const fc = $('#scc');
+  if (fc) fc.onsubmit = (e) => { e.preventDefault(); guard($('#scc button'), async () => {
+    const v = fc.counted.value; if (v === '') throw new Error('Nhập số đếm');
+    const r = await api('/stock/count', { method: 'POST', body: { lines: [{ material_id: m.id, counted: Number(v) }], note: 'quét mã' } });
+    closeModal(); toast(r.diffs.length ? `Đã lưu: lệch ${r.diffs[0].diff > 0 ? '+' : ''}${qtyFmt(r.diffs[0].diff)}` : 'Khớp với máy'); refreshReminderBadge(); reload();
+  }); };
+  const fi = $('#sci');
+  if (fi) fi.onsubmit = (e) => { e.preventDefault(); guard($('#sci button'), async () => {
+    const r = await api(`/stock/${m.id}/receive`, { method: 'POST', body: formData(fi) });
+    closeModal(); toast(`Đã nhập. Tồn mới: ${qtyFmt(r.stock)}`); refreshReminderBadge(); reload();
+  }); };
+}
 async function stockLevelsView(main, reload) {
   const rows = await api('/stock/levels');
   const kind = S.params.kind || 'all', st = S.params.st || '';
@@ -1827,9 +1889,9 @@ async function stockLevelsView(main, reload) {
     <div class="card"><div class="row">
       ${[['all', 'Tất cả'], ['service', 'Hóa chất'], ['retail', 'Sản phẩm bán']].map(([k, l]) => `<button class="btn sm ${k === kind ? 'primary' : ''}" data-sk="${k}">${l}</button>`).join('')}
       <select id="stf" style="width:auto"><option value="">Mọi trạng thái</option><option value="need" ${st === 'need' ? 'selected' : ''}>Hết + sắp hết</option><option value="out" ${st === 'out' ? 'selected' : ''}>Hết hàng</option><option value="low" ${st === 'low' ? 'selected' : ''}>Sắp hết</option></select>
-      <span class="spacer"></span>${S.me.stock_count || isMgr() ? '<button class="btn primary sm" id="cnt">🧮 Kiểm kho / đếm hàng</button>' : ''}${isMgr() ? '<button class="btn sm" id="sperm">Phân quyền kho</button>' : ''}</div></div>
+      <span class="spacer"></span><button class="btn primary sm" id="scanS">📷 Quét mã vạch</button>${S.me.stock_count || isMgr() ? '<button class="btn primary sm" id="cnt">🧮 Kiểm kho / đếm hàng</button>' : ''}${isMgr() ? '<button class="btn sm" id="sperm">Phân quyền kho</button>' : ''}</div></div>
     <div class="card"><div class="table-wrap"><table><thead><tr><th>Tên</th><th>Nhóm</th><th>ĐVT</th><th class="num">Tồn</th><th class="num">Mức báo hết</th><th>Trạng thái</th><th>Kiểm gần nhất</th><th></th></tr></thead>
-      <tbody>${list.map((m) => `<tr><td><b>${esc(m.name)}</b>${m.size ? ` <span class="small muted">${m.size}${m.size_unit}</span>` : ''}</td><td class="small">${esc(m.grp || '')}</td><td>${esc(m.unit || '')}</td>
+      <tbody>${list.map((m) => `<tr><td><b>${esc(m.name)}</b>${m.size ? ` <span class="small muted">${m.size}${m.size_unit}</span>` : ''}${m.barcode ? ' <span class="small muted" title="Đã gắn mã vạch">🏷</span>' : ''}</td><td class="small">${esc(m.grp || '')}</td><td>${esc(m.unit || '')}</td>
         <td class="num"><b>${qtyFmt(m.stock)}</b></td><td class="num">${m.min_qty != null ? qtyFmt(m.min_qty) : '<span class="muted small">—</span>'} <button class="btn sm" data-min="${m.id}">Sửa</button></td>
         <td><span class="badge ${STK[m.status][1]}">${STK[m.status][0]}</span>${m.ordered_at ? ` <span class="badge">Đã gọi ${dmy(m.ordered_at.slice(0, 10))}${m.ordered_by_name ? ' · ' + esc(m.ordered_by_name) : ''}</span>` : ''}</td>
         <td class="small">${m.last_count ? dmy(m.last_count) + (m.last_count_by ? ' · ' + esc(m.last_count_by) : '') : '<span class="muted">chưa kiểm</span>'}</td>
@@ -1837,6 +1899,7 @@ async function stockLevelsView(main, reload) {
       <div class="small muted" style="margin-top:8px">Tồn = nhập − dùng cho dịch vụ − bán − điều chỉnh kiểm kho. Đặt “Mức báo hết” để được nhắc trước khi hết hẳn. Khi hàng mới về (nhập kho), dấu “Đã gọi” tự xóa.</div></div>`;
   main.appendChild(wrap);
   const setP = (o) => go('stock', { ...S.params, ...o });
+  $('#scanS').onclick = () => stockScan(rows, reload);
   $$('[data-sk]', wrap).forEach((b) => (b.onclick = () => setP({ kind: b.dataset.sk })));
   $('#stf').onchange = (e) => setP({ st: e.target.value });
   $$('[data-min]', wrap).forEach((b) => (b.onclick = () => {
@@ -1851,12 +1914,22 @@ async function stockLevelsView(main, reload) {
   if (cnt) cnt.onclick = () => {
     const items = rows.filter((m) => kind === 'all' || m.kind === kind);
     openModal('Kiểm kho / đếm hàng', `<form id="cf2"><div class="small muted">Đếm thực tế rồi điền số vào ô. Ô để trống = không kiểm món đó. Lệch so với máy sẽ tự ghi điều chỉnh.</div>
-      <input id="cq" type="search" placeholder="🔍 Lọc tên…" style="margin:8px 0">
+      <div class="row" style="margin:8px 0;gap:6px"><input id="cq" type="search" placeholder="🔍 Lọc tên…" style="flex:1"><button type="button" class="btn sm primary" id="cScan">📷 Quét để đếm</button></div>
       <div style="max-height:52vh;overflow:auto">${items.map((m) => `<div class="row cnt-row" data-n="${esc(m.name.toLowerCase())}" style="padding:4px 0;border-bottom:1px solid var(--line)"><div style="flex:1;min-width:0" class="small"><b>${esc(m.name)}</b> <span class="muted">· máy: ${qtyFmt(m.stock)} ${esc(m.unit || '')}</span></div>
         <input type="number" step="0.01" min="0" inputmode="decimal" data-cm="${m.id}" style="width:90px"></div>`).join('')}</div>
       <label style="margin-top:8px">Ghi chú</label><input name="note" placeholder="VD: kiểm cuối tháng 11">
       <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu kết quả kiểm</button></div></form>`);
     $('#cq').oninput = (e) => { const q = e.target.value.toLowerCase(); $$('.cnt-row').forEach((r) => (r.style.display = r.dataset.n.includes(q) ? '' : 'none')); };
+    // Quét liên tục: mỗi lần quét 1 sản phẩm = +1 vào ô đếm của món đó
+    $('#cScan').onclick = () => scanBarcode({ title: 'Quét để đếm (mỗi lần quét +1)', continuous: true, hint: 'Quét lần lượt từng chai/hộp. Mỗi lần quét cộng 1.', onCode: (code) => {
+      const m = items.find((x) => hasCode(x, code));
+      if (!m) return `⚠ Mã <b>${esc(code)}</b> chưa gắn sản phẩm. Gắn ở nút “📷 Quét mã vạch” ngoài trang Kho.`;
+      const inp = $(`[data-cm="${m.id}"]`); if (!inp) return 'Món này không nằm trong danh sách đang kiểm';
+      inp.value = Math.round(((Number(inp.value) || 0) + 1) * 100) / 100;
+      $$('.cnt-row.hit').forEach((r) => r.classList.remove('hit'));
+      const row = inp.closest('.cnt-row'); row.style.display = ''; row.classList.add('hit'); row.scrollIntoView({ block: 'nearest' });
+      return `✓ <b>${esc(m.name)}</b>: đếm được <b>${inp.value}</b> (máy ${qtyFmt(m.stock)})`;
+    } });
     $('#cf2').onsubmit = (e) => {
       e.preventDefault();
       guard($('#cf2 button.primary'), async () => {
@@ -1947,12 +2020,14 @@ VIEWS.stock = async (main) => {
         <div><label>Dung tích 1 đơn vị</label><div class="row"><input type="number" name="size" step="any" min="0" value="${m.size || ''}" style="flex:1"><select name="size_unit" style="width:auto"><option ${m.size_unit !== 'g' ? 'selected' : ''}>ml</option><option ${m.size_unit === 'g' ? 'selected' : ''}>g</option></select></div></div>
         <div><label>Giá bán cho khách (sản phẩm)</label><input type="number" name="sell_price" min="0" step="1000" value="${m.sell_price ?? ''}"></div>
         <div><label>Giá thị trường 1 đơn vị (khi nhập 0đ / hàng tặng)</label><input type="number" name="ref_cost" min="0" step="1000" value="${m.ref_cost ?? ''}"><div class="small muted">Chỉ dùng tính giá cốt khi giá nhập = 0đ</div></div>
+        <div><label>Mã vạch (nhiều mã cách nhau dấu phẩy)</label><div class="row" style="gap:6px"><input name="barcode" value="${esc(m.barcode || '')}" style="flex:1;min-width:0"><button type="button" class="btn sm" id="mfScan">📷</button></div></div>
         <div><label>Trạng thái</label><select name="active"><option value="1">Đang dùng</option><option value="0" ${m.active ? '' : 'selected'}>Ngừng</option></select></div>
         <div class="full"><label>Ghi chú</label><input name="note" value="${esc(m.note || '')}"></div>
         ${m.kind !== 'retail' ? `<div class="full"><label>🧪 Mã viết trong công thức (cách nhau dấu phẩy)</label><input name="formula_keys" value="${esc(m.formula_keys || '')}" placeholder="VD: graypearl, cobalt, addicthy">
           <label class="small" style="font-weight:normal;margin-top:6px"><input type="checkbox" name="formula_default" value="1" style="width:auto" ${m.formula_default ? 'checked' : ''}> Màu mặc định khi công thức chỉ ghi số tông (9nb, 7glca…)</label>
           <div class="small muted">Thợ gõ “9graypearl 15ml” ở lượt làm → app tự ghi hóa chất này 15${esc(m.size_unit || 'ml')} và tính giá cốt. Cần điền “Dung tích 1 đơn vị”.</div></div>` : ''}</div>
         <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu</button></div></form>`);
+      $('#mfScan').onclick = () => scanBarcode({ title: 'Quét mã cho ' + (m.name || 'sản phẩm mới'), onCode: (code) => { const i = $('#mf [name=barcode]'); if (!i.value.split(/[,;\s]+/).map(normCode).includes(normCode(code))) i.value = [i.value.trim(), code].filter(Boolean).join(','); } });
       $('#mf').onsubmit = (e) => { e.preventDefault(); guard($('#mf button.primary'), async () => {
         await api(m.id ? '/materials/' + m.id : '/materials', { method: m.id ? 'PUT' : 'POST', body: formData($('#mf')) }); closeModal(); toast('Đã lưu'); reload(); }); };
     };
@@ -2444,7 +2519,7 @@ VIEWS.settings = async (main) => {
       create_appointment: 'Đặt lịch', update_appointment: 'Sửa lịch hẹn', appointment_status: 'Đổi trạng thái lịch', change_password: 'Đổi mật khẩu', reset_password: 'Đặt lại MK',
       create_user: 'Tạo tài khoản', update_user: 'Sửa tài khoản', update_settings: 'Sửa tham số', create_service: 'Thêm dịch vụ', update_service: 'Sửa dịch vụ', backup: 'Sao lưu', download_backup: 'Tải bản sao lưu',
       create_off: 'Xin/ghi nghỉ', decide_off: 'Duyệt nghỉ', delete_off: 'Xóa đơn nghỉ', manual_attendance: 'Chấm công tay', delete_attendance: 'Xóa chấm công',
-      stock_in: 'Nhập kho', stock_adjust: 'Điều chỉnh kho', stock_count: 'Kiểm kho', stock_ordered: 'Báo đã gọi hàng', stock_unordered: 'Bỏ báo gọi hàng', stock_perm: 'Phân quyền kho',
+      stock_in: 'Nhập kho', stock_adjust: 'Điều chỉnh kho', stock_count: 'Kiểm kho', stock_ordered: 'Báo đã gọi hàng', stock_barcode: 'Gắn mã vạch', stock_unordered: 'Bỏ báo gọi hàng', stock_perm: 'Phân quyền kho',
       transfer_customers: 'Bàn giao khách', update_visit_notes: 'Sửa ghi chú lượt', tip_paid: 'Ghi trả tip', expense_create: 'Ghi khoản chi', petty_in: 'Nạp quỹ', expense_approved: 'Duyệt chi', expense_rejected: 'KHÔNG duyệt chi', expense_pending: 'Đưa chi về chờ duyệt', expense_delete: 'XÓA khoản chi', expense_refunded: 'Hoàn quỹ', petty_target: 'Đổi mức quỹ', chat_to_appointment: 'Tạo lịch từ chat', chat_auto: 'Bật/tắt tự tạo lịch', price_list: 'Áp bảng giá mới', appointment_pay: 'Ghi đã thu (khách nợ)', set_ai_key: 'Đổi khóa AI', chat_summary: 'AI tóm tắt chat', delete_chat: 'Xóa tin chat', set_tip_pool: 'Sửa nhóm chia tip', create_card_type: 'Thêm gói thẻ', update_card_type: 'Sửa gói thẻ' };
     const hot = ['update_visit', 'delete_visit', 'adjust_card', 'delete_customer', 'export_excel', 'update_card', 'stock_adjust', 'delete_attendance', 'expense_delete', 'expense_rejected'];
     const LB = { date: 'Ngày', time: 'Giờ', customer_id: 'Khách', main_staff_id: 'Thợ chính', assistant_id: 'Người phụ', staff_id: 'Thợ', surcharge: 'Phụ thu', discount: 'Giảm giá', discount_reason: 'Lý do giảm',

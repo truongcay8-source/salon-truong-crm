@@ -59,6 +59,23 @@ if (!db.prepare('PRAGMA table_info(materials)').all().some((x) => x.name === 'fo
 }
 // Giá thị trường 1 đơn vị: dùng tính giá cốt khi hàng nhập 0đ (hàng tặng) – tiền thật phải bỏ ra nếu mua lại
 if (!db.prepare('PRAGMA table_info(materials)').all().some((x) => x.name === 'ref_cost')) db.exec('ALTER TABLE materials ADD COLUMN ref_cost INTEGER');
+// Mã vạch in trên sản phẩm (EAN…): 1 sản phẩm có thể nhiều mã, lưu cách nhau dấu phẩy
+if (!db.prepare('PRAGMA table_info(materials)').all().some((x) => x.name === 'barcode')) db.exec('ALTER TABLE materials ADD COLUMN barcode TEXT');
+const normCode = (c) => String(c || '').replace(/[^0-9A-Za-z\-._]/g, '').toUpperCase();
+const codeList = (s) => [...new Set(String(s || '').split(/[,;\s]+/).map(normCode).filter(Boolean))];
+function findByBarcode(code) {
+  const c = normCode(code); if (!c) return null;
+  return db.prepare("SELECT * FROM materials WHERE barcode IS NOT NULL AND barcode<>''").all().find((m) => codeList(m.barcode).includes(c)) || null;
+}
+// Gắn mã cho 1 sản phẩm (gỡ mã đó khỏi sản phẩm khác nếu đang gắn nhầm)
+function attachBarcode(mid, code) {
+  const c = normCode(code); if (!c) throw bad('Mã vạch trống');
+  for (const m of db.prepare("SELECT id, barcode FROM materials WHERE barcode LIKE ?").all('%' + c + '%')) {
+    if (m.id !== mid) db.prepare('UPDATE materials SET barcode=? WHERE id=?').run(codeList(m.barcode).filter((x) => x !== c).join(',') || null, m.id);
+  }
+  const cur = db.prepare('SELECT barcode FROM materials WHERE id=?').get(mid);
+  db.prepare('UPDATE materials SET barcode=? WHERE id=?').run([...new Set([...codeList(cur && cur.barcode), c])].join(','), mid);
+}
 // Dung tích / giá tham chiếu tra từ web hãng & shop (17/11/2026). Chỉ điền ô đang trống, quản lý sửa được ở Kho.
 // [mẫu tên, dung tích, đơn vị, giá thị trường 1 đơn vị nếu nhập 0đ, ghi chú nguồn]
 const SIZE_FILL = [
@@ -102,8 +119,26 @@ function seedFormulaKeys() {
     if (d) db.prepare('UPDATE materials SET formula_default=1 WHERE id=?').run(d.id);
   }
 }
+// Giá bán lẻ tham khảo (tra 23/11/2026): chỉ điền khi giá bán đang trống, quản lý sửa được ở Kho.
+// Món không tìm được giá rõ ràng (Muriem V/Scalp S 660ml, Moroccanoil, Davines, Surf Tonic) → để trống, không đoán.
+const PRICE_FILL = [
+  [/reuzel fiber pomade.*95g/i, 575000, 'reuzel.com.vn (trang Reuzel Việt Nam)'],
+  [/label\.?m protein spray 250ml/i, 709000, 'Giá gốc tại myphamtocchinhhang.com, trùng giá niêm yết NCC'],
+  [/label\.?m curl define cream 150ml/i, 828000, 'Giá gốc tại myphamtocchinhhang.com, trùng giá niêm yết NCC'],
+  [/label\.?m fashion edition ultimate hairspray 250ml/i, 709000, 'Giá gốc tại myphamtocchinhhang.com, trùng giá niêm yết NCC'],
+  [/elujuda bleach care serum 120ml/i, 668000, 'Giá gốc tại myphamtocnhapkhau.com, myphamtoclux.com'],
+  [/^dầu xả muriem v\b/i, 1200000, 'Giá gốc tại chiaki.vn'],
+  [/muriem cleansing.*250g/i, 750000, 'Giá gốc tại lizi.vn'],
+];
+function fillPrices() {
+  for (const m of db.prepare("SELECT id, name, note FROM materials WHERE kind='retail' AND sell_price IS NULL").all()) {
+    const f = PRICE_FILL.find(([re]) => re.test(String(m.name || '').trim()));
+    if (f) db.prepare('UPDATE materials SET sell_price=?, note=? WHERE id=?').run(f[1], [m.note, 'Giá bán: ' + f[2]].filter(Boolean).join(' · '), m.id);
+  }
+}
 seedFormulaKeys();
 fillSizes();
+fillPrices();
 
 const isMgr = (u) => u.role !== 'staff';
 // Quyền kho cho nhân viên: xem tồn + báo hàng hết (mặc định Chị Thu, Dương), kiểm kho đếm hàng (mặc định Dương)
@@ -128,11 +163,13 @@ function stockLevels() {
     const stock = r2(stockOf(m.id));
     const li = lastIn.get(m.id).t;
     const reported = m.reported_at && !(li && li > m.reported_at) ? m.reported_at : null; // nhân viên báo hết qua chat, chưa nhập hàng lại
-    const status = stock <= 0 ? 'out' : m.min_qty != null && stock <= m.min_qty ? 'low' : reported ? 'low' : 'ok';
+    // Chưa đặt mức báo: hóa chất báo khi đã mở đơn vị cuối (còn < 1), sản phẩm bán báo khi còn 1
+    const lowAt = m.min_qty != null ? m.min_qty : m.kind === 'retail' ? 1 : null;
+    const status = stock <= 0 ? 'out' : (lowAt != null ? stock <= lowAt : stock < 1) ? 'low' : reported ? 'low' : 'ok';
     const ordered = m.ordered_at && !(li && li > m.ordered_at) ? m.ordered_at : null;
     const lc = lastCount.get(m.id);
     return { id: m.id, code: m.code, name: m.name, kind: m.kind, grp: m.grp, unit: m.unit, size: m.size, size_unit: m.size_unit,
-      stock, min_qty: m.min_qty, status, ordered_at: ordered, ordered_by_name: ordered ? m.ordered_by_name : null,
+      stock, min_qty: m.min_qty, status, barcode: m.barcode, sell_price: m.sell_price, ordered_at: ordered, ordered_by_name: ordered ? m.ordered_by_name : null,
       last_count: lc ? lc.date : null, last_count_by: lc ? lc.by_name : null, reported_at: reported };
   });
 }
@@ -166,7 +203,7 @@ function materialRows(user, opts = {}) {
   const rows = db.prepare(`SELECT * FROM materials ${opts.all ? '' : 'WHERE active=1'} ORDER BY kind, grp, name`).all();
   return rows.map((m) => {
     const base = { id: m.id, code: m.code, name: m.name, kind: m.kind, grp: m.grp, unit: m.unit, size: m.size, size_unit: m.size_unit, sell_price: m.sell_price, active: m.active,
-      formula_keys: m.formula_keys, formula_default: m.formula_default };
+      formula_keys: m.formula_keys, formula_default: m.formula_default, barcode: m.barcode };
     if (!isMgr(user)) return base;
     const cost = avgCost(m.id), stock = stockOf(m.id);
     return { ...base, note: m.note, ref_cost: m.ref_cost, avg_cost: Math.round(cost), cost_per_size: m.size ? cost / m.size : null, stock: r2(stock), stock_value: Math.round(stock * cost) };
@@ -269,6 +306,33 @@ function mount(app, { MGR }) {
     audit(req.user.id, 'stock_count', 'material', null, { changes: Object.fromEntries(diffs.map((d) => [d.name, [d.before, d.counted]])) });
     res.json({ ok: true, counted: lines.length, diffs });
   });
+  // Quét mã vạch: tra sản phẩm (ai đăng nhập cũng tra được để tính tiền; không trả giá nhập)
+  app.get('/api/stock/barcode/:code', (req, res) => {
+    const m = findByBarcode(req.params.code);
+    if (!m) return res.json({ found: false, code: normCode(req.params.code) });
+    res.json({ found: true, id: m.id, name: m.name, kind: m.kind, unit: m.unit, sell_price: m.sell_price, active: m.active, stock: r2(stockOf(m.id)) });
+  });
+  app.post('/api/stock/:id/barcode', need('stock_view'), (req, res) => {
+    const id = int(req.params.id);
+    if (!db.prepare('SELECT 1 FROM materials WHERE id=?').get(id)) throw new HttpError(404, 'Không tìm thấy sản phẩm');
+    attachBarcode(id, req.body.code);
+    audit(req.user.id, 'stock_barcode', 'material', id, { code: normCode(req.body.code) });
+    res.json({ ok: true });
+  });
+  // Nhập thêm hàng khi quét mã (người kiểm kho làm được). Nhân viên không nhập giá → lấy giá vốn bình quân, quản lý sửa sau.
+  app.post('/api/stock/:id/receive', need('stock_count'), (req, res) => {
+    const id = int(req.params.id);
+    if (!db.prepare('SELECT 1 FROM materials WHERE id=?').get(id)) throw new HttpError(404, 'Không tìm thấy sản phẩm');
+    const qty = Number(req.body.qty);
+    if (!(qty > 0)) throw bad('Nhập số lượng');
+    const given = isMgr(req.user) && req.body.unit_cost !== '' && req.body.unit_cost != null ? Math.max(0, Number(req.body.unit_cost) || 0) : null;
+    const uc = given != null ? given : avgCost(id);
+    const note = (given == null && !isMgr(req.user) ? 'Nhân viên nhập (giá theo bình quân, chờ quản lý kiểm)' : 'Nhập hàng') + (str(req.body.note) ? ' · ' + str(req.body.note) : '');
+    db.prepare("INSERT INTO stock_moves(material_id,date,kind,qty,unit_cost,supplier,note,created_by) VALUES (?,?,'in',?,?,?,?,?)")
+      .run(id, today(), qty, uc, str(req.body.supplier), note, req.user.id);
+    audit(req.user.id, 'stock_in', 'material', id, { qty, by_scan: true });
+    res.json({ ok: true, stock: r2(stockOf(id)) });
+  });
   // Mức báo sắp hết + đánh dấu đã gọi hàng (người xem kho làm được)
   app.put('/api/stock/:id/min', need('stock_view'), (req, res) => {
     const v = req.body.min_qty === '' || req.body.min_qty == null ? null : Math.max(0, Number(req.body.min_qty));
@@ -297,6 +361,7 @@ function mount(app, { MGR }) {
     return { name, kind: b.kind === 'retail' ? 'retail' : 'service', grp: str(b.grp), unit: str(b.unit), size: sz, size_unit: sz ? (b.size_unit === 'g' ? 'g' : 'ml') : null,
       sell_price: b.sell_price === '' || b.sell_price == null ? null : Math.max(0, int(b.sell_price)), active: b.active === false || b.active === 0 || b.active === '0' ? 0 : 1, note: str(b.note),
       ref_cost: b.ref_cost === '' || b.ref_cost == null ? null : Math.max(0, int(b.ref_cost)) || null,
+      barcode: codeList(b.barcode).join(',') || null,
       formula_keys: str(b.formula_keys), formula_default: b.formula_default === '1' || b.formula_default === 1 || b.formula_default === true ? 1 : 0 };
   };
   const oneDefault = (id, m) => { if (m.formula_default) db.prepare('UPDATE materials SET formula_default=0 WHERE id<>?').run(id); };
@@ -383,4 +448,4 @@ function mount(app, { MGR }) {
 }
 
 module.exports = {
-  perm, stockAlerts, mount, applyVisit, clearVisit, visitMaterials, importPurchases: (...a) => { const r = importPurchases(...a); seedFormulaKeys(); fillSizes(); return r; }, avgCost, parseSize, seedFormulaKeys, fillSizes };
+  findByBarcode, attachBarcode, codeList, perm, stockAlerts, mount, applyVisit, clearVisit, visitMaterials, importPurchases: (...a) => { const r = importPurchases(...a); seedFormulaKeys(); fillSizes(); fillPrices(); return r; }, avgCost, parseSize, seedFormulaKeys, fillSizes };
