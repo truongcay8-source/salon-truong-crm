@@ -11,7 +11,7 @@ APP_DIR=/opt/salon
 DATA_DIR=/opt/salon-data
 PORT=3000
 
-[ "$(id -u)" -eq 0 ] || { echo "Hãy chạy bằng tài khoản root (hoặc: sudo bash)"; exit 1; }
+[ "${EUID:-$(id -u 2>/dev/null || echo 1)}" = 0 ] || { echo "Hãy chạy bằng tài khoản root (hoặc: sudo bash)"; exit 1; }
 export DEBIAN_FRONTEND=noninteractive
 
 echo "==> Cập nhật hệ thống và cài Node.js 22, Caddy, git"
