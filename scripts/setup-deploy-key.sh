@@ -3,7 +3,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/truongcay8-source/salon-truong-crm/main/scripts/setup-deploy-key.sh | bash
 # Sau đó mỗi lần cập nhật chỉ cần gõ:  capnhat-salon
 set -euo pipefail
-[ "$(id -u)" -eq 0 ] || { echo "Hãy chạy bằng tài khoản root"; exit 1; }
+[ "${EUID:-$(id -u 2>/dev/null || echo 1)}" = 0 ] || { echo "Hãy chạy bằng tài khoản root"; exit 1; }
 
 SLUG=truongcay8-source/salon-truong-crm
 APP_DIR=/opt/salon
