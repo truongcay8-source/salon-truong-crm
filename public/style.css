@@ -265,3 +265,11 @@ body:has(.chat-box) .search-fab { display: none; }
 .sales-split th.grp-hh { background: color-mix(in srgb, #2a4a7a 10%, transparent); }
 .sales-split thead tr:first-child th { text-align: center; font-size: 12px; }
 .sales-split td.grp-key { background: color-mix(in srgb, var(--accent, #7a4a2a) 8%, transparent); }
+/* Quét mã vạch */
+.scan-ov { position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 80; display: flex; align-items: flex-start; justify-content: center; padding: 16px 12px; overflow-y: auto; }
+.scan-box { background: var(--surface); border-radius: 16px; width: 100%; max-width: 460px; padding: 12px 14px 14px; }
+.scan-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.scan-reader { width: 100%; min-height: 220px; background: #000; border-radius: 10px; overflow: hidden; }
+.scan-reader video { width: 100% !important; height: auto !important; display: block; }
+.scan-msg { margin-top: 8px; min-height: 1.4em; }
+.cnt-row.hit { background: var(--surface-2); }

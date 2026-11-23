@@ -276,6 +276,21 @@ test('luồng chính và phân quyền', async () => {
   assert.ok(rem.stock.find((m) => m.id === color).ordered_at);
   await mgr.put(`/stock/${color}/min`, { min_qty: '' });
 
+  // Mã vạch: Thu gắn mã, ai cũng tra được; Thu không nhập hàng, Dương nhập (giá theo bình quân, không lộ giá)
+  assert.equal((await nv6.post(`/stock/${shampoo}/barcode`, { code: '8 935-0001' })).status, 403);
+  assert.equal((await thu.post(`/stock/${shampoo}/barcode`, { code: '8935 0001' })).status, 200);
+  let bc = (await nv6.get('/stock/barcode/89350001')).data;
+  assert.equal(bc.found, true); assert.equal(bc.id, shampoo); assert.equal(bc.avg_cost, undefined);
+  await mgr.post(`/stock/${color}/barcode`, { code: '89350001' });
+  assert.equal((await thu.get('/stock/barcode/89350001')).data.id, color, 'gắn lại mã → chuyển sang sản phẩm mới');
+  assert.ok(!(await mgr.get('/materials')).data.find((m) => m.id === shampoo).barcode);
+  assert.equal((await thu.post(`/stock/${color}/receive`, { qty: 2 })).status, 403);
+  const before = (await mgr.get('/materials')).data.find((m) => m.id === color);
+  r = await duong.post(`/stock/${color}/receive`, { qty: 2, unit_cost: 1 });
+  assert.equal(r.status, 200); assert.equal(r.data.stock, before.stock + 2);
+  assert.equal((await mgr.get('/materials')).data.find((m) => m.id === color).avg_cost, before.avg_cost, 'nhân viên nhập không đổi giá vốn');
+  await duong.post('/stock/count', { lines: [{ material_id: color, counted: before.stock }] });
+
   // Thợ phụ trách + công thức khách: lượt có công thức → lưu vào hồ sơ; lọc "khách của tôi"; nhân viên không đổi được thợ phụ trách
   r = await mgr.post('/visits', { customer_id: huong, date: d3, time: '16:00', main_staff_id: staff['Chị Thu'], payment_method: 'Tiền mặt', items: [{ service_id: dye.id }], formula: 'Milbon 7NB 30g + oxy 6% 1:1,5' });
   assert.equal(r.status, 200);
