@@ -89,7 +89,7 @@ function report(month) {
   const fund = fundRows.reduce((a, r) => a + r.amount, 0);
   // Khoản chi quỹ dễ bị TRÙNG với chi phí cố định (điện, internet, phần mềm, tiền nhà) hoặc KHÔNG phải chi phí (đổi tiền, ứng lương)
   const fundFlags = db.prepare(`SELECT id, date, amount, note FROM expenses WHERE kind='out' AND status='approved' AND date BETWEEN ? AND ?`).all(from, to)
-    .filter((e) => /điện|internet|wifi|youtube|phần mềm|tiền nhà|thuê nhà|đổi tiền|ứng lương|rút tiền/i.test(e.note || ''))
+    .filter((e) => /điện|internet|wifi|youtube|youtobe|canva|capcut|phần mềm|tiền nhà|thuê nhà|đổi tiền|ứng lương|rút tiền/i.test(e.note || ''))
     .map((e) => ({ ...e, note: String(e.note).replace(/ · từ sổ đặt lịch$/, '') }));
 
   // 5) Chi phí cố định: mặc định + khoản riêng của tháng (trùng tên thì khoản của tháng thay mặc định)
