@@ -62,6 +62,10 @@ function board(date, user) {
   if (user.role === 'owner') {
     const e = expectedCash(date);
     out.cash = e;
+    // Tổng tiền cả ngày (chỉ Lãnh đạo): doanh số, theo hình thức trả, trừ thẻ, chưa trả, bán thẻ, tip
+    const sm = L.salesReport(date, date, { role: 'owner' }).summary;
+    out.totals = { visits: sm.visits, sales: sm.service_sales, by_method: sm.by_method, paid_by_card: sm.paid_by_card, paid_by_gift: sm.paid_by_gift,
+      unpaid: sm.unpaid, card_sales: sm.card_sales, tips: sm.tips, money_in: sm.money_in };
     out.closes = db.prepare('SELECT k.*, u.full_name user_name FROM cash_closes k LEFT JOIN users u ON u.id=k.user_id WHERE k.date=? ORDER BY k.id').all(date)
       .map((k) => ({ ...k, detail: k.detail ? JSON.parse(k.detail) : null, diff: k.counted - k.expected }));
   }

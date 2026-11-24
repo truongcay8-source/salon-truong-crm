@@ -113,7 +113,6 @@ const PAGES = [
   ['pos', 'Thu ngân', '🧾', () => true],
   ['chat', 'Chat nội bộ', '💬', () => true],
   ['customers', 'Khách hàng', '👤', () => true],
-  ['visits', 'Lượt làm', '✂️', () => true],
   ['expenses', 'Chi & quỹ tiền mặt', '💸', () => true],
   ['reminders', 'Nhắc nhở', '🔔', () => true],
   ['cards', 'Thẻ trả trước', '💳', () => true],
@@ -525,14 +524,20 @@ VIEWS.pos = async (main) => {
     <div class="small muted">${esc(a.service || '')}${a.service ? ' · ' : ''}${who(a)}</div>
     ${kind === 'waiting' ? `<div class="row"><button class="btn sm" data-in="${a.id}">✓ Khách đến</button><button class="btn sm primary" data-pay="${a.id}">💰 Thanh toán</button></div>` : ''}
     ${kind === 'serving' ? `<div class="row"><button class="btn primary" data-pay="${a.id}">💰 Thanh toán</button><button class="btn sm" data-out="${a.id}" title="Bấm nhầm">↶</button></div>` : ''}
-    ${kind === 'unpaid' ? `<div class="row"><span class="badge bad">Chưa trả</span>${a.visit_total != null ? `<b>${money(a.visit_total)}</b>` : ''}<a class="btn sm" href="#visits">Xem</a></div>` : ''}
-    ${kind === 'paid' ? `<div class="row"><span class="badge ok">✓ ${esc(a.payment_method || 'Đã thu')}</span>${a.visit_total != null ? `<b>${money(a.visit_total)}</b>` : ''}<span class="small muted">${esc(a.visit_code || '')}</span></div>` : ''}
+    ${kind === 'unpaid' ? `<div class="row"><span class="badge bad">Chưa trả</span>${a.visit_total != null ? `<b>${money(a.visit_total)}</b>` : ''}<button class="btn sm" data-vw="${a.visit_id}">Xem</button></div>` : ''}
+    ${kind === 'paid' ? `<div class="row"><span class="badge ok">✓ ${esc(a.payment_method || 'Đã thu')}</span>${a.visit_total != null ? `<b>${money(a.visit_total)}</b>` : ''}<button class="btn sm" data-vw="${a.visit_id}">${isOwner() ? 'Xem / sửa' : 'Hóa đơn'}</button></div>` : ''}
   </div>`;
   const col = (title, list, kind, empty) => `<div class="pos-col"><h3>${title} <span class="badge">${list.length}</span></h3>${list.map((a) => card(a, kind)).join('') || `<div class="small muted">${empty}</div>`}</div>`;
-  const C = r.cash;
+  const C = r.cash, T = r.totals;
+  const tot = T ? `<div class="card"><h3>💰 Tổng tiền ${dmy(date)} <span class="small muted">(chỉ bạn thấy)</span></h3><div class="grid kpis" style="margin:0">
+      <div class="kpi"><div class="l">Doanh số (${T.visits} lượt)</div><div class="v">${money(T.sales)}</div><div class="s">${T.paid_by_card ? 'trừ thẻ ' + money(T.paid_by_card) + (T.paid_by_gift ? ' (tri ân ' + money(T.paid_by_gift) + ')' : '') : ''}</div></div>
+      <div class="kpi"><div class="l">Tiền thực thu</div><div class="v">${money(T.money_in)}</div><div class="s">${Object.entries(T.by_method).filter(([, v]) => v).map(([k, v]) => esc(k) + ' ' + money(v)).join(' · ')}</div></div>
+      <div class="kpi"><div class="l">Bán thẻ</div><div class="v">${money(T.card_sales)}</div><div class="s">tip ${money(T.tips)}</div></div>
+      ${T.unpaid ? `<div class="kpi"><div class="l">Khách chưa trả</div><div class="v" style="color:var(--bad,#c0392b)">${money(T.unpaid)}</div></div>` : ''}</div></div>` : '';
   main.innerHTML = header('🧾 Thu ngân', 'Ai cũng làm thu ngân được: khách đến bấm ✓, làm xong bấm 💰 Thanh toán. Sửa hóa đơn đã lưu vẫn chỉ Lãnh đạo.',
     `<button class="btn primary" id="walk">+ Khách vãng lai</button><button class="btn" id="close">🔒 Kết ca</button>`) +
     `${isMgr() ? `<div class="card"><div class="row"><input type="date" id="pd" value="${date}" style="width:auto">${date !== S.today ? '<button class="btn sm" id="tdy">Hôm nay</button>' : ''}<span class="small muted">${dmy(date)}</span></div></div>` : ''}
+    ${tot}
     <div class="pos-board">
       ${col('⏳ Chờ đến', r.waiting, 'waiting', 'Không còn lịch chờ')}
       ${col('✂️ Đang phục vụ', r.serving, 'serving', 'Chưa có khách trong tiệm')}
@@ -556,6 +561,7 @@ VIEWS.pos = async (main) => {
     await checkout({ ...a, date: date }, reload);
   })));
   $('#walk').onclick = () => visitForm({ date: S.today }, reload);
+  $$('[data-vw]', main).forEach((b) => (b.onclick = () => guard(b, async () => { if (isOwner()) visitForm(await api('/visits/' + b.dataset.vw), reload); else showReceipt(Number(b.dataset.vw)); })));
   if ($('#pd')) $('#pd').onchange = (e) => e.target.value && go('pos', { date: e.target.value });
   if ($('#tdy')) $('#tdy').onclick = () => go('pos', {});
   $('#close').onclick = () => {
