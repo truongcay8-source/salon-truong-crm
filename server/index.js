@@ -392,9 +392,9 @@ app.get('/api/appointments', (req, res) => {
   let extra = '';
   if (req.query.staff_id) { extra = ' AND a.staff_id=?'; params.push(int(req.query.staff_id)); }
   const u = req.user;
-  const rows = db.prepare(`SELECT a.*, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, c.code customer_code, u.full_name staff_name,
+  const rows = db.prepare(`SELECT a.*, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, c.code customer_code, u.full_name staff_name, tk.full_name taken_by_name,
       v.total visit_total, v.main_staff_id v_main, v.assistant_id v_asst, (SELECT GROUP_CONCAT(name, ' + ') FROM visit_items WHERE visit_id=v.id) visit_services
-    FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id
+    FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id LEFT JOIN users tk ON tk.id=a.taken_by
     LEFT JOIN visits v ON v.id=a.visit_id AND v.status='done'
     WHERE a.date BETWEEN ? AND ?${extra} ORDER BY a.date, a.time`).all(...params);
   if (!req.query.staff_id) require('./famgroup').tag(rows);
@@ -414,10 +414,12 @@ function apptInput(b) {
   if (!customerId && !guestName) throw bad('Chọn khách hoặc nhập tên khách mới');
   const status = ['booked', 'arrived', 'done', 'cancelled', 'noshow'].includes(b.status) ? b.status : 'booked';
   return { customer_id: customerId, guest_name: customerId ? null : guestName, guest_phone: customerId ? null : L.normPhone(b.guest_phone),
-    staff_id: int(b.staff_id) || null, date: b.date, time: b.time, duration: Math.max(15, int(b.duration) || 60), service: str(b.service), status, note: str(b.note) };
+    staff_id: int(b.staff_id) || null, date: b.date, time: b.time, duration: Math.max(15, int(b.duration) || 60), service: str(b.service), status, note: str(b.note), taken_by: int(b.taken_by) || null };
 }
 app.post('/api/appointments', (req, res) => {
   const a = apptInput(req.body);
+  a.taken_by = a.taken_by || req.user.id;
+  a.manual_edit = 1;
   if (a.staff_id) {
     const clash = db.prepare("SELECT time FROM appointments WHERE staff_id=? AND date=? AND time=? AND status IN ('booked','arrived')").get(a.staff_id, a.date, a.time);
     if (clash && !req.body.force) return res.status(409).json({ error: 'Thợ này đã có lịch lúc ' + a.time + '. Vẫn đặt?', clash: true });
@@ -439,6 +441,8 @@ app.put('/api/appointments/:id', (req, res) => {
   if (['cancelled', 'noshow'].includes(a.status) && !['cancelled', 'noshow'].includes(old.status)) {
     Object.assign(a, cancelFields(a.status, req.body.cancel_reason, req.user));
   }
+  a.taken_by = a.taken_by || old.taken_by || null;
+  a.manual_edit = 1; // đã sửa trên app → đồng bộ sổ không ghi đè ghi chú/hủy, không xóa khi dọn trùng
   const cols = Object.keys(a);
   db.prepare(`UPDATE appointments SET ${cols.map((k) => k + '=?').join(',')} WHERE id=?`).run(...cols.map((k) => a[k]), id);
   audit(req.user.id, 'update_appointment', 'appointment', id, { changes: diffObj(old, a, Object.keys(a).filter((k) => !/^cancel/.test(k))) });

@@ -429,7 +429,7 @@ function apptList(rows, showDate) {
   if (!rows.length) return '<div class="empty">Không có lịch hẹn</div>';
   return rows.map((a) => `<div class="list-item"><div class="time-pill">${esc(a.time)}${showDate ? `<div class="small muted">${dmy(a.date).slice(0, 5)}</div>` : ''}</div>
     <div style="flex:1;min-width:0"><div class="t">${a.customer_id ? `<a href="#customer?id=${a.customer_id}">${esc(a.name)}</a>` : esc(a.name) + ' <span class="badge">khách mới</span>'}</div>
-      <div class="small muted">${a.visit_services ? esc(a.visit_services) : svcWithPrice(a.service)}${a.staff_name ? ' · ' + esc(a.staff_name) : ''}${a.assistant_id ? ' + phụ ' + esc(staffName(a.assistant_id)) : ''} · ${telLinks(a.phone)}</div>
+      <div class="small muted">${a.visit_services ? esc(a.visit_services) : svcWithPrice(a.service)}${a.staff_name ? ' · ' + esc(a.staff_name) : ''}${a.assistant_id ? ' + phụ ' + esc(staffName(a.assistant_id)) : ''} · ${telLinks(a.phone)}${a.taken_by_name ? ` · <span title="Người nhận lịch">📝 ${esc(a.taken_by_name)}</span>` : ''}</div>
       ${a.visit_id && a.visit_total != null ? (a.pay_note === 'Chưa thanh toán' ? `<div class="small"><b style="color:var(--bad)">⚠ Đã làm, khách chưa trả ${money(a.visit_total)}</b> · <a href="#" data-rcpt="${a.visit_id}">Hóa đơn</a></div>${isOwner() ? `<div class="row" style="margin-top:4px">${S.settings.payment_methods.slice(0, 3).map((m) => `<button class="btn sm" data-apaid="${a.id}" data-m="${esc(m)}">Đã thu: ${esc(m)}</button>`).join('')}</div>` : ''}`
         : `<div class="small"><b style="color:var(--ok)">✓ Đã thu ${money(a.visit_total)}</b>${a.pay_note ? ' · ' + esc(a.pay_note) : ''} · <a href="#" data-rcpt="${a.visit_id}">Hóa đơn</a></div>`)
         : a.service && estTotal(a.service) && !['cancelled', 'noshow'].includes(a.status) ? `<div class="small">Dự kiến: <b>${money(estTotal(a.service))}</b></div>` : ''}
@@ -813,6 +813,9 @@ function apptForm(a = {}, after, onSaved) {
     <div><label>Giờ</label><input type="time" name="time" value="${a.time || '09:00'}" step="900" required></div>
     <div><label>Thợ</label><select name="staff_id">${staffOptions(a.staff_id, 'Chưa chọn')}</select></div>
     <div><label>Thời lượng (phút)</label><input type="number" name="duration" value="${a.duration || 60}" min="15" step="15"></div>
+    <div><label>Người nhận lịch</label><select name="taken_by">${(() => { const sel = a.taken_by || (isEdit ? null : S.me.id); const list = S.staff.filter((x) => x.active || x.id === sel);
+      if (!list.some((x) => x.id === S.me.id)) list.unshift({ id: S.me.id, full_name: S.me.full_name });
+      return '<option value="">Không rõ</option>' + list.map((x) => `<option value="${x.id}" ${x.id === sel ? 'selected' : ''}>${esc(x.full_name)}</option>`).join(''); })()}</select></div>
     <div class="full"><label>Dịch vụ dự kiến (chọn được nhiều)</label><div id="svcChips" class="chips"></div>
       <div class="row"><div style="flex:1;min-width:200px" id="aSvcS"></div><select id="svcAdd" style="flex:1"><option value="">+ Thêm dịch vụ…</option>${S.groups.map((g) => `<optgroup label="${esc(g)}">${S.services.filter((x) => x.active && x.grp === g).map((x) => `<option>${esc(x.name)}</option>`).join('')}</optgroup>`).join('')}</select></div>
       <input type="hidden" name="service" value="${esc(a.service || '')}"></div>

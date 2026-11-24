@@ -265,6 +265,10 @@ function seedLevels() {
   if (!db.prepare('PRAGMA table_info(visits)').all().some((c) => c.name === 'tip_private')) {
     db.exec('ALTER TABLE visits ADD COLUMN tip_private INTEGER NOT NULL DEFAULT 0; ALTER TABLE visits ADD COLUMN tip_private_to INTEGER REFERENCES users(id)');
   }
+  // Lịch hẹn: người nhận lịch (ai nghe máy/nhắn tin chốt lịch) + đã sửa trên app → đồng bộ sổ không ghi đè/xóa
+  if (!db.prepare('PRAGMA table_info(appointments)').all().some((c) => c.name === 'taken_by')) {
+    db.exec('ALTER TABLE appointments ADD COLUMN taken_by INTEGER REFERENCES users(id); ALTER TABLE appointments ADD COLUMN manual_edit INTEGER NOT NULL DEFAULT 0');
+  }
   // Thu ngân: 1 hóa đơn trả 2 cách (vd 300k tiền mặt + phần còn lại CK) – pay2_amount nằm TRONG cash_paid
   if (!db.prepare('PRAGMA table_info(visits)').all().some((c) => c.name === 'pay2_method')) {
     db.exec('ALTER TABLE visits ADD COLUMN pay2_method TEXT; ALTER TABLE visits ADD COLUMN pay2_amount INTEGER NOT NULL DEFAULT 0');

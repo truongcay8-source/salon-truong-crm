@@ -117,7 +117,7 @@ function apptKey(text) {
 }
 // Dọn lịch hẹn bị tạo trùng do nhập lại sổ sau khi sửa chữ trong ô: giữ lịch đã thu tiền / hoàn thành, xóa bản "Đã đặt" trùng
 function dedupeAppointments() {
-  const rows = db.prepare(`SELECT id, date, time, staff_id, status, visit_id, note, guest_name, customer_id, pay_note, assistant_id FROM appointments WHERE date>=date('now','localtime','-60 days') ORDER BY date, time, id`).all();
+  const rows = db.prepare(`SELECT id, date, time, staff_id, status, visit_id, note, guest_name, customer_id, pay_note, assistant_id, service, manual_edit, taken_by FROM appointments WHERE date>=date('now','localtime','-60 days') ORDER BY date, time, id`).all();
   const groups = new Map();
   for (const a of rows) {
     const k = apptKey(a.note || a.guest_name || '');
@@ -127,17 +127,18 @@ function dedupeAppointments() {
     groups.get(g).push(a);
   }
   let removed = 0;
-  const rank = (a) => (a.visit_id ? 4 : 0) + (a.status === 'done' ? 2 : a.status === 'arrived' ? 1 : 0);
+  // Ưu tiên giữ: đã thu tiền > đã sửa trên app > có dịch vụ > hoàn thành/đã đến
+  const rank = (a) => (a.visit_id ? 16 : 0) + (a.manual_edit ? 8 : 0) + (a.service ? 4 : 0) + (a.status === 'done' ? 2 : a.status === 'arrived' ? 1 : 0);
   for (const list of groups.values()) {
     if (list.length < 2) continue;
     list.sort((x, y) => rank(y) - rank(x) || x.id - y.id);
     const keep = list[0];
     for (const a of list.slice(1)) {
-      if (a.visit_id || a.status !== 'booked') continue; // chỉ xóa bản "Đã đặt" thừa, không đụng lịch đã thu tiền / đã hủy
+      if (a.visit_id || a.status !== 'booked' || a.manual_edit) continue; // chỉ xóa bản "Đã đặt" thừa từ sổ, không đụng lịch đã thu tiền / đã hủy / đã sửa trên app
       if (a.customer_id && keep.customer_id && a.customer_id !== keep.customer_id) continue;
       try { db.prepare('UPDATE chat_messages SET appointment_id=? WHERE appointment_id=?').run(keep.id, a.id); } catch { /* chưa có bảng chat */ }
       if (a.note && (!keep.note || a.note.length > keep.note.length)) db.prepare('UPDATE appointments SET note=? WHERE id=?').run(a.note, keep.id);
-      db.prepare('UPDATE appointments SET customer_id=COALESCE(customer_id,?), pay_note=COALESCE(pay_note,?), assistant_id=COALESCE(assistant_id,?) WHERE id=?').run(a.customer_id, a.pay_note, a.assistant_id, keep.id);
+      db.prepare('UPDATE appointments SET customer_id=COALESCE(customer_id,?), pay_note=COALESCE(pay_note,?), assistant_id=COALESCE(assistant_id,?), service=COALESCE(service,?), taken_by=COALESCE(taken_by,?) WHERE id=?').run(a.customer_id, a.pay_note, a.assistant_id, a.service, a.taken_by, keep.id);
       db.prepare('DELETE FROM appointments WHERE id=?').run(a.id);
       removed++;
     }
@@ -728,7 +729,7 @@ async function importWorkbook(buffer, opts, user) {
           if (asst) summary.assistants_found++;
           // Trùng = cùng ngày + giờ + thợ và cùng ô (chữ y hệt, hoặc cùng khách / cùng tên khách — sổ sửa thêm tiền "A thái uk" → "A thái uk 685" vẫn là 1 lịch)
           const key = apptKey(e.text);
-          const dup = db.prepare(`SELECT id, status, pay_note, note, customer_id, guest_name FROM appointments WHERE date=? AND time=? AND IFNULL(staff_id,0)=IFNULL(?,0)
+          const dup = db.prepare(`SELECT id, status, pay_note, note, customer_id, guest_name, manual_edit FROM appointments WHERE date=? AND time=? AND IFNULL(staff_id,0)=IFNULL(?,0)
               ORDER BY (visit_id IS NOT NULL) DESC, (status='done') DESC, id`).all(b.date, e.time, e.staffId)
             .find((a) => a.note === e.text || (hit && a.customer_id === hit.id) || (key && apptKey(a.note || a.guest_name || '') === key));
           let apptId;
@@ -736,8 +737,9 @@ async function importWorkbook(buffer, opts, user) {
           if (dup) {
             // Nhập lại file: cập nhật theo màu ô (hủy / hình thức thanh toán), không tạo trùng
             apptId = dup.id;
-            if (dup.note !== e.text) db.prepare('UPDATE appointments SET note=? WHERE id=?').run(e.text, dup.id);
-            if (cancelled && dup.status !== 'cancelled') db.prepare("UPDATE appointments SET status='cancelled', cancel_reason=COALESCE(cancel_reason,?) WHERE id=?").run(reason, dup.id);
+            // Lịch đã sửa trên app (thêm dịch vụ, đổi ghi chú…) → sổ không ghi đè nữa
+            if (dup.note !== e.text && !dup.manual_edit) db.prepare('UPDATE appointments SET note=? WHERE id=?').run(e.text, dup.id);
+            if (cancelled && dup.status !== 'cancelled' && !dup.manual_edit) db.prepare("UPDATE appointments SET status='cancelled', cancel_reason=COALESCE(cancel_reason,?) WHERE id=?").run(reason, dup.id);
             // Lãnh đạo đã bấm "Đã thu" trong app → giữ, sổ còn màu hồng cũng không đổi lại thành chưa thanh toán
             const appPaid = dup.pay_note && dup.pay_note !== 'Chưa thanh toán';
             if (pay !== dup.pay_note && (pay || dup.pay_note) && !(appPaid && (!pay || pay === 'Chưa thanh toán'))) db.prepare('UPDATE appointments SET pay_note=? WHERE id=?').run(pay, dup.id);
