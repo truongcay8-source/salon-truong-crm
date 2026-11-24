@@ -479,3 +479,25 @@ test('thu ngân: ai cũng thu được, trả 2 cách, kết ca đếm mù – c
   assert.ok(h.some((x) => x.counted === 100000 && x.diff === 100000 - exp.total));
   assert.equal((await s.get('/pos/closes')).status, 403);
 });
+
+test('lịch hẹn: người nhận lịch mặc định là người đặt; lịch sửa trên app không bị đồng bộ sổ xóa/ghi đè', async () => {
+  const I = require('../server/importer');
+  const L = require('../server/logic');
+  const o = client();
+  assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const vinh = db.prepare("SELECT id FROM users WHERE username='vinh'").get().id;
+  const duong = db.prepare("SELECT id FROM users WHERE username='duong'").get().id;
+  const d = L.addDays(L.today(), 2);
+  const id = (await o.post('/appointments', { guest_name: 'C Lan Test', date: d, time: '10:00', staff_id: duong })).data.id;
+  assert.equal((await o.put('/appointments/' + id, { guest_name: 'C Lan Test', date: d, time: '10:00', staff_id: duong, service: 'Cắt + Gội' })).status, 200);
+  // bản do sổ tạo trùng (cũ hơn thì id nhỏ hơn – giả lập bằng chèn sau)
+  db.prepare("INSERT INTO appointments(guest_name,staff_id,date,time,status,note) VALUES ('C Lan',?,?,?,'booked','C Lan test')").run(duong, d, '10:00');
+  I.dedupeAppointments();
+  const left = db.prepare('SELECT * FROM appointments WHERE date=? AND time=? AND staff_id=?').all(d, '10:00', duong);
+  assert.equal(left.length, 1);
+  assert.equal(left[0].id, id, 'giữ lịch đã sửa trên app');
+  assert.equal(left[0].service, 'Cắt + Gội');
+  assert.equal(left[0].taken_by, vinh);
+  const r = (await o.get(`/appointments?from=${d}&to=${d}`)).data.find((a) => a.id === id);
+  assert.ok(r.taken_by_name);
+});
