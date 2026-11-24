@@ -110,6 +110,7 @@ async function logout() { await api('/logout', { method: 'POST' }).catch(() => {
 const PAGES = [
   ['dashboard', 'Tổng quan', '🏠', () => true],
   ['appointments', 'Lịch hẹn', '📅', () => true],
+  ['pos', 'Thu ngân', '🧾', () => true],
   ['chat', 'Chat nội bộ', '💬', () => true],
   ['customers', 'Khách hàng', '👤', () => true],
   ['visits', 'Lượt làm', '✂️', () => true],
@@ -126,7 +127,7 @@ const PAGES = [
   ['excel', 'Nhập / Xuất Excel', '📥', isMgr],
   ['settings', 'Cài đặt', '⚙️', () => true],
 ];
-const MOBILE = ['dashboard', 'appointments', 'chat', 'customers', 'visits', 'more'];
+const MOBILE = ['dashboard', 'appointments', 'pos', 'chat', 'customers', 'more'];
 let reminderCount = 0;
 
 async function boot() {
@@ -514,6 +515,67 @@ async function familyDay(apptId, after) {
   $('#modalClose').addEventListener('click', onClose, { once: true });
   $('#modal').addEventListener('click', onClose);
 }
+const payIcon = (m) => (/mặt/i.test(m) ? '💵' : /khoản|ck/i.test(m) ? '🏦' : /thẻ|quẹt|pos/i.test(m) ? '💳' : '💰');
+VIEWS.pos = async (main) => {
+  const date = isMgr() && S.params.date ? S.params.date : S.today;
+  const r = await api('/pos' + (date !== S.today ? '?date=' + date : ''));
+  const who = (a) => `${a.staff_name ? esc(a.staff_name) : '<span class="muted">chưa gán thợ</span>'}`;
+  const card = (a, kind) => `<div class="pos-tile ${kind}">
+    <div class="pos-h"><b>${esc(a.time || '')}</b> <span>${esc(a.name || 'Khách lẻ')}</span></div>
+    <div class="small muted">${esc(a.service || '')}${a.service ? ' · ' : ''}${who(a)}</div>
+    ${kind === 'waiting' ? `<div class="row"><button class="btn sm" data-in="${a.id}">✓ Khách đến</button><button class="btn sm primary" data-pay="${a.id}">💰 Thanh toán</button></div>` : ''}
+    ${kind === 'serving' ? `<div class="row"><button class="btn primary" data-pay="${a.id}">💰 Thanh toán</button><button class="btn sm" data-out="${a.id}" title="Bấm nhầm">↶</button></div>` : ''}
+    ${kind === 'unpaid' ? `<div class="row"><span class="badge bad">Chưa trả</span>${a.visit_total != null ? `<b>${money(a.visit_total)}</b>` : ''}<a class="btn sm" href="#visits">Xem</a></div>` : ''}
+    ${kind === 'paid' ? `<div class="row"><span class="badge ok">✓ ${esc(a.payment_method || 'Đã thu')}</span>${a.visit_total != null ? `<b>${money(a.visit_total)}</b>` : ''}<span class="small muted">${esc(a.visit_code || '')}</span></div>` : ''}
+  </div>`;
+  const col = (title, list, kind, empty) => `<div class="pos-col"><h3>${title} <span class="badge">${list.length}</span></h3>${list.map((a) => card(a, kind)).join('') || `<div class="small muted">${empty}</div>`}</div>`;
+  const C = r.cash;
+  main.innerHTML = header('🧾 Thu ngân', 'Ai cũng làm thu ngân được: khách đến bấm ✓, làm xong bấm 💰 Thanh toán. Sửa hóa đơn đã lưu vẫn chỉ Lãnh đạo.',
+    `<button class="btn primary" id="walk">+ Khách vãng lai</button><button class="btn" id="close">🔒 Kết ca</button>`) +
+    `${isMgr() ? `<div class="card"><div class="row"><input type="date" id="pd" value="${date}" style="width:auto">${date !== S.today ? '<button class="btn sm" id="tdy">Hôm nay</button>' : ''}<span class="small muted">${dmy(date)}</span></div></div>` : ''}
+    <div class="pos-board">
+      ${col('⏳ Chờ đến', r.waiting, 'waiting', 'Không còn lịch chờ')}
+      ${col('✂️ Đang phục vụ', r.serving, 'serving', 'Chưa có khách trong tiệm')}
+      <div class="pos-col"><h3>✅ Đã thu <span class="badge">${r.paid.length}</span></h3>${r.unpaid.map((a) => card(a, 'unpaid')).join('')}${r.paid.map((a) => card(a, 'paid')).join('') || (r.unpaid.length ? '' : '<div class="small muted">Chưa thu lượt nào</div>')}</div>
+    </div>
+    ${isOwner() && C ? `<div class="card"><h3>💵 Tiền mặt trong két ${dmy(date)} (chỉ bạn thấy)</h3>
+      <div class="stat-line"><span>Tiền mặt từ hóa đơn (${C.invoices} hóa đơn)</span><b>${money(C.visits)}</b></div>
+      <div class="stat-line"><span>Tip chung trả tiền mặt</span><b>${money(C.tips)}</b></div>
+      <div class="stat-line"><span>Bán thẻ tiền mặt</span><b>${money(C.cards)}</b></div>
+      <div class="stat-line"><span><b>Máy tính phải có</b></span><b>${money(C.total)}</b></div>
+      ${r.closes.map((k) => `<div class="stat-line"><span>Kết ca ${esc(k.created_at.slice(11, 16))} · ${esc(k.user_name || '')}${k.note ? ` <span class="small muted">${esc(k.note)}</span>` : ''}</span><b>đếm ${money(k.counted)} · <span style="color:${k.diff ? 'var(--bad,#c0392b)' : 'var(--ok,#1e8449)'}">${k.diff ? (k.diff > 0 ? 'thừa ' : 'thiếu ') + money(Math.abs(k.diff)) : 'khớp'}</span></b></div>`).join('') || '<div class="small muted">Chưa ai kết ca hôm nay.</div>'}
+      <div class="small muted" style="margin-top:6px">Không gồm phong bì quỹ chi tiêu 1tr và tip riêng. Người kết ca không thấy số máy tính (đếm mù) nên không "đếm cho khớp" được.</div>
+      <div class="row" style="margin-top:8px"><button class="btn sm" id="hist">Lịch sử kết ca 30 ngày</button></div></div>`
+    : r.closes.length ? `<div class="card small">Hôm nay đã kết ca: ${r.closes.map((k) => esc(k.created_at.slice(11, 16)) + ' · ' + esc(k.user_name || '')).join('; ')}</div>` : ''}`;
+  const reload = () => VIEWS.pos(main);
+  const all = r.waiting.concat(r.serving);
+  $$('[data-in]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api('/pos/checkin/' + b.dataset.in, { method: 'POST' }); reload(); })));
+  $$('[data-out]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api('/pos/checkin/' + b.dataset.out, { method: 'POST', body: { undo: 1 } }); reload(); })));
+  $$('[data-pay]', main).forEach((b) => (b.onclick = () => guard(b, async () => {
+    const a = all.find((x) => x.id === Number(b.dataset.pay)); if (!a) return;
+    await checkout({ ...a, date: date }, reload);
+  })));
+  $('#walk').onclick = () => visitForm({ date: S.today }, reload);
+  if ($('#pd')) $('#pd').onchange = (e) => e.target.value && go('pos', { date: e.target.value });
+  if ($('#tdy')) $('#tdy').onclick = () => go('pos', {});
+  $('#close').onclick = () => {
+    openModal('🔒 Kết ca – đếm tiền mặt', `<form id="cf"><div class="small muted">Đếm toàn bộ <b>tiền mặt thu trong ngày</b> trong két (tiền khách trả + tip chung tiền mặt + bán thẻ tiền mặt). <b>Không</b> tính phong bì quỹ chi tiêu 1tr, không tính tip riêng đã đưa thợ.</div>
+      <div class="form-grid" style="margin-top:10px"><label>Số tiền mặt đếm được (đ)<input name="counted" inputmode="numeric" required placeholder="VD 2.350.000"></label>
+      <label>Ghi chú (nếu có)<input name="note" placeholder="VD: đã đưa anh Trường 1tr"></label></div>
+      <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Gửi kết ca</button></div></form>`);
+    const cf = $('#cf'); cf.counted.oninput = () => { const n = cf.counted.value.replace(/\D/g, ''); cf.counted.value = n ? Number(n).toLocaleString('vi-VN') : ''; };
+    cf.onsubmit = (e) => { e.preventDefault(); guard($('button.primary', cf), async () => {
+      const x = await api('/pos/close', { method: 'POST', body: { counted: cf.counted.value.replace(/\D/g, ''), note: cf.note.value } });
+      closeModal(); toast(x.diff == null ? 'Đã gửi kết ca. Cảm ơn bạn!' : x.diff === 0 ? 'Kết ca khớp tiền ✓' : `Kết ca lệch ${x.diff > 0 ? 'thừa' : 'thiếu'} ${money(Math.abs(x.diff))}`); reload();
+    }); };
+  };
+  if ($('#hist')) $('#hist').onclick = async () => {
+    const rows = await api('/pos/closes');
+    openModal('Lịch sử kết ca 30 ngày', `<div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Giờ</th><th>Người kết</th><th class="num">Máy tính</th><th class="num">Đếm được</th><th class="num">Lệch</th><th>Ghi chú</th></tr></thead><tbody>
+      ${rows.map((k) => `<tr><td>${dmy(k.date)}</td><td>${esc(k.created_at.slice(11, 16))}</td><td>${esc(k.user_name || '')}</td><td class="num">${money(k.expected)}</td><td class="num">${money(k.counted)}</td>
+        <td class="num" style="color:${k.diff ? 'var(--bad,#c0392b)' : 'inherit'}">${k.diff ? (k.diff > 0 ? '+' : '−') + money(Math.abs(k.diff)) : 'khớp'}</td><td class="small">${esc(k.note || '')}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">Chưa có</td></tr>'}</tbody></table></div>`, true);
+  };
+};
 // Thu tiền từ lịch hẹn: mở phiếu có sẵn dịch vụ + giá → lưu là vào doanh số. Khách vãng lai tự tạo hồ sơ.
 async function checkout(a, after) {
   let c = { id: a.customer_id, code: a.customer_code || '', name: a.name };
@@ -1280,7 +1342,12 @@ async function visitForm(v = {}, after) {
     <div class="full"><label>Lý do giảm (bắt buộc nếu có giảm)</label><input name="discount_reason" list="reasons" value="${esc(v.discount_reason || '')}">
       <datalist id="reasons"><option value="Khách quen"><option value="Khách giới thiệu"><option value="Khuyến mãi"><option value="Bù lỗi dịch vụ"><option value="Người nhà / nhân viên"><option value="Trẻ em dưới 13 tuổi (giảm 50%)"></datalist></div>
     <div id="cardBox" class="full"></div>
-    <div><label>Hình thức thanh toán</label><select name="payment_method"><option value="">—</option>${methods.map((m) => `<option ${v.payment_method === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></div>
+    <div class="full"><label>Hình thức thanh toán</label><div class="row pay-quick">${methods.map((m) => `<button type="button" class="btn ${v.payment_method === m ? 'primary' : ''}" data-pm="${esc(m)}">${payIcon(m)} ${esc(m)}</button>`).join('')}
+      <button type="button" class="btn sm" id="pay2Tg">${v.pay2_method ? '− Bỏ trả 2 cách' : '+ Trả 2 cách'}</button></div>
+      <select name="payment_method" style="display:none"><option value="">—</option>${methods.map((m) => `<option ${v.payment_method === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>
+      <div class="row" id="pay2Box" style="margin-top:6px;gap:6px;${v.pay2_method ? '' : 'display:none'}"><span class="small">Trong đó trả bằng</span><select name="pay2_method" style="width:auto"><option value="">—</option>${methods.map((m) => `<option ${v.pay2_method === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>
+        <input type="number" name="pay2_amount" min="0" step="1000" placeholder="số tiền" value="${v.pay2_amount || ''}" style="width:130px"><span class="small muted" id="pay2Txt"></span></div>
+      <div id="qrBox"></div></div>
     <div><label>Khách trả thực tế (tiền mặt/CK)</label><input type="number" id="paidAct" min="0" step="1000" placeholder="Trả dư → tự cộng tip chung"><div class="small muted" id="paidHint"></div></div>
     <div><label>Tip chung (chia cả nhóm)</label><input type="number" name="tip" min="0" step="1000" value="${v.tip || ''}"></div>
     <div class="full"><div class="form-grid" style="margin:0"><div><label>Tip riêng (khách tặng riêng 1 người)</label><input type="number" name="tip_private" min="0" step="1000" value="${v.tip_private || ''}"></div>
@@ -1305,6 +1372,24 @@ async function visitForm(v = {}, after) {
     $('#paidHint').textContent = extra > 0 ? `Dư ${money(extra)} → tip chung` : extra < 0 ? `Còn thiếu ${money(-extra)}` : 'Đủ tiền';
     if (extra >= 0) f.tip.value = extra || '';
   };
+  // QR chuyển khoản có sẵn số tiền (VietQR) – hiện khi chọn Chuyển khoản
+  const qrSync = () => {
+    const box = $('#qrBox'); if (!box) return;
+    const pm = f.payment_method.value, m2 = f.pay2_method.value, a2 = Number(f.pay2_amount.value || 0);
+    const two = $('#pay2Box').style.display !== 'none' && m2 && a2 > 0;
+    $('#pay2Txt').textContent = two ? `· còn ${money(Math.max(0, due - a2))} bằng ${pm || '…'}` : '';
+    const isCk = (m) => /khoản|ck|bank/i.test(m || '');
+    const amt = two && isCk(m2) ? a2 : isCk(pm) ? (two ? Math.max(0, due - a2) : due) : 0;
+    const q = S.settings.qr;
+    if (!amt) { box.innerHTML = ''; return; }
+    if (!q) { box.innerHTML = isOwner() ? '<div class="small muted" style="margin-top:6px">Muốn hiện mã QR chuyển khoản có sẵn số tiền: vào Cài đặt › Tham số, điền ngân hàng + số tài khoản.</div>' : ''; return; }
+    const info = 'NEP ' + (custSel ? custSel.name || '' : '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').slice(0, 20);
+    const src = `https://img.vietqr.io/image/${encodeURIComponent(q.bank)}-${encodeURIComponent(q.account)}-compact2.png?amount=${amt}&addInfo=${encodeURIComponent(info)}&accountName=${encodeURIComponent(q.name)}`;
+    box.innerHTML = `<div class="qr-pay"><img src="${src}" alt="QR chuyển khoản" loading="lazy"><div><b>Quét để chuyển ${money(amt)}</b><div class="small muted">${esc(q.bank)} · ${esc(q.account)}${q.name ? ' · ' + esc(q.name) : ''}</div><div class="small muted">Khách chuyển xong, kiểm tra tiền về rồi mới bấm Lưu.</div></div></div>`;
+  };
+  $$('[data-pm]', f).forEach((b) => (b.onclick = () => { f.payment_method.value = b.dataset.pm; $$('[data-pm]', f).forEach((x) => x.classList.toggle('primary', x === b)); qrSync(); }));
+  $('#pay2Tg').onclick = () => { const box = $('#pay2Box'), on = box.style.display === 'none'; box.style.display = on ? '' : 'none'; if (!on) { f.pay2_method.value = ''; f.pay2_amount.value = ''; } $('#pay2Tg').textContent = on ? '− Bỏ trả 2 cách' : '+ Trả 2 cách'; qrSync(); };
+  f.pay2_method.onchange = qrSync; f.pay2_amount.oninput = qrSync;
   const renderItems = () => {
     $('#items').innerHTML = items.map((it, i) => `<div class="item-row"><select data-i="${i}" class="isvc">${svcOpts(it.service_id).replace(it.material_id ? `value="m${it.material_id}"` : '\u0000', `value="m${it.material_id}" selected`)}${!it.service_id && !it.material_id && it.name ? `<option selected value="">${esc(it.name)}</option>` : ''}</select>
       ${it.material_id ? `<input type="number" data-i="${i}" class="iqty" min="1" step="1" value="${it.qty || 1}" title="Số lượng" style="width:64px">` : ''}
@@ -1343,7 +1428,7 @@ async function visitForm(v = {}, after) {
     $('#tot').innerHTML = `<div class="row"><span>Tạm tính</span><span class="num">${money(sub)}</span></div>
       <div class="row"><span>Doanh số lượt này</span><span class="num big">${money(total)}</span></div>
       ${cardSel ? `<div class="row"><span>Trừ thẻ</span><span class="num">−${money(cardPaid)}</span></div>` : ''}
-      <div class="row"><span><b>Khách trả thêm</b></span><span class="num big">${money(Math.max(0, total - cardPaid))}</span></div>${(() => { due = Math.max(0, total - cardPaid); setTimeout(paidSync); return ''; })()}
+      <div class="row"><span><b>Khách trả thêm</b></span><span class="num big">${money(Math.max(0, total - cardPaid))}</span></div>${(() => { due = Math.max(0, total - cardPaid); setTimeout(() => { paidSync(); qrSync(); }); return ''; })()}
       ${Number(f.surcharge.value) > 0 ? (() => { const sc = Number(f.surcharge.value), r = S.settings.surcharge_salon_rate ?? 0.33, st = sc - Math.round(sc * r), as = f.assistant_id.value ? Math.floor(st / 2) : 0;
         return `<div class="row small muted"><span>Phụ thu chia: cửa hàng ${money(sc - st)} (${Math.round(r * 100)}%) · thợ chính ${money(st - as)}${as ? ' · người phụ ' + money(as) : ''}</span></div>`; })() : ''}
       ${f.time.value >= '19:00' && sub && !Number(f.surcharge.value) ? `<div class="row small" style="color:var(--warn)"><span>Lịch sau 19:00: phụ thu 10% theo bảng giá</span><button type="button" class="btn sm" id="eveSur">+ ${money(Math.round(sub * 0.1 / 1000) * 1000)}</button></div>` : ''}
@@ -1511,6 +1596,7 @@ async function visitForm(v = {}, after) {
         : { service_id: i.service_id || null, name: i.name, price: i.price === '' ? null : Number(i.price), staff_id: Number(i.staff_id) || null, assistant_id: i.assistant_id === '' || i.assistant_id == null ? null : Number(i.assistant_id) })), appointment_id: v.appointment_id };
       if ($('#used')) body.materials = used.filter((u) => u.material_id && Number(u.amt) > 0).map((u) => ({ material_id: u.material_id, qty: toUnits(matById(u.material_id), u.amt) }));
       if (body.card_id && body.card_paid === '') body.card_paid = 0;
+      if ($('#pay2Box').style.display === 'none') { body.pay2_method = ''; body.pay2_amount = 0; }
       const saved = await api(isEdit ? '/visits/' + v.id : '/visits', { method: isEdit ? 'PUT' : 'POST', body });
       if (!isEdit) {
         const pb = $('#phB').files, pa = $('#phA').files;
@@ -2589,7 +2675,7 @@ VIEWS.settings = async (main) => {
       ['bank_info', 'Thông tin chuyển khoản (in trên hóa đơn)', 'text'], ['receipt_footer', 'Lời cảm ơn cuối hóa đơn', 'text'], ['return_days', 'Nhắc khách quay lại sau (ngày)', 'number'], ['birthday_days', 'Nhắc sinh nhật trước (ngày)', 'number'],
       ['card_expiry_days', 'Nhắc thẻ sắp hết hạn trước (ngày)', 'number'], ['card_low_balance', 'Nhắc khi số dư thẻ ≤ (đồng)', 'number'],
       ['assistant_rate', 'Hoa hồng người phụ (tỷ lệ, 0.03 = 3%)', 'number'], ['card_new_rate', 'HH bán thẻ mới (0.05 = 5%)', 'number'],
-      ['card_renewal_rate', 'HH khách mua lại thẻ (0.03 = 3%)', 'number'], ['surcharge_salon_rate', 'Phụ thu: phần cửa hàng giữ (0.33 = 33%, còn lại chia thợ)', 'number'], ['payment_methods', 'Hình thức thanh toán (cách nhau dấu phẩy)', 'text']];
+      ['card_renewal_rate', 'HH khách mua lại thẻ (0.03 = 3%)', 'number'], ['surcharge_salon_rate', 'Phụ thu: phần cửa hàng giữ (0.33 = 33%, còn lại chia thợ)', 'number'], ['book_money_until', 'Từ ngày này sổ đặt lịch chỉ lấy lịch hẹn, tiền tính trên app (để trống = vẫn lấy tiền từ sổ)', 'date'], ['qr_bank', 'QR chuyển khoản: mã ngân hàng (VD VCB, TCB, MB, ACB)', 'text'], ['qr_account', 'QR chuyển khoản: số tài khoản', 'text'], ['qr_name', 'QR chuyển khoản: tên chủ tài khoản (không dấu)', 'text'], ['payment_methods', 'Hình thức thanh toán (cách nhau dấu phẩy)', 'text']];
     sb.innerHTML = `<form id="pf"><div class="form-grid">${F.map(([k, l, t]) => `<div><label>${l}</label><input name="${k}" type="${t}" step="any" value="${esc(s[k])}"></div>`).join('')}</div>
       <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu tham số</button></div></form>`;
     $('#pf').onsubmit = (e) => { e.preventDefault(); guard($('#pf button'), async () => { await api('/settings', { method: 'PUT', body: formData($('#pf')) }); toast('Đã lưu'); boot(); }); };

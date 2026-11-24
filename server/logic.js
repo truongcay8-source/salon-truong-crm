@@ -190,6 +190,14 @@ function saveVisit(input, user, existing, opts = {}) {
     if (cashPaid > 0 && !pm && (isNew || existing.payment_method || !existing.import_ref)) throw bad('Chọn hình thức thanh toán');
     if (pm && !methods.includes(pm)) throw bad('Hình thức thanh toán không hợp lệ');
   }
+  // Trả 2 cách: phần thứ 2 (VD chuyển khoản) nằm trong số khách trả, phần còn lại theo hình thức chính
+  let pay2Method = str(input.pay2_method), pay2Amount = Math.max(0, int(input.pay2_amount) || 0);
+  if (!pay2Method || !pay2Amount || cashPaid <= 0) { pay2Method = null; pay2Amount = 0; }
+  else {
+    if (!methods.includes(pay2Method)) throw bad('Hình thức trả thứ 2 không hợp lệ');
+    if (pay2Method === pm) throw bad('Hình thức thứ 2 phải khác hình thức chính');
+    if (pay2Amount >= cashPaid) throw bad('Số trả cách thứ 2 phải nhỏ hơn số khách trả ' + cashPaid.toLocaleString('vi-VN') + 'đ');
+  }
 
   // Hoa hồng tính trên tiền dịch vụ sau giảm giá, không gồm phụ thu (phụ thu chia riêng bên dưới)
   const serviceNet = Math.max(0, total - surcharge);
@@ -229,7 +237,7 @@ function saveVisit(input, user, existing, opts = {}) {
   const row = {
     customer_id: customerId, date, time: str(input.time), main_staff_id: mainStaff, assistant_id: assistant,
     subtotal, surcharge, discount, discount_reason: str(input.discount_reason), total,
-    card_id: cardId, card_paid: cardPaid, cash_paid: cashPaid, payment_method: cashPaid > 0 ? pm : null,
+    card_id: cardId, card_paid: cardPaid, cash_paid: cashPaid, payment_method: cashPaid > 0 ? pm : null, pay2_method: pay2Method, pay2_amount: pay2Amount,
     tip: Math.max(0, int(input.tip)), tip_private: Math.max(0, int(input.tip_private)),
     tip_private_to: int(input.tip_private) > 0 ? int(input.tip_private_to) || mainStaff : null, main_commission: mainCommission, assistant_commission: assistantCommission,
     surcharge_main: sc.main, surcharge_assist: sc.assist,
@@ -324,7 +332,7 @@ function maskVisitMoney(v, user) {
   v = { ...v, cost: null, materials: v.materials ? v.materials.map((m) => ({ ...m, unit_cost: null })) : v.materials };
   if (v.main_staff_id === user.id || v.assistant_id === user.id || (v.items || []).some((i) => i.staff_id === user.id || i.assistant_id === user.id)) return v;
   const out = { ...v };
-  for (const k of ['subtotal', 'surcharge', 'discount', 'total', 'card_paid', 'cash_paid', 'tip', 'tip_private', 'main_commission', 'assistant_commission', 'surcharge_main', 'surcharge_assist']) out[k] = null;
+  for (const k of ['subtotal', 'surcharge', 'discount', 'total', 'card_paid', 'cash_paid', 'pay2_amount', 'tip', 'tip_private', 'main_commission', 'assistant_commission', 'surcharge_main', 'surcharge_assist']) out[k] = null;
   if (out.items) out.items = out.items.map((i) => ({ ...i, price: null }));
   out.masked = true;
   return out;
@@ -421,7 +429,11 @@ function salesReport(from, to, user) {
     gift_by_group: giftByGroup,
   };
   for (const v of visits) {
-    if (v.cash_paid > 0) { const k = v.payment_method || 'Chưa ghi'; summary.by_method[k] = (summary.by_method[k] || 0) + v.cash_paid; }
+    if (v.cash_paid > 0) {
+      const k = v.payment_method || 'Chưa ghi', p2 = v.pay2_method && v.pay2_amount ? v.pay2_amount : 0;
+      summary.by_method[k] = (summary.by_method[k] || 0) + v.cash_paid - p2;
+      if (p2) summary.by_method[v.pay2_method] = (summary.by_method[v.pay2_method] || 0) + p2;
+    }
     summary.by_day[v.date] = (summary.by_day[v.date] || 0) + v.total;
   }
   for (const c of cards) { const k = c.payment_method || 'Chưa ghi'; summary.by_method[k] = (summary.by_method[k] || 0) + c.price; }

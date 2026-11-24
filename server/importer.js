@@ -1,7 +1,7 @@
 'use strict';
 const ExcelJS = require('exceljs');
 const crypto = require('crypto');
-const { db, nextCode, GROUPS, GIFT_CARD, audit } = require('./db');
+const { db, nextCode, GROUPS, GIFT_CARD, audit, getSettings } = require('./db');
 const L = require('./logic');
 
 const ROLLBACK = Symbol('dry-run');
@@ -707,7 +707,8 @@ async function importWorkbook(buffer, opts, user) {
       const t = L.today();
       if (opts.bookMoney !== false) require('./expenses').importFromBook(blocks.filter((b) => b.date <= t).map((b) => ({ date: b.date, items: b.spend })), user, summary);
       for (const b of blocks) {
-        const money = opts.bookMoney && b.date >= BOOK_FROM && b.date < t;
+        const until = L.isDate(getSettings().book_money_until) ? getSettings().book_money_until : null;
+        const money = opts.bookMoney && b.date >= BOOK_FROM && b.date < t && (!until || b.date < until);
         if (b.date < t && !opts.includeHistory && !money) { summary.appointments_past_skipped += b.entries.length; continue; }
         for (const e of b.entries) {
           const phone = extractPhone(e.text);
