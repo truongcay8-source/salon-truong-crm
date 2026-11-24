@@ -441,3 +441,41 @@ test('báo cáo tài chính: chỉ Lãnh đạo; lãi/lỗ = doanh thu − giá 
   assert.equal((await t.get('/finance?month=2026-07')).status, 403);
   assert.equal((await t.post('/finance/items', { month: '2026-07', name: 'x', amount: 1 })).status, 403);
 });
+
+test('thu ngân: ai cũng thu được, trả 2 cách, kết ca đếm mù – chỉ Lãnh đạo thấy lệch', async () => {
+  const L = require('../server/logic');
+  const o = client();
+  assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const s = client();
+  assert.equal((await s.post('/login', { username: 'thu', password: 'moi-thu' })).status, 200);
+  const duong = db.prepare("SELECT id FROM users WHERE username='duong'").get().id;
+  const cut = db.prepare("SELECT id FROM services WHERE active=1 AND grp='Cắt' AND price>0 ORDER BY id LIMIT 1").get();
+  const cid = (await o.post('/customers', { name: 'Khách thu ngân', phone: '0913999888' })).data.id;
+  const today = L.today();
+  const ap = (await s.post('/appointments', { customer_id: cid, date: today, time: '23:50', staff_id: duong, service: 'Cắt' })).data.id;
+  let b = (await s.get('/pos')).data;
+  assert.ok(b.waiting.some((a) => a.id === ap));
+  assert.equal(b.cash, undefined, 'nhân viên không thấy tiền két');
+  assert.equal((await s.post('/pos/checkin/' + ap)).status, 200);
+  b = (await s.get('/pos')).data;
+  assert.ok(b.serving.some((a) => a.id === ap));
+  // trả 2 cách: 300k tiền mặt chính, 200k CK
+  const bad = await s.post('/visits', { customer_id: cid, date: today, time: '23:50', main_staff_id: duong, appointment_id: ap, payment_method: 'Tiền mặt', pay2_method: 'Tiền mặt', pay2_amount: 200000, items: [{ service_id: cut.id, price: 500000 }] });
+  assert.equal(bad.status, 400, 'cách 2 phải khác cách chính');
+  const r = await s.post('/visits', { customer_id: cid, date: today, time: '23:50', main_staff_id: duong, appointment_id: ap, payment_method: 'Tiền mặt', pay2_method: 'Chuyển khoản', pay2_amount: 200000, tip: 50000, items: [{ service_id: cut.id, price: 500000 }] });
+  assert.equal(r.status, 200);
+  b = (await s.get('/pos')).data;
+  assert.ok(b.paid.some((a) => a.id === ap));
+  const rep = (await o.get(`/reports/sales?from=${today}&to=${today}`)).data;
+  assert.ok(rep.summary.by_method['Chuyển khoản'] >= 200000);
+  const exp = require('../server/pos').expectedCash(today);
+  assert.ok(exp.visits >= 300000 && exp.tips >= 50000);
+  // nhân viên kết ca: không thấy số máy tính
+  const k = (await s.post('/pos/close', { counted: '100.000' })).data;
+  assert.equal(k.expected, undefined); assert.equal(k.diff, undefined);
+  const ko = (await o.post('/pos/close', { counted: String(exp.total) })).data;
+  assert.equal(ko.diff, 0);
+  const h = (await o.get('/pos/closes')).data;
+  assert.ok(h.some((x) => x.counted === 100000 && x.diff === 100000 - exp.total));
+  assert.equal((await s.get('/pos/closes')).status, 403);
+});

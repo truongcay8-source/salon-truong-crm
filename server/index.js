@@ -101,7 +101,7 @@ app.use('/api', auth);
 app.get('/api/me', (req, res) => {
   const { token, ...u } = req.user;
   const s = getSettings();
-  res.json({ user: { ...u, ...stockMod.perm(req.user) }, settings: { salon_name: s.salon_name, salon_address: s.salon_address, salon_phone: s.salon_phone, bank_info: s.bank_info, receipt_footer: s.receipt_footer, chat_keep_days: Number(s.chat_keep_days) || 90, card_new_rate: Number(s.card_new_rate) || 0, card_renewal_rate: Number(s.card_renewal_rate) || 0, payment_methods: s.payment_methods.split(',').map((x) => x.trim()), surcharge_salon_rate: s.surcharge_salon_rate === undefined ? 0.33 : Number(s.surcharge_salon_rate) }, groups: GROUPS, today: today() });
+  res.json({ user: { ...u, ...stockMod.perm(req.user) }, settings: { salon_name: s.salon_name, salon_address: s.salon_address, salon_phone: s.salon_phone, bank_info: s.bank_info, receipt_footer: s.receipt_footer, chat_keep_days: Number(s.chat_keep_days) || 90, card_new_rate: Number(s.card_new_rate) || 0, card_renewal_rate: Number(s.card_renewal_rate) || 0, payment_methods: s.payment_methods.split(',').map((x) => x.trim()), surcharge_salon_rate: s.surcharge_salon_rate === undefined ? 0.33 : Number(s.surcharge_salon_rate), qr: s.qr_bank && s.qr_account ? { bank: s.qr_bank, account: s.qr_account, name: s.qr_name || '' } : null }, groups: GROUPS, today: today() });
 });
 app.post('/api/me/password', (req, res) => {
   const u = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
@@ -170,7 +170,7 @@ app.post('/api/users/:id/reset-password', OWNER, (req, res) => {
 const publicSettings = () => { const s = { ...getSettings() }; delete s.anthropic_api_key; return s; };
 app.get('/api/settings', MGR, (req, res) => res.json(publicSettings()));
 app.put('/api/settings', OWNER, (req, res) => {
-  const allowed = ['salon_name', 'salon_address', 'salon_phone', 'bank_info', 'receipt_footer', 'return_days', 'birthday_days', 'card_expiry_days', 'card_low_balance', 'assistant_rate', 'card_new_rate', 'card_renewal_rate', 'payment_methods', 'surcharge_salon_rate', 'book_money_until'];
+  const allowed = ['salon_name', 'salon_address', 'salon_phone', 'bank_info', 'receipt_footer', 'return_days', 'birthday_days', 'card_expiry_days', 'card_low_balance', 'assistant_rate', 'card_new_rate', 'card_renewal_rate', 'payment_methods', 'surcharge_salon_rate', 'book_money_until', 'qr_bank', 'qr_account', 'qr_name'];
   const up = db.prepare('UPDATE settings SET value=? WHERE key=?');
   for (const k of allowed) if (req.body[k] != null) up.run(String(req.body[k]).trim(), k);
   audit(req.user.id, 'update_settings', 'settings', null, req.body);
@@ -803,7 +803,8 @@ app.get('/api/dashboard', (req, res) => {
 staffMod.mount(app, { MGR, OWNER });
 require('./tips').mount(app, { MGR, OWNER });
 require('./payroll').mount(app, { OWNER }); // Bảng lương: chỉ Lãnh đạo
-require('./finance').mount(app, { OWNER }); // Báo cáo tài chính (lãi/lỗ): chỉ Lãnh đạo
+require('./finance').mount(app, { OWNER });
+require('./pos').mount(app, { OWNER, MGR }); // Thu ngân + kết ca: ai cũng dùng được, chỉ Lãnh đạo xem tiền lệch // Báo cáo tài chính (lãi/lỗ): chỉ Lãnh đạo
 require('./chat').mount(app, { MGR, OWNER });
 require('./pricelist').apply(); // bảng giá 15/11/2026 (chạy 1 lần)
 try { require('./datafix').apply(); } catch (e) { console.error('datafix', e.message); } // công thức gửi qua Messenger 15/11

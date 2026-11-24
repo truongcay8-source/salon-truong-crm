@@ -219,7 +219,10 @@ const DEFAULT_SETTINGS = {
   bank_info: '',
   receipt_footer: 'Cảm ơn quý khách đã tin chọn Nếp Hair. Hẹn gặp lại!',
   surcharge_salon_rate: '0.33',
-  book_money_until: '', // từ ngày này: sổ đặt lịch chỉ lấy LỊCH HẸN, tiền tính trên app (trống = vẫn lấy tiền từ sổ)
+  qr_bank: '', // mã ngân hàng cho QR chuyển khoản (VD: VCB, TCB, MB, 970436)
+  qr_account: '',
+  qr_name: '',
+  book_money_until: '2026-12-01', // từ ngày này: sổ đặt lịch chỉ lấy LỊCH HẸN, tiền tính trên app (trống = vẫn lấy tiền từ sổ)
 };
 // Nâng cấp CSDL cũ: thêm cột cho lịch hẹn (lý do hủy, ai hủy, đã mời đặt lại)
 {
@@ -261,6 +264,10 @@ function seedLevels() {
   // Tip riêng: khách tặng riêng 1 người (không đưa vào quỹ tip chung)
   if (!db.prepare('PRAGMA table_info(visits)').all().some((c) => c.name === 'tip_private')) {
     db.exec('ALTER TABLE visits ADD COLUMN tip_private INTEGER NOT NULL DEFAULT 0; ALTER TABLE visits ADD COLUMN tip_private_to INTEGER REFERENCES users(id)');
+  }
+  // Thu ngân: 1 hóa đơn trả 2 cách (vd 300k tiền mặt + phần còn lại CK) – pay2_amount nằm TRONG cash_paid
+  if (!db.prepare('PRAGMA table_info(visits)').all().some((c) => c.name === 'pay2_method')) {
+    db.exec('ALTER TABLE visits ADD COLUMN pay2_method TEXT; ALTER TABLE visits ADD COLUMN pay2_amount INTEGER NOT NULL DEFAULT 0');
   }
   // Bán thẻ 2 người: người tư vấn/giới thiệu + % hoa hồng của người chốt
   if (!db.prepare('PRAGMA table_info(cards)').all().some((c) => c.name === 'consultant_id')) {
