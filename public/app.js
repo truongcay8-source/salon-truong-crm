@@ -407,7 +407,7 @@ VIEWS.dashboard = async (main) => {
     `<button class="btn" data-goto2="attendance">🕘 Chấm công</button><button class="btn" id="qAppt">+ Lịch hẹn</button><button class="btn primary" id="qVisit">+ Ghi lượt làm</button>`) +
     `<div class="grid kpis">${kpis}</div>
     <div class="grid two">
-      <div class="card"><h3>Lịch hẹn hôm nay (${d.appointments.length})</h3>${apptList(d.appointments)}</div>
+      <div class="card"><h3>Lịch hẹn hôm nay (${d.appointments.length})</h3>${apptListCompact(d.appointments)}</div>
       <div class="card"><h3>Việc cần làm</h3>
         ${[['cycles', '📞 Khách định kỳ – gọi hỏi giờ'], ['birthdays', '🎂 Sinh nhật sắp tới'], ['cards', '💳 Thẻ sắp hết hạn / hết tiền'], ['returns', '🔁 Khách đến hạn quay lại'], ['appointments', '📞 Gọi xác nhận lịch ngày mai'], ['cancels', '❌ Khách hủy / không đến – mời đặt lại']]
           .map(([k, l]) => `<div class="stat-line"><a href="#reminders">${l}</a><b>${rc[k]}</b></div>`).join('')}
@@ -425,6 +425,25 @@ VIEWS.dashboard = async (main) => {
   }).catch(() => {});
 };
 function apptList(rows, showDate) {
+  if (!rows.length) return '<div class="empty">Không có lịch hẹn</div>';
+  return rows.map((a) => `<div class="list-item"><div class="time-pill">${esc(a.time)}${showDate ? `<div class="small muted">${dmy(a.date).slice(0, 5)}</div>` : ''}</div>
+    <div style="flex:1;min-width:0"><div class="t">${a.customer_id ? `<a href="#customer?id=${a.customer_id}">${esc(a.name)}</a>` : esc(a.name) + ' <span class="badge">khách mới</span>'}</div>
+      <div class="small muted">${a.visit_services ? esc(a.visit_services) : svcWithPrice(a.service)}${a.staff_name ? ' · ' + esc(a.staff_name) : ''}${a.assistant_id ? ' + phụ ' + esc(staffName(a.assistant_id)) : ''} · ${telLinks(a.phone)}${a.taken_by_name ? ` · <span title="Người nhận lịch">📝 ${esc(a.taken_by_name)}</span>` : ''}</div>
+      ${a.visit_id && a.visit_total != null ? (a.pay_note === 'Chưa thanh toán' ? `<div class="small"><b style="color:var(--bad)">⚠ Đã làm, khách chưa trả ${money(a.visit_total)}</b> · <a href="#" data-rcpt="${a.visit_id}">Hóa đơn</a></div>${isOwner() ? `<div class="row" style="margin-top:4px">${S.settings.payment_methods.slice(0, 3).map((m) => `<button class="btn sm" data-apaid="${a.id}" data-m="${esc(m)}">Đã thu: ${esc(m)}</button>`).join('')}</div>` : ''}`
+        : `<div class="small"><b style="color:var(--ok)">✓ Đã thu ${money(a.visit_total)}</b>${a.pay_note ? ' · ' + esc(a.pay_note) : ''} · <a href="#" data-rcpt="${a.visit_id}">Hóa đơn</a></div>`)
+        : a.service && estTotal(a.service) && !['cancelled', 'noshow'].includes(a.status) ? `<div class="small">Dự kiến: <b>${money(estTotal(a.service))}</b></div>` : ''}
+      ${a.note ? `<div class="small">${esc(a.note)}</div>` : ''}
+      ${a.pay_note && a.status !== 'cancelled' && !(a.visit_id && a.visit_total != null) ? `<div class="small"><span class="badge ${a.pay_note === 'Chưa thanh toán' ? 'bad' : 'ok'}">${a.pay_note === 'Chưa thanh toán' ? '⚠ Chưa thanh toán' : '💵 ' + esc(a.pay_note)}</span></div>` : ''}
+      ${a.cancel_reason && ['cancelled', 'noshow'].includes(a.status) ? `<div class="small" style="color:var(--bad)">Lý do: ${esc(a.cancel_reason)}</div>` : ''}</div>
+    <div style="text-align:right"><span class="badge ${APPT[a.status][1]}">${APPT[a.status][0]}</span>
+      <div class="row" style="justify-content:flex-end;margin-top:6px">
+      ${a.grp ? `<button class="btn sm" data-agrp="${a.id}" title="Xem cả nhà / người đi cùng trong ngày">👨‍👩‍👧 Cả nhà (${a.grp})</button>` : ''}
+      ${a.status === 'booked' ? `<button class="btn sm" data-ast="arrived" data-id="${a.id}">Đã đến</button>` : ''}
+      ${a.customer_id ? `<button class="btn sm" data-acust="${a.customer_id}" title="Sửa tên, SĐT, sinh nhật, lưu ý tóc của khách">✏️ Sửa thông tin khách</button>` : ''}
+      ${['booked', 'arrived'].includes(a.status) ? `<button class="btn sm primary" data-avisit="${a.id}">Thu tiền</button><button class="btn sm" data-aedit="${a.id}">Sửa</button><button class="btn sm" data-acancel="${a.id}">Hủy / không đến</button>` : ''}
+      </div></div></div>`).join('');
+}
+function apptListCompact(rows, showDate) {
   if (!rows.length) return '<div class="empty">Không có lịch hẹn</div>';
   return rows.map((a) => `<div class="list-item"><div class="time-pill">${esc(a.time)}${showDate ? `<div class="small muted">${dmy(a.date).slice(0, 5)}</div>` : ''}</div>
     <div class="appt-main"><div class="appt-head"><span class="t">${a.customer_id ? `<a href="#customer?id=${a.customer_id}">${esc(a.name)}</a>` : esc(a.name) + ' <span class="badge">khách mới</span>'}</span><span class="badge ${APPT[a.status][1]}">${APPT[a.status][0]}</span></div>
