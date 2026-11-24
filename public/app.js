@@ -15,6 +15,7 @@ const isOwner = () => S.me && S.me.role === 'owner';
 function addDays(d, n) { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + n); const z = new Date(x.getTime() - x.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 10); }
 function staffName(id) { const s = S.staff.find((x) => x.id === id); return s ? s.full_name : ''; }
 function activeStaff() { return S.staff.filter((s) => s.active && s.works !== 0); }
+const hdrName = (id) => { const u = S.staff.find((x) => String(x.id) === String(id)); return u ? u.full_name : ''; };
 function staffOptions(sel, withEmpty = '— Chọn —') {
   return (withEmpty ? `<option value="">${withEmpty}</option>` : '') + activeStaff().map((s) => `<option value="${s.id}" ${s.id === sel ? 'selected' : ''}>${esc(s.full_name)}${s.level ? ' · ' + s.level : ''}</option>`).join('');
 }
@@ -859,7 +860,7 @@ function apptForm(a = {}, after, onSaved) {
     <div><label>SĐT khách mới</label><input name="guest_phone" inputmode="tel" value="${esc(a.customer_id ? '' : a.guest_phone || a.phone || '')}"></div>
     <div><label>Ngày</label><input type="date" name="date" value="${a.date || S.today}" required></div>
     <div><label>Giờ</label><input type="time" name="time" value="${a.time || '09:00'}" step="900" required></div>
-    <div><label>Thợ</label><select name="staff_id">${staffOptions(a.staff_id, 'Chưa chọn')}</select></div>
+    <div><label>Thợ làm chính</label><select name="staff_id">${staffOptions(a.staff_id, 'Chưa chọn')}</select></div>
     <div><label>Thời lượng (phút)</label><input type="number" name="duration" value="${a.duration || 60}" min="15" step="15"></div>
     <div><label>Người nhận lịch</label><select name="taken_by">${(() => { const sel = a.taken_by || (isEdit ? null : S.me.id); const list = S.staff.filter((x) => x.active || x.id === sel);
       if (!list.some((x) => x.id === S.me.id)) list.unshift({ id: S.me.id, full_name: S.me.full_name });
@@ -1380,8 +1381,8 @@ async function visitForm(v = {}, after) {
     <div class="full"><label>Khách hàng *</label>${customerPicker('customer_id', custSel)}</div>
     <div><label>Ngày</label><input type="date" name="date" value="${v.date || S.today}" ${!isMgr() ? 'readonly' : ''}></div>
     <div><label>Giờ</label><input type="time" name="time" value="${v.time || new Date().toTimeString().slice(0, 5)}"></div>
-    <div><label>Thợ chính / người ghi lịch *</label><select name="main_staff_id" required>${staffOptions(v.main_staff_id || (!isMgr() ? S.me.id : null))}</select></div>
-    <div><label>Người phụ</label><select name="assistant_id">${staffOptions(v.assistant_id, 'Không có')}</select></div>
+    <div><label>Thợ chính (người làm) *</label><select name="main_staff_id" required>${staffOptions(v.main_staff_id || (!isMgr() ? S.me.id : null))}</select></div>
+    <div><label>Người phụ (cả phiếu)</label><select name="assistant_id">${staffOptions(v.assistant_id, 'Không có')}</select></div>
     <div class="full"><label>Dịch vụ / sản phẩm bán (giá sửa được)</label><div id="items"></div><div class="row"><div style="flex:1;min-width:200px" id="vSvcS"></div><button type="button" class="btn sm" id="addItem">+ Thêm dòng</button><button type="button" class="btn sm" id="scanItem">📷 Quét SP bán</button></div></div>
     ${S.materials.some((m) => m.kind === 'service') ? `<div class="full"><label>🧪 Hóa chất đã dùng (ghi để tính giá cốt, trừ kho)</label><div id="used"></div>
       <div class="row"><button type="button" class="btn sm" id="addUsed">+ Thêm hóa chất</button><button type="button" class="btn sm" id="recipeFill">↻ Lấy theo định mức dịch vụ</button><button type="button" class="btn sm" id="formulaFill">🧪 Tính từ công thức</button></div></div>` : ''}
@@ -1412,7 +1413,7 @@ async function visitForm(v = {}, after) {
     <div><label>Ghi chú</label><input name="note" value="${esc(v.note || '')}"></div>
     ${!isEdit ? `<div><label>📷 Ảnh trước</label><input type="file" accept="image/*" multiple id="phB"></div><div><label>📷 Ảnh sau</label><input type="file" accept="image/*" multiple id="phA"></div>` : ''}
     </div><div class="err"></div><div class="modal-foot">${isEdit && isOwner() ? '<button type="button" class="btn danger" id="delV">Xóa lượt</button><span class="spacer"></span>' : ''}
-    <button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu lượt làm</button></div></form>`, true);
+    <button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary" id="vfSave">Lưu lượt làm</button></div></form>`, true);
   const f = $('#vf');
   let cards = [];
   // Khách trả dư so với số phải trả → phần dư tự vào TIP CHUNG (chia đều người đi làm hôm đó)
@@ -1444,8 +1445,8 @@ async function visitForm(v = {}, after) {
   const renderItems = () => {
     $('#items').innerHTML = items.map((it, i) => `<div class="item-row"><select data-i="${i}" class="isvc">${svcOpts(it.service_id).replace(it.material_id ? `value="m${it.material_id}"` : '\u0000', `value="m${it.material_id}" selected`)}${!it.service_id && !it.material_id && it.name ? `<option selected value="">${esc(it.name)}</option>` : ''}</select>
       ${it.material_id ? `<input type="number" data-i="${i}" class="iqty" min="1" step="1" value="${it.qty || 1}" title="Số lượng" style="width:64px">` : ''}
-      <select data-i="${i}" class="istaff" title="Thợ làm dòng này (hoa hồng dịch vụ tính cho người này)"><option value="">Chính: = phiếu</option>${activeStaff().map((s) => `<option value="${s.id}" ${Number(it.staff_id) === s.id ? 'selected' : ''}>Chính: ${esc(s.full_name)}</option>`).join('')}</select>
-      <select data-i="${i}" class="iasst" title="Người phụ của dòng này (hoa hồng phụ tính cho người này)"><option value="">Phụ: = phiếu</option><option value="0" ${it.assistant_id === 0 || it.assistant_id === '0' ? 'selected' : ''}>Phụ: không có</option>${activeStaff().map((s) => `<option value="${s.id}" ${Number(it.assistant_id) === s.id ? 'selected' : ''}>Phụ: ${esc(s.full_name)}</option>`).join('')}</select>
+      <select data-i="${i}" class="istaff" title="Thợ làm dòng này (hoa hồng dịch vụ tính cho người này)"><option value="">Chính: ${esc(hdrName(f.main_staff_id.value) || 'thợ chính')}</option>${activeStaff().filter((s) => String(s.id) !== String(f.main_staff_id.value)).map((s) => `<option value="${s.id}" ${Number(it.staff_id) === s.id ? 'selected' : ''}>Chính: ${esc(s.full_name)}</option>`).join('')}</select>
+      <select data-i="${i}" class="iasst" title="Người phụ của dòng này (hoa hồng phụ tính cho người này)"><option value="">Phụ: ${esc(hdrName(f.assistant_id.value) || 'không có')}</option>${f.assistant_id.value ? `<option value="0" ${it.assistant_id === 0 || it.assistant_id === '0' ? 'selected' : ''}>Phụ: không có</option>` : ''}${activeStaff().filter((s) => String(s.id) !== String(f.assistant_id.value)).map((s) => `<option value="${s.id}" ${Number(it.assistant_id) === s.id ? 'selected' : ''}>Phụ: ${esc(s.full_name)}</option>`).join('')}</select>
       <input type="number" data-i="${i}" class="iprice" min="0" step="1000" value="${it.price ?? ''}" placeholder="Giá"><button type="button" class="icon-btn" data-rm="${i}">×</button></div>`).join('');
     $$('.istaff', f).forEach((s) => (s.onchange = () => { items[s.dataset.i].staff_id = s.value; }));
     $$('.iasst', f).forEach((s) => (s.onchange = () => { items[s.dataset.i].assistant_id = s.value; }));
@@ -1635,13 +1636,14 @@ async function visitForm(v = {}, after) {
   $$('[data-dpct]', f).forEach((b) => (b.onclick = () => setPct(Number(b.dataset.dpct))));
   f.assistant_id.addEventListener('change', calc);
   $('#paidAct').addEventListener('input', paidSync);
-  f.main_staff_id.addEventListener('change', () => { if (items.map((it) => levelSwap(it, f.main_staff_id.value)).some(Boolean)) { renderItems(); toast('Đã đổi giá cắt theo cấp của thợ chính'); } });
+  f.main_staff_id.addEventListener('change', () => { const sw = items.map((it) => levelSwap(it, f.main_staff_id.value)).some(Boolean); renderItems(); if (sw) toast('Đã đổi giá cắt theo cấp của thợ chính'); });
+  f.assistant_id.addEventListener('change', () => renderItems());
   renderItems();
   if (!isEdit && !used.length) autoRecipe(); else renderUsed();
   loadCards(custSel && custSel.id);
   f.onsubmit = (e) => {
     e.preventDefault();
-    guard($('#vf button.primary'), async () => {
+    guard($('#vfSave'), async () => {
       const d = formData(f);
       const body = { ...d, items: items.filter((i) => i.service_id || i.name || i.material_id).map((i) => (i.material_id ? { material_id: i.material_id, qty: i.qty || 1, price: i.price === '' ? null : Number(i.price), staff_id: Number(i.staff_id) || null, assistant_id: i.assistant_id === '' || i.assistant_id == null ? null : Number(i.assistant_id) }
         : { service_id: i.service_id || null, name: i.name, price: i.price === '' ? null : Number(i.price), staff_id: Number(i.staff_id) || null, assistant_id: i.assistant_id === '' || i.assistant_id == null ? null : Number(i.assistant_id) })), appointment_id: v.appointment_id };
