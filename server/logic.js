@@ -597,8 +597,11 @@ function dayMoney(date) {
     .map((r) => ({ id: r.id, time: r.time, name: r.name, tip: r.tip, method: r.payment_method || 'Chưa ghi' }));
   const tipBy = {};
   for (const t of tipRows) tipBy[t.method] = (tipBy[t.method] || 0) + t.tip;
-  const exp = db.prepare(`SELECT e.id, e.amount, e.category, e.note, e.status, u.full_name by_name FROM expenses e LEFT JOIN users u ON u.id=e.created_by
+  const exp = db.prepare(`SELECT e.id, e.amount, e.category, e.note, e.status, COALESCE(e.source,'fund') source, e.pay_method, e.spread_months, u.full_name by_name FROM expenses e LEFT JOIN users u ON u.id=e.created_by
     WHERE e.date=? AND e.kind='out' AND e.status<>'rejected' ORDER BY e.id`).all(date);
+  // Hoàn ứng cho nhân viên bằng TM tại tiệm trong ngày → cũng là tiền mặt ra khỏi tiệm
+  const reimb = db.prepare(`SELECT e.id, e.amount, e.note, u.full_name by_name FROM expenses e LEFT JOIN users u ON u.id=e.created_by
+    WHERE e.reimbursed_at=? AND e.reimburse_method='fund'`).all(date);
   const by = { ...s.by_method };
   // "Chưa ghi" trong by_method gồm cả lượt ô hồng (chưa trả) → tách riêng, phần còn lại là đã trả nhưng chưa ghi hình thức
   const pink = s.unpaid - s.debt_open;
@@ -611,6 +614,8 @@ function dayMoney(date) {
     debt_in: s.debt_in, card_sales: s.card_sales, by_method: by,
     tips: s.tips, tip_list: tipRows, tip_by_method: tipBy,
     expenses: exp, expense_total: exp.reduce((t, e) => t + e.amount, 0),
+    expense_shop_cash: exp.filter((e) => e.source === 'fund').reduce((t, e) => t + e.amount, 0) + reimb.reduce((t, e) => t + e.amount, 0),
+    reimbursed: reimb,
   };
 }
 

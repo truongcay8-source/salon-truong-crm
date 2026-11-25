@@ -31,6 +31,29 @@ CREATE INDEX IF NOT EXISTS idx_exp_date ON expenses(date);
 db.prepare("INSERT OR IGNORE INTO settings(key,value) VALUES ('petty_target','1000000')").run();
 // Khoản chi nhập từ sổ đặt lịch (cột Chi + Ghi chú) → không nhân đôi khi nhập lại file
 if (!db.prepare('PRAGMA table_info(expenses)').all().some((c) => c.name === 'import_ref')) db.exec('ALTER TABLE expenses ADD COLUMN import_ref TEXT');
+// Nguồn tiền: fund = tiền mặt tại tiệm (quỹ/két, mặc định); staff = nhân viên ứng trước (TM/CK cá nhân) → chờ hoàn ứng;
+// owner = chủ trả cá nhân (không đụng quỹ, vẫn là chi phí tiệm). spread_months: chia đều chi phí cho N tháng (app trả năm, đồ dùng lâu).
+for (const c of ['source TEXT', 'pay_method TEXT', 'spread_months INTEGER NOT NULL DEFAULT 1', 'reimbursed_at TEXT', 'reimburse_method TEXT', 'reimbursed_by INTEGER']) {
+  if (!db.prepare('PRAGMA table_info(expenses)').all().some((x) => x.name === c.split(' ')[0])) db.exec('ALTER TABLE expenses ADD COLUMN ' + c);
+}
+const SOURCES = { fund: 'Tiền mặt tại tiệm', staff: 'Nhân viên ứng trước', owner: 'Chủ trả cá nhân' };
+const REIMB = { fund: 'TM tại tiệm', ck: 'Chuyển khoản', salary: 'Cộng vào lương' };
+// Chi phí phân bổ vào 1 tháng (YYYY-MM): khoản trả 1 lần tính hết tháng chi; khoản chia N tháng tính amount/N mỗi tháng
+function monthShare(e, month) {
+  const n = Math.max(1, Number(e.spread_months) || 1);
+  const [y, m] = e.date.slice(0, 7).split('-').map(Number);
+  const [y2, m2] = month.split('-').map(Number);
+  const k = (y2 - y) * 12 + (m2 - m);
+  if (k < 0 || k >= n) return 0;
+  const base = Math.floor(e.amount / n);
+  return k === n - 1 ? e.amount - base * (n - 1) : base; // tháng cuối nhận phần lẻ
+}
+function monthExpenses(month) {
+  const from = month + '-01';
+  const rows = db.prepare(`SELECT e.*, u.full_name by_name FROM expenses e LEFT JOIN users u ON u.id=e.created_by
+    WHERE e.kind='out' AND e.status='approved' AND e.date<=? AND date(e.date, '+' || (COALESCE(e.spread_months,1)) || ' months') > ?`).all(month + '-31', from);
+  return rows.map((e) => ({ ...e, share: monthShare(e, month) })).filter((e) => e.share > 0);
+}
 
 // Đoán nhóm chi theo nội dung ghi tay
 function guessCat(note) {
@@ -69,21 +92,25 @@ function importFromBook(days, user, summary) {
   }
 }
 
-const CATS = ['Hóa chất / vật tư lặt vặt', 'Nước uống, tiếp khách', 'Vệ sinh, giặt khăn', 'Sửa chữa nhỏ', 'Văn phòng phẩm', 'Ship, gửi xe, đi lại', 'Khác'];
+const CATS = ['Hóa chất / vật tư lặt vặt', 'Nước uống, tiếp khách', 'Vệ sinh, giặt khăn', 'Sửa chữa nhỏ', 'Văn phòng phẩm', 'Ship, gửi xe, đi lại', 'Phần mềm / app', 'Dụng cụ, thiết bị', 'Quảng cáo, marketing', 'Khác'];
 const isMgr = (u) => u.role !== 'staff';
 
 function fundState() {
   const r = db.prepare(`SELECT
       COALESCE(SUM(CASE WHEN kind='in' THEN amount END),0) ins,
-      COALESCE(SUM(CASE WHEN kind='out' AND status<>'rejected' THEN amount END),0) outs,
+      COALESCE(SUM(CASE WHEN kind='out' AND status<>'rejected' AND COALESCE(source,'fund')='fund' THEN amount END),0)
+        + COALESCE(SUM(CASE WHEN kind='out' AND status='approved' AND reimburse_method='fund' THEN amount END),0) outs,
       COALESCE(SUM(CASE WHEN kind='out' AND status='pending' THEN amount END),0) pending_amount,
       COUNT(CASE WHEN kind='out' AND status='pending' THEN 1 END) pending_count
     FROM expenses`).get();
   const target = Number(getSettings().petty_target) || 1000000;
   const refund = db.prepare(`SELECT e.created_by user_id, u.full_name name, SUM(e.amount) amount, COUNT(*) n FROM expenses e JOIN users u ON u.id=e.created_by
-    WHERE e.kind='out' AND e.status='rejected' AND e.refunded=0 GROUP BY e.created_by`).all();
+    WHERE e.kind='out' AND e.status='rejected' AND e.refunded=0 AND COALESCE(e.source,'fund')='fund' GROUP BY e.created_by`).all();
+  // Nhân viên ứng tiền mua hộ, khoản đã duyệt mà tiệm chưa trả lại
+  const reimb = db.prepare(`SELECT e.created_by user_id, u.full_name name, SUM(e.amount) amount, COUNT(*) n FROM expenses e JOIN users u ON u.id=e.created_by
+    WHERE e.kind='out' AND e.status='approved' AND e.source='staff' AND e.reimbursed_at IS NULL GROUP BY e.created_by`).all();
   const balance = r.ins - r.outs;
-  return { balance, target, need_topup: Math.max(0, target - balance), pending_amount: r.pending_amount, pending_count: r.pending_count, refund_due: refund };
+  return { balance, target, need_topup: Math.max(0, target - balance), pending_amount: r.pending_amount, pending_count: r.pending_count, refund_due: refund, reimburse_due: reimb };
 }
 
 function mount(app, { MGR, upload, sniffImage, PHOTO_DIR }) {
@@ -97,7 +124,11 @@ function mount(app, { MGR, upload, sniffImage, PHOTO_DIR }) {
     const out = rows.filter((x) => x.kind === 'out' && x.status !== 'rejected');
     const byCat = {};
     for (const x of out) byCat[x.category || 'Khác'] = (byCat[x.category || 'Khác'] || 0) + x.amount;
-    res.json({ from, to, rows, older_pending: pending, ...fundState(), total_out: out.reduce((s, x) => s + x.amount, 0),
+    const reimbList = isMgr(req.user) ? db.prepare(`${rowsSql} WHERE e.kind='out' AND e.status='approved' AND e.source='staff' AND e.reimbursed_at IS NULL ORDER BY e.date, e.id`).all() : [];
+    const spreadList = isMgr(req.user) ? db.prepare(`${rowsSql} WHERE e.kind='out' AND e.status='approved' AND e.spread_months>1 AND date(e.date, '+' || e.spread_months || ' months') > ? ORDER BY e.date`).all(t.slice(0, 8) + '01')
+      .map((x) => { const done = Math.min(x.spread_months, (Number(t.slice(0, 4)) - Number(x.date.slice(0, 4))) * 12 + Number(t.slice(5, 7)) - Number(x.date.slice(5, 7)) + 1);
+        return { ...x, per_month: Math.round(x.amount / x.spread_months), months_left: x.spread_months - done, left: x.amount - Math.round((x.amount / x.spread_months) * done) }; }) : [];
+    res.json({ from, to, rows, older_pending: pending, reimburse_list: reimbList, spread_list: spreadList, sources: SOURCES, reimburse_methods: REIMB, ...fundState(), total_out: out.reduce((s, x) => s + x.amount, 0),
       total_in: rows.filter((x) => x.kind === 'in').reduce((s, x) => s + x.amount, 0), by_category: byCat, categories: CATS, can_decide: isMgr(req.user) });
   });
   // Ghi khoản chi (ai cũng ghi được) hoặc nạp quỹ (quản lý). Ảnh hóa đơn tùy chọn.
@@ -111,7 +142,11 @@ function mount(app, { MGR, upload, sniffImage, PHOTO_DIR }) {
     const note = str(b.note);
     if (kind === 'out' && !note) throw bad('Ghi rõ mua gì');
     const date = isDate(b.date) ? b.date : today();
-    if (!isMgr(req.user) && date !== today()) throw bad('Nhân viên chỉ ghi chi trong ngày hôm nay');
+    if (!isMgr(req.user) && (date > today() || date < L.addDays(today(), -7))) throw bad('Nhân viên chỉ ghi khoản chi trong 7 ngày gần đây');
+    const source = kind === 'out' && SOURCES[b.source] ? b.source : 'fund';
+    if (source === 'owner' && !isMgr(req.user)) throw bad('Nhân viên chọn "Tiền mặt tại tiệm" hoặc "Tự ứng trước"');
+    const payMethod = source === 'fund' ? 'Tiền mặt' : /chuy|ck/i.test(b.pay_method || '') ? 'Chuyển khoản' : 'Tiền mặt';
+    const spread = isMgr(req.user) ? Math.min(60, Math.max(1, int(b.spread_months) || 1)) : 1;
     let photo = null;
     if (req.file) {
       const ext = sniffImage(req.file.buffer);
@@ -121,9 +156,9 @@ function mount(app, { MGR, upload, sniffImage, PHOTO_DIR }) {
       fs.writeFileSync(path.join(PHOTO_DIR, photo), req.file.buffer);
     }
     const auto = kind === 'in' || isMgr(req.user); // quản lý tự ghi thì coi như đã duyệt
-    const id = db.prepare('INSERT INTO expenses(date,kind,amount,category,note,photo,status,created_by,decided_by,decided_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+    const id = db.prepare('INSERT INTO expenses(date,kind,amount,category,note,photo,status,created_by,decided_by,decided_at,source,pay_method,spread_months) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
       .run(date, kind, amount, kind === 'out' ? (CATS.includes(b.category) ? b.category : 'Khác') : null, note, photo, auto ? 'approved' : 'pending', req.user.id,
-        auto ? req.user.id : null, auto ? new Date().toISOString() : null).lastInsertRowid;
+        auto ? req.user.id : null, auto ? new Date().toISOString() : null, kind === 'out' ? source : null, kind === 'out' ? payMethod : null, kind === 'out' ? spread : 1).lastInsertRowid;
     audit(req.user.id, kind === 'in' ? 'petty_in' : 'expense_create', 'expense', id, { amount, note });
     res.json({ id, ...fundState() });
   });
@@ -135,6 +170,29 @@ function mount(app, { MGR, upload, sniffImage, PHOTO_DIR }) {
     if (st === 'rejected' && !str(req.body.reason)) throw bad('Ghi lý do không duyệt');
     db.prepare("UPDATE expenses SET status=?, reason=?, decided_by=?, decided_at=datetime('now','localtime'), refunded=0 WHERE id=?").run(st, st === 'rejected' ? str(req.body.reason) : null, req.user.id, e.id);
     audit(req.user.id, 'expense_' + st, 'expense', e.id, { changes: { status: [e.status, st] }, amount: e.amount, note: e.note, reason: str(req.body.reason) });
+    res.json({ ok: true, ...fundState() });
+  });
+  // Sửa nguồn tiền / chia tháng (quản lý; vd lúc duyệt khoản nhân viên ghi)
+  app.put('/api/expenses/:id', MGR, (req, res) => {
+    const e = db.prepare("SELECT * FROM expenses WHERE id=? AND kind='out'").get(int(req.params.id));
+    if (!e) throw new HttpError(404, 'Không tìm thấy khoản chi');
+    const b = req.body;
+    const source = SOURCES[b.source] ? b.source : e.source || 'fund';
+    const spread = b.spread_months != null ? Math.min(60, Math.max(1, int(b.spread_months) || 1)) : e.spread_months;
+    const cat = CATS.includes(b.category) ? b.category : e.category;
+    db.prepare('UPDATE expenses SET source=?, spread_months=?, category=?, pay_method=COALESCE(?,pay_method) WHERE id=?')
+      .run(source, spread, cat, b.pay_method ? (/chuy|ck/i.test(b.pay_method) ? 'Chuyển khoản' : 'Tiền mặt') : null, e.id);
+    audit(req.user.id, 'expense_update', 'expense', e.id, { changes: { source: [e.source, source], spread_months: [e.spread_months, spread], category: [e.category, cat] } });
+    res.json({ ok: true, ...fundState() });
+  });
+  // Hoàn ứng cho nhân viên đã mua hộ: TM tại tiệm (trừ quỹ) / chuyển khoản / cộng vào lương
+  app.post('/api/expenses/:id/reimburse', MGR, (req, res) => {
+    const e = db.prepare("SELECT * FROM expenses WHERE id=? AND kind='out' AND source='staff'").get(int(req.params.id));
+    if (!e) throw bad('Chỉ hoàn ứng cho khoản nhân viên ứng trước');
+    if (e.status !== 'approved') throw bad('Duyệt khoản này trước khi hoàn ứng');
+    const m = req.body.undo ? null : REIMB[req.body.method] ? req.body.method : 'fund';
+    db.prepare('UPDATE expenses SET reimbursed_at=?, reimburse_method=?, reimbursed_by=? WHERE id=?').run(m ? today() : null, m, m ? req.user.id : null, e.id);
+    audit(req.user.id, m ? 'expense_reimburse' : 'expense_reimburse_undo', 'expense', e.id, { amount: e.amount, method: m });
     res.json({ ok: true, ...fundState() });
   });
   // Khoản không duyệt: người chi đã hoàn tiền vào quỹ
@@ -213,4 +271,4 @@ function mount(app, { MGR, upload, sniffImage, PHOTO_DIR }) {
   });
 }
 
-module.exports = { mount, fundState, importFromBook, guessCat };
+module.exports = { mount, fundState, importFromBook, guessCat, monthExpenses, monthShare, SOURCES };
