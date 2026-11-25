@@ -178,9 +178,18 @@ function report(month) {
   // 5) Chi phí cố định: mặc định + khoản riêng của tháng (trùng tên thì khoản của tháng thay mặc định)
   const monthItems = db.prepare('SELECT * FROM fin_items WHERE month=? ORDER BY id').all(month);
   const override = new Set(monthItems.map((i) => i.name.trim().toLowerCase()));
+  // Tháng khai trương: chi phí cố định mặc định chỉ tính theo số ngày mở cửa (Vinh chốt 25/11/2026); trước khai trương = 0.
+  // Khoản riêng của tháng (nhập tay) giữ nguyên số đã nhập.
+  const openDate = getConf('open_date', '2026-10-25');
+  const dim = Number(to.slice(8, 10));
+  let openDays = dim;
+  if (L.isDate(openDate) && openDate > to) openDays = 0;
+  else if (L.isDate(openDate) && openDate >= from) openDays = dim - Number(openDate.slice(8, 10)) + 1;
+  const factor = openDays / dim;
   const fixed = getConf('fixed', DEFAULT_FIXED)
     .filter((f) => !override.has(String(f.name).trim().toLowerCase()))
-    .map((f) => ({ name: f.name, amount: Number(f.amount) || 0, cash: f.cash ? 1 : 0, note: f.note || '', source: 'mặc định' }))
+    .map((f) => ({ name: f.name, amount: Math.round((Number(f.amount) || 0) * factor), cash: f.cash ? 1 : 0, source: 'mặc định',
+      note: [f.note || '', factor < 1 ? `tính ${openDays}/${dim} ngày từ khai trương ${openDate.split('-').reverse().join('/')}` : ''].filter(Boolean).join(' · ') }))
     .concat(monthItems.map((i) => ({ id: i.id, name: i.name, amount: i.amount, cash: i.cash, note: i.note || '', source: 'tháng này' })));
   const fixedTotal = fixed.reduce((a, f) => a + f.amount, 0);
   const depreciation = fixed.filter((f) => !f.cash).reduce((a, f) => a + f.amount, 0);
@@ -210,7 +219,7 @@ function report(month) {
     payroll: { fixed: payFixed, variable: payVar, plus_minus: plusMinus, total: payTotal, people: pr.rows.length, no_params: noParams,
       base: T.base, allowance: T.allowance, commission: T.commission, bonus: T.bonus, kpi: T.kpi, floor_topup: T.floor_topup },
     fund: { total: fund, rows: fundRows, flags: fundFlags, spread: spreadRows, by_source: mexp.reduce((m, e) => ((m[e.source || 'fund'] = (m[e.source || 'fund'] || 0) + e.share), m), {}) },
-    fixed: { rows: fixed, total: fixedTotal, depreciation },
+    fixed: { rows: fixed, total: fixedTotal, depreciation, open_date: openDate, open_days: openDays, days: dim },
     other_income: { total: otherIncome, rows: incomeRows }, opex, profit, profit_pct: revenue ? profit / revenue : 0, ebitda, breakeven,
     cash: { in_service: S.service_cash, in_cards: S.card_sales, in_other: otherIncome, in_total: S.money_in + otherIncome, payroll: payTotal, fund: fundCash, fixed: fixedTotal - depreciation, purchases, out_total: cashOut, net: S.money_in + otherIncome - cashOut },
   };
@@ -252,7 +261,7 @@ function mount(app, { OWNER }) {
   });
   app.get('/api/finance', OWNER, (req, res) => {
     const month = isMonth(req.query.month) ? req.query.month : L.today().slice(0, 7);
-    res.json({ ...report(month), defaults: { fixed: getConf('fixed', DEFAULT_FIXED), rates: { ...DEFAULT_RATES, ...getConf('rates', {}) } } });
+    res.json({ ...report(month), defaults: { fixed: getConf('fixed', DEFAULT_FIXED), open_date: getConf('open_date', '2026-10-25'), rates: { ...DEFAULT_RATES, ...getConf('rates', {}) } } });
   });
   // Sửa danh sách chi phí cố định mặc định + % giá vốn ước tính
   app.put('/api/finance/config', OWNER, (req, res) => {
@@ -263,6 +272,7 @@ function mount(app, { OWNER }) {
       if (list.length > 50) throw bad('Tối đa 50 khoản');
       setConf('fixed', list);
     }
+    if (b.open_date !== undefined) { if (b.open_date && !L.isDate(b.open_date)) throw bad('Ngày khai trương không hợp lệ'); setConf('open_date', b.open_date || ''); }
     if (b.rates && typeof b.rates === 'object') {
       const r = {};
       for (const [k, v] of Object.entries(b.rates)) { const n = Number(v); if (!(n >= 0 && n <= 1)) throw bad('Tỷ lệ 0–100%'); r[String(k).slice(0, 40)] = n; }

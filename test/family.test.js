@@ -426,7 +426,7 @@ test('báo cáo tài chính: chỉ Lãnh đạo; lãi/lỗ = doanh thu − giá 
   assert.equal((await o.post('/visits', { customer_id: cid, date: '2026-07-10', time: '10:00', main_staff_id: duong, payment_method: 'Tiền mặt',
     items: [{ service_id: chem.id, price: 1000000 }] })).status, 200);
   // cố định: chỉ tiền nhà 10tr + khấu hao 2tr
-  assert.equal((await o.put('/finance/config', { fixed: [{ name: 'Tiền nhà', amount: 10000000, cash: 1 }, { name: 'Khấu hao', amount: 2000000, cash: 0 }], rates: { 'Hóa chất': 0.2 } })).status, 200);
+  assert.equal((await o.put('/finance/config', { fixed: [{ name: 'Tiền nhà', amount: 10000000, cash: 1 }, { name: 'Khấu hao', amount: 2000000, cash: 0 }], rates: { 'Hóa chất': 0.2 }, open_date: '' })).status, 200);
   assert.equal((await o.post('/finance/items', { month: '2026-07', name: 'Tiền nhà', amount: 12000000 })).status, 200);
   assert.equal((await o.post('/finance/items', { month: '2026-07', name: 'Điện nước', amount: 1500000 })).status, 200);
   const r = (await o.get('/finance?month=2026-07')).data;
@@ -664,4 +664,16 @@ test('báo cáo tài chính cả năm: cộng từng tháng khớp báo cáo th�
   assert.equal((await o.get('/finance/year?year=2025')).status, 200);
   const s = client(); assert.equal((await s.post('/login', { username: 'thu', password: 'moi-thu' })).status, 200);
   assert.equal((await s.get('/finance/year?year=2025')).status, 403);
+});
+
+test('tháng khai trương: chi phí cố định mặc định tính theo ngày mở cửa', async () => {
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  assert.equal((await o.put('/finance/config', { fixed: [{ name: 'Tiền nhà', amount: 15500000, cash: 1 }, { name: 'Khấu hao', amount: 3100000, cash: 0 }], open_date: '2026-10-25' })).status, 200);
+  const F = require('../server/finance');
+  const oct = F.report('2026-10'), sep = F.report('2026-09'), dec = F.report('2026-12');
+  assert.equal(oct.fixed.open_days, 7);
+  assert.equal(oct.fixed.total, Math.round(15500000 * 7 / 31) + Math.round(3100000 * 7 / 31));
+  assert.equal(sep.fixed.total, 0);
+  assert.equal(dec.fixed.total, 15500000 + 3100000);
+  await o.put('/finance/config', { open_date: '' });
 });
