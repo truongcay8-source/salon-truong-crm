@@ -2438,6 +2438,7 @@ VIEWS.sales = async (main) => {
 // ---------- Bảng lương (chỉ Lãnh đạo) ----------
 VIEWS.finance = async (main) => {
   if (!isOwner()) { main.innerHTML = header('Báo cáo tài chính', '') + '<div class="card empty">Chỉ Lãnh đạo xem được báo cáo tài chính</div>'; return; }
+  if (S.params.year) return financeYear(main, Number(S.params.year));
   const month = S.params.month || S.today.slice(0, 7);
   const r = await api('/finance?month=' + month);
   const shift = (n) => { const [y, m] = month.split('-').map(Number); const d = new Date(Date.UTC(y, m - 1 + n, 1)); return d.toISOString().slice(0, 7); };
@@ -2462,7 +2463,7 @@ VIEWS.finance = async (main) => {
   if (F.rows.some((f) => /điện/i.test(f.name) && !f.amount)) warn.push('Chưa nhập <b>tiền điện nước</b> tháng này.');
   if (r.fund.flags.length) warn.push(`Chi quỹ có <b>${r.fund.flags.length} khoản dễ bị tính trùng hoặc không phải chi phí</b>: ${r.fund.flags.map((x) => `${esc(x.note)} ${money(x.amount)}`).join('; ')}. Nếu điện nước/phần mềm đã chi từ quỹ thì để 0 ở chi phí cố định; khoản đổi tiền/ứng lương thì sửa hoặc bỏ duyệt bên trang Quỹ.`);
   if (R.unpaid) warn.push(`Có ${money(R.unpaid)} khách <b>chưa thanh toán</b> (ô hồng) – đã tính vào doanh thu nhưng chưa thu tiền.`);
-  main.innerHTML = header('📈 Báo cáo tài chính', 'Chỉ tài khoản Lãnh đạo thấy. Lãi/lỗ tháng sau khi trừ giá vốn, lương, chi quỹ và chi phí cố định.', '<button class="btn" id="fcfg">⚙ Chi phí cố định & % giá vốn</button>') +
+  main.innerHTML = header('📈 Báo cáo tài chính', 'Chỉ tài khoản Lãnh đạo thấy. Lãi/lỗ tháng sau khi trừ giá vốn, lương, chi quỹ và chi phí cố định.', `<button class="btn primary" id="fyear">📅 Xem cả năm ${month.slice(0, 4)}</button><button class="btn" id="fcfg">⚙ Chi phí cố định & % giá vốn</button>`) +
     `<div class="card"><div class="row"><button class="btn sm" id="pm">‹</button><input type="month" id="mo" value="${month}" style="width:auto"><button class="btn sm" id="nm">›</button>
       <span class="small muted">${r.from.split('-').reverse().join('/')} – ${r.to.split('-').reverse().join('/')} · ${R.visits} lượt khách${r.locked_payroll ? ' · lương đã chốt' : ' · lương chưa chốt (số tạm)'}</span></div></div>
     <div class="grid kpis">
@@ -2531,7 +2532,66 @@ VIEWS.finance = async (main) => {
     toast('Đã ghi thu nhập khác'); VIEWS.finance(main); }); };
   $$('[data-oid]', main).forEach((x) => (x.onclick = () => guard(x, async () => { if (!confirm('Xóa khoản thu này?')) return; await api('/finance/income/' + x.dataset.oid, { method: 'DELETE' }); VIEWS.finance(main); })));
   $('#fcfg').onclick = () => finConfig(r.defaults, () => VIEWS.finance(main));
+  $('#fyear').onclick = () => go('finance', { year: month.slice(0, 4) });
 };
+// Cả năm: mỗi tháng 1 cột, cộng dồn lãi và tiền; biểu đồ cột doanh thu / lãi
+async function financeYear(main, year) {
+  main.innerHTML = header('📈 Báo cáo tài chính cả năm', 'Đang tính từng tháng…', '') + '<div class="card empty">Đang tải…</div>';
+  const y = await api('/finance/year?year=' + year);
+  const M = y.months, T = y.total;
+  const mm = (m) => 'T' + Number(m.slice(5));
+  const cell = (v, bold) => `<td class="num">${bold ? '<b>' : ''}${v < 0 ? `<span style="color:var(--bad)">−${money(-v)}</span>` : money(v)}${bold ? '</b>' : ''}</td>`;
+  const line = (label, k, o = {}) => `<tr class="${o.cls || ''}"><td>${label}${o.sub ? `<div class="small muted">${o.sub}</div>` : ''}</td>${M.map((x) => cell(o.neg ? -(x[k] || 0) || 0 : x[k] || 0, o.bold)).join('')}${o.noTotal ? '<td></td>' : cell(o.neg ? -(T[k] || 0) || 0 : T[k] || 0, true)}</tr>`;
+  const best = M.length ? M.reduce((a, b) => (b.profit > a.profit ? b : a)) : null;
+  const last = M[M.length - 1];
+  // Biểu đồ cột: doanh thu (nhạt) + lãi/lỗ (xanh/đỏ)
+  const W = Math.max(320, M.length * 70), H = 210, pad = 24, bw = 22;
+  const mx = Math.max(1, ...M.map((x) => Math.max(x.revenue, Math.abs(x.profit))));
+  const zero = H - pad - (M.some((x) => x.profit < 0) ? 50 : 0);
+  const sc = (v) => (v / mx) * (zero - 12);
+  const chart = M.length ? `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;height:auto" role="img" aria-label="Doanh thu và lãi lỗ từng tháng">
+    <line x1="0" x2="${W}" y1="${zero}" y2="${zero}" stroke="var(--line)" />
+    ${M.map((x, i) => { const cx = 40 + i * 70; const hp = sc(Math.abs(x.profit));
+      return `<rect x="${cx - bw}" y="${zero - sc(x.revenue)}" width="${bw}" height="${sc(x.revenue)}" fill="var(--brand)" opacity=".25"><title>Doanh thu ${money(x.revenue)}</title></rect>
+      <rect x="${cx + 2}" y="${x.profit >= 0 ? zero - hp : zero}" width="${bw}" height="${x.profit >= 0 ? hp : Math.min(hp, H - 22 - zero)}" fill="${x.profit >= 0 ? 'var(--ok,#1e8449)' : 'var(--bad)'}"><title>${x.profit >= 0 ? 'Lãi' : 'Lỗ'} ${money(Math.abs(x.profit))}</title></rect>
+      <text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="11" fill="currentColor">${mm(x.month)}</text>`; }).join('')}
+  </svg><div class="small muted"><span style="display:inline-block;width:10px;height:10px;background:var(--brand);opacity:.25"></span> Doanh thu &nbsp; <span style="display:inline-block;width:10px;height:10px;background:var(--ok,#1e8449)"></span> Lãi &nbsp; <span style="display:inline-block;width:10px;height:10px;background:var(--bad)"></span> Lỗ</div>` : '';
+  main.innerHTML = header(`📈 Báo cáo tài chính năm ${year}`, `${M.length} tháng có số liệu · bấm tên tháng để xem chi tiết`,
+    `<button class="btn" id="ybk">‹ Về báo cáo tháng</button>`) +
+    `<div class="card"><div class="row"><button class="btn sm" id="ypv">‹ ${year - 1}</button><b>${year}</b><button class="btn sm" id="ynx">${year + 1} ›</button></div></div>
+    ${M.length ? `<div class="grid kpis">
+      <div class="kpi"><div class="l">Doanh thu năm</div><div class="v">${money(T.revenue)}</div><div class="s">${T.visits} lượt · TB ${money(Math.round(T.revenue / M.length))}/tháng</div></div>
+      <div class="kpi"><div class="l">${T.profit < 0 ? '🔻 Lỗ' : '✅ Lãi'} cả năm</div><div class="v" style="color:${T.profit < 0 ? 'var(--bad)' : 'var(--ok,#1e8449)'}">${T.profit < 0 ? '−' : ''}${money(Math.abs(T.profit))}</div><div class="s">TB ${y.avg_profit < 0 ? '−' : ''}${money(Math.abs(y.avg_profit))}/tháng · trước khấu hao ${T.ebitda < 0 ? '−' : ''}${money(Math.abs(T.ebitda))}</div></div>
+      <div class="kpi"><div class="l">Tiền còn lại (dòng tiền)</div><div class="v">${T.cash_net < 0 ? '−' : ''}${money(Math.abs(T.cash_net))}</div><div class="s">vào ${money(T.cash_in)} · ra ${money(T.cash_out)}</div></div>
+      <div class="kpi"><div class="l">Tháng tốt nhất</div><div class="v">${best ? mm(best.month) : '—'}</div><div class="s">${best ? (best.profit < 0 ? 'lỗ ' : 'lãi ') + money(Math.abs(best.profit)) : ''}${last && last.month === S.today.slice(0, 7) ? ` · ${mm(last.month)} đang chạy (chưa đủ tháng)` : ''}</div></div></div>
+    <div class="card">${chart}</div>
+    <div class="card"><div class="table-wrap"><table class="fin year-tbl"><thead><tr><th></th>${M.map((x) => `<th class="num"><a href="#" data-ym="${x.month}">${mm(x.month)}</a>${x.locked_payroll ? '' : '<div class="small muted">lương tạm</div>'}</th>`).join('')}<th class="num">Cả năm</th></tr></thead><tbody>
+      ${line('Doanh thu dịch vụ', 'service')}
+      ${line('Bán sản phẩm', 'product')}
+      ${T.gift ? line('− Dùng thẻ tri ân', 'gift', { neg: true }) : ''}
+      ${line('<b>Doanh thu</b>', 'revenue', { cls: 'sum', bold: true })}
+      ${line('− Giá vốn', 'cogs', { neg: true, sub: T.cogs_est ? `trong đó ước tính ${money(T.cogs_est)}` : '' })}
+      ${line('<b>Lãi gộp</b>', 'gross', { cls: 'sum', bold: true })}
+      ${line('− Lương + hoa hồng', 'payroll', { neg: true })}
+      ${line('− Chi phát sinh', 'fund', { neg: true })}
+      ${line('− Chi phí cố định', 'fixed', { neg: true, sub: `gồm khấu hao ${money(T.depreciation)}` })}
+      ${T.other_income ? line('+ Thu nhập khác', 'other_income', { sub: 'lì xì khai trương…' }) : ''}
+      ${line('<b>LÃI / LỖ</b>', 'profit', { cls: 'sum big', bold: true })}
+      ${line('Lãi/lỗ cộng dồn', 'cum_profit', { noTotal: true })}
+      ${line('Lãi/lỗ trước khấu hao', 'ebitda')}
+      <tr><td colspan="${M.length + 2}" class="small muted" style="padding-top:14px"><b>Dòng tiền</b></td></tr>
+      ${line('Tiền vào', 'cash_in', { sub: 'gồm bán thẻ, thu khác' })}
+      ${line('− Tiền ra', 'cash_out', { neg: true, sub: 'lương, chi, nhà, điện, nhập hàng' })}
+      ${line('<b>Tiền còn lại</b>', 'cash_net', { cls: 'sum', bold: true })}
+      ${line('Tiền còn lại cộng dồn', 'cum_cash', { noTotal: true })}
+      ${line('Tip khách cho thợ (không tính)', 'tips', { cls: 'muted' })}
+    </tbody></table></div>
+    <div class="small muted" style="margin-top:8px">Mỗi cột tính giống hệt báo cáo tháng. Tháng chưa chốt lương là số tạm; tháng hiện tại chưa hết nên thường thấp hơn. Lãi khác tiền còn lại vì: khấu hao không chi tiền, bán thẻ là tiền thu trước, nhập hàng là tiền ra nhưng chưa phải chi phí.</div></div>`
+    : '<div class="card empty">Năm này chưa có số liệu</div>'}`;
+  $('#ybk').onclick = () => go('finance', {});
+  $('#ypv').onclick = () => go('finance', { year: year - 1 }); $('#ynx').onclick = () => go('finance', { year: year + 1 });
+  $$('[data-ym]', main).forEach((a) => (a.onclick = (e) => { e.preventDefault(); go('finance', { month: a.dataset.ym }); }));
+}
 function finConfig(d, after) {
   const line = (f = {}) => `<div class="row fx" style="gap:6px;margin-bottom:6px;flex-wrap:wrap"><input name="n" value="${esc(f.name || '')}" placeholder="Tên khoản" style="flex:2;min-width:150px">
     <input name="a" inputmode="numeric" value="${f.amount ? Number(f.amount).toLocaleString('vi-VN') : ''}" placeholder="Số tiền/tháng" style="flex:1;min-width:110px">

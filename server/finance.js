@@ -216,7 +216,40 @@ function report(month) {
   };
 }
 
+// Cả năm: chạy báo cáo từng tháng (từ tháng có dữ liệu đầu tiên đến tháng hiện tại), cộng dồn lãi/lỗ và dòng tiền
+function yearReport(year) {
+  // Tháng đầu tiên có số liệu: lượt làm, khoản chi hoặc thu khác (vd lì xì khai trương trước khi có lượt)
+  const first = (db.prepare("SELECT MIN(d) d FROM (SELECT MIN(date) d FROM visits WHERE status='done' UNION ALL SELECT MIN(date) FROM other_income UNION ALL SELECT MIN(date) FROM expenses WHERE kind='out')").get().d || L.today()).slice(0, 7);
+  const cur = L.today().slice(0, 7);
+  const months = [];
+  for (let m = 1; m <= 12; m++) {
+    const k = `${year}-${String(m).padStart(2, '0')}`;
+    if (k < first || k > cur) continue;
+    months.push(k);
+  }
+  let cumProfit = 0, cumCash = 0;
+  const rows = months.map((m) => {
+    const r = report(m);
+    cumProfit += r.profit; cumCash += r.cash.net;
+    return {
+      month: m, locked_payroll: r.locked_payroll, visits: r.revenue.visits,
+      service: r.revenue.service, product: r.revenue.product, gift: r.revenue.gift, revenue: r.revenue.total,
+      cogs: r.cogs.total, cogs_est: r.cogs.est_total, gross: r.gross,
+      payroll: r.payroll.total, fund: r.fund.total, fixed: r.fixed.total, depreciation: r.fixed.depreciation, other_income: r.other_income.total,
+      profit: r.profit, ebitda: r.ebitda, cum_profit: cumProfit,
+      cash_in: r.cash.in_total, cash_out: r.cash.out_total, cash_net: r.cash.net, cum_cash: cumCash, card_sales: r.revenue.card_sales, tips: r.revenue.tips,
+    };
+  });
+  const keys = ['visits', 'service', 'product', 'gift', 'revenue', 'cogs', 'cogs_est', 'gross', 'payroll', 'fund', 'fixed', 'depreciation', 'other_income', 'profit', 'ebitda', 'cash_in', 'cash_out', 'cash_net', 'card_sales', 'tips'];
+  const total = Object.fromEntries(keys.map((k) => [k, rows.reduce((a, x) => a + (x[k] || 0), 0)]));
+  return { year, months: rows, total, avg_profit: rows.length ? Math.round(total.profit / rows.length) : 0 };
+}
+
 function mount(app, { OWNER }) {
+  app.get('/api/finance/year', OWNER, (req, res) => {
+    const y = /^\d{4}$/.test(String(req.query.year || '')) ? Number(req.query.year) : Number(L.today().slice(0, 4));
+    res.json(yearReport(y));
+  });
   app.get('/api/finance', OWNER, (req, res) => {
     const month = isMonth(req.query.month) ? req.query.month : L.today().slice(0, 7);
     res.json({ ...report(month), defaults: { fixed: getConf('fixed', DEFAULT_FIXED), rates: { ...DEFAULT_RATES, ...getConf('rates', {}) } } });
@@ -273,4 +306,4 @@ function mount(app, { OWNER }) {
   });
 }
 
-module.exports = { mount, report, headCost, importLixi };
+module.exports = { mount, report, yearReport, headCost, importLixi };
