@@ -36,7 +36,8 @@ function expectedCash(date) {
     if (v.payment_method === cash) tips += v.tip || 0;
   }
   const cards = db.prepare("SELECT COALESCE(SUM(price),0) s FROM cards WHERE sold_at=? AND payment_method=? AND price>0").get(date, cash).s;
-  return { visits, tips, cards, total: visits + tips + cards, invoices: n };
+  const debts = db.prepare("SELECT COALESCE(SUM(debt),0) s FROM visits WHERE status='done' AND debt>0 AND debt_paid_at=? AND debt_paid_method=?").get(date, cash).s;
+  return { visits, tips, cards, debts, total: visits + tips + cards + debts, invoices: n };
 }
 
 function board(date, user) {
@@ -58,6 +59,10 @@ function board(date, user) {
   }
   for (const v of walk) out.paid.push(mask({ ...v, walk_in: true }));
   out.paid.sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')));
+  // Khách còn nợ (mọi ngày) → thu ngân thu nợ
+  out.debts = db.prepare(`SELECT v.id visit_id, v.code visit_code, v.date, v.time, v.debt, c.id customer_id, c.name, c.phone, u.full_name staff_name
+    FROM visits v JOIN customers c ON c.id=v.customer_id LEFT JOIN users u ON u.id=v.main_staff_id
+    WHERE v.status='done' AND v.debt>0 AND v.debt_paid_at IS NULL ORDER BY v.date, v.time`).all();
   // Khách còn thẻ tri ân chưa dùng → nhắc thu ngân trừ thẻ
   const giftLeft = db.prepare(`SELECT COALESCE(SUM(c.value + COALESCE((SELECT SUM(amount) FROM card_txns t WHERE t.card_id=c.id),0)),0) s
     FROM cards c WHERE c.customer_id=? AND c.sale_type='gift' AND c.status='active'`);
@@ -93,6 +98,17 @@ function mount(app, { OWNER }) {
     db.prepare('UPDATE appointments SET status=? WHERE id=?').run(st, a.id);
     audit(req.user.id, 'pos_checkin', 'appointment', a.id, { status: st });
     res.json({ ok: true });
+  });
+  // Thu nợ: ai cũng thu được; tiền tính vào ngày trả
+  app.post('/api/pos/debt/:id', (req, res) => {
+    const v = db.prepare("SELECT id, debt, debt_paid_at FROM visits WHERE id=? AND status='done'").get(int(req.params.id));
+    if (!v || !v.debt) throw bad('Lượt này không có nợ');
+    if (v.debt_paid_at) throw bad('Khách đã trả nợ ngày ' + v.debt_paid_at);
+    const m = L.str(req.body && req.body.method);
+    if (!getSettings().payment_methods.split(',').map((s) => s.trim()).includes(m)) throw bad('Chọn hình thức trả nợ');
+    db.prepare('UPDATE visits SET debt_paid_at=?, debt_paid_method=?, debt_paid_by=? WHERE id=?').run(L.today(), m, req.user.id, v.id);
+    audit(req.user.id, 'debt_paid', 'visit', v.id, { amount: v.debt, method: m });
+    res.json({ ok: true, amount: v.debt });
   });
   // Kết ca: nhập số tiền mặt đếm được (đếm mù). Ai cũng gửi được, mỗi người nhiều lần (lần sau là đếm lại)
   app.post('/api/pos/close', (req, res) => {

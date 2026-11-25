@@ -273,6 +273,10 @@ function seedLevels() {
   if (!db.prepare('PRAGMA table_info(visits)').all().some((c) => c.name === 'pay2_method')) {
     db.exec('ALTER TABLE visits ADD COLUMN pay2_method TEXT; ALTER TABLE visits ADD COLUMN pay2_amount INTEGER NOT NULL DEFAULT 0');
   }
+  // Khách trả thiếu → ghi nợ: debt = số còn nợ (KHÔNG nằm trong cash_paid); trả nợ ngày nào tính tiền vào ngày đó
+  if (!db.prepare('PRAGMA table_info(visits)').all().some((c) => c.name === 'debt')) {
+    db.exec('ALTER TABLE visits ADD COLUMN debt INTEGER NOT NULL DEFAULT 0; ALTER TABLE visits ADD COLUMN debt_paid_at TEXT; ALTER TABLE visits ADD COLUMN debt_paid_method TEXT; ALTER TABLE visits ADD COLUMN debt_paid_by INTEGER');
+  }
   // Bán thẻ 2 người: người tư vấn/giới thiệu + % hoa hồng của người chốt
   if (!db.prepare('PRAGMA table_info(cards)').all().some((c) => c.name === 'consultant_id')) {
     db.exec('ALTER TABLE cards ADD COLUMN consultant_id INTEGER REFERENCES users(id); ALTER TABLE cards ADD COLUMN seller_share INTEGER NOT NULL DEFAULT 100; ALTER TABLE cards ADD COLUMN consultant_commission INTEGER NOT NULL DEFAULT 0');
