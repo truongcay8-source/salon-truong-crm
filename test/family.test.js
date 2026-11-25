@@ -650,3 +650,18 @@ test('lì xì khai trương từ sổ đặt lịch → thu nhập khác, nhập
   assert.ok(rows[0].note.startsWith('Anh Vĩnh'));
   assert.equal(F.report('2025-09').other_income.total, 2500000);
 });
+
+test('báo cáo tài chính cả năm: cộng từng tháng khớp báo cáo tháng', async () => {
+  const F = require('../server/finance');
+  const y = F.yearReport(2025);
+  assert.ok(y.months.length >= 1);
+  const sum = y.months.reduce((a, m) => a + m.profit, 0);
+  assert.equal(y.total.profit, sum);
+  const m0 = y.months[0];
+  assert.equal(m0.profit, F.report(m0.month).profit);
+  assert.equal(y.months[y.months.length - 1].cum_profit, sum);
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  assert.equal((await o.get('/finance/year?year=2025')).status, 200);
+  const s = client(); assert.equal((await s.post('/login', { username: 'thu', password: 'moi-thu' })).status, 200);
+  assert.equal((await s.get('/finance/year?year=2025')).status, 403);
+});
