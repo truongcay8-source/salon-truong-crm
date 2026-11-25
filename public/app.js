@@ -2601,6 +2601,7 @@ function finConfig(d, after) {
   openModal('Chi phí cố định hàng tháng & % giá vốn ước tính', `<form id="fc">
     <h3>Chi phí cố định mỗi tháng</h3><div class="small muted">Bỏ tích "chi tiền" với khoản không phải tiền ra thật (vd khấu hao). Để trống tên để xóa dòng.</div>
     <div id="fxl" style="margin-top:8px">${d.fixed.map(line).join('')}${line()}</div><button type="button" class="btn sm" id="fadd">+ Dòng</button>
+    <div class="row" style="margin-top:10px;gap:8px"><label class="small" style="margin:0">Ngày khai trương</label><input type="date" name="open_date" value="${esc(d.open_date || '')}" style="width:auto"><span class="small muted">tháng khai trương chỉ tính chi phí cố định theo số ngày mở cửa; trước ngày này không tính</span></div>
     <h3 style="margin-top:14px">% giá vốn ước tính (lượt chưa ghi xuất kho)</h3><div class="form-grid">
     ${groups.map((g) => `<label>${esc(g)} (%)<input name="r_${esc(g)}" type="number" min="0" max="100" step="0.5" value="${Math.round((d.rates[g] || 0) * 1000) / 10}"></label>`).join('')}</div>
     <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu</button></div></form>`, true);
@@ -2608,7 +2609,7 @@ function finConfig(d, after) {
   $('#fc').onsubmit = (e) => { e.preventDefault(); guard($('button.primary', e.target), async () => {
     const fixed = $$('.fx', e.target).map((x) => ({ name: $('[name=n]', x).value.trim(), amount: $('[name=a]', x).value.replace(/\D/g, ''), note: $('[name=t]', x).value, cash: $('[name=c]', x).checked ? 1 : 0 })).filter((f) => f.name);
     const rates = {}; for (const g of groups) rates[g] = (Number($(`[name="r_${g}"]`, e.target).value) || 0) / 100;
-    await api('/finance/config', { method: 'PUT', body: { fixed, rates } });
+    await api('/finance/config', { method: 'PUT', body: { fixed, rates, open_date: e.target.open_date.value } });
     toast('Đã lưu'); closeModal(); after(); }); };
 }
 VIEWS.payroll = async (main) => {
