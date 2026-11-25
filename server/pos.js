@@ -58,6 +58,10 @@ function board(date, user) {
   }
   for (const v of walk) out.paid.push(mask({ ...v, walk_in: true }));
   out.paid.sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')));
+  // Khách còn thẻ tri ân chưa dùng → nhắc thu ngân trừ thẻ
+  const giftLeft = db.prepare(`SELECT COALESCE(SUM(c.value + COALESCE((SELECT SUM(amount) FROM card_txns t WHERE t.card_id=c.id),0)),0) s
+    FROM cards c WHERE c.customer_id=? AND c.sale_type='gift' AND c.status='active'`);
+  for (const k of ['waiting', 'serving', 'unpaid']) for (const a of out[k]) if (a.customer_id) a.gift_left = giftLeft.get(a.customer_id).s || 0;
   out.closes = db.prepare('SELECT k.id, k.created_at, u.full_name user_name FROM cash_closes k LEFT JOIN users u ON u.id=k.user_id WHERE k.date=? ORDER BY k.id').all(date);
   if (user.role === 'owner') {
     const e = expectedCash(date);

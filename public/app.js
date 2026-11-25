@@ -542,7 +542,7 @@ VIEWS.pos = async (main) => {
   const key = (a) => esc(fold([a.name, a.phone, a.staff_name, a.service, a.visit_code].filter(Boolean).join(' ')));
   const late = (a) => { if (date !== S.today || !a.time) return ''; const m = toMin(new Date().toTimeString().slice(0, 5)) - toMin(a.time); return m > 15 ? `<span class="badge warn">trễ ${m} phút</span>` : ''; };
   const card = (a, kind) => `<div class="pos-tile ${kind}" data-k="${key(a)}" data-st="${esc(a.staff_name || '')}">
-    <div class="pos-h"><b>${esc(a.time || '')}</b><span class="pos-n">${esc(a.name || 'Khách lẻ')}</span>${kind === 'waiting' ? late(a) : ''}</div>
+    <div class="pos-h"><b>${esc(a.time || '')}</b><span class="pos-n">${esc(a.name || 'Khách lẻ')}</span>${a.gift_left && kind !== 'paid' ? `<span class="badge warn" title="Khách có thẻ tri ân chưa dùng">🎁 ${money(a.gift_left)}</span>` : ''}${kind === 'waiting' ? late(a) : ''}</div>
     <div class="small muted pos-s">${esc(a.service || '')}${a.service ? ' · ' : ''}${who(a)}</div>
     ${kind === 'waiting' ? `<div class="row"><button class="btn sm" data-in="${a.id}">✓ Khách đến</button><button class="btn sm primary" data-pay="${a.id}">💰 Thanh toán</button></div>` : ''}
     ${kind === 'serving' ? `<div class="row"><button class="btn primary" data-pay="${a.id}">💰 Thanh toán</button><button class="btn sm" data-out="${a.id}" title="Bấm nhầm">↶</button></div>` : ''}
@@ -1475,7 +1475,9 @@ async function visitForm(v = {}, after) {
       const c = cards.find((x) => x.id === cardSel);
       const bal = c ? c.balance + (isEdit && v.card_id === c.id ? v.card_paid : 0) : 0;
       cardPaid = f.card_paid.value !== '' ? Number(f.card_paid.value) : Math.min(bal, total);
-      $('#cardHint').textContent = `Số dư khả dụng ${money(bal)}`;
+      $('#cardHint').innerHTML = c && c.sale_type === 'gift'
+        ? (total > 0 ? `🎁 Thẻ tri ân dùng 1 lần: trừ <b>${money(cardPaid)}</b>${bal > cardPaid ? `, <span style="color:var(--bad)">bỏ ${money(bal - cardPaid)}</span> (không giữ cho lần sau)` : ''}. Lưu xong thẻ tự đóng.` : `🎁 Thẻ tri ân ${money(bal)} – thêm dịch vụ để tính tiền trừ.`)
+        : `Số dư khả dụng ${money(bal)}`;
     }
     $('#tot').innerHTML = `<div class="row"><span>Tạm tính</span><span class="num">${money(sub)}</span></div>
       <div class="row"><span>Doanh số lượt này</span><span class="num big">${money(total)}</span></div>
@@ -1526,13 +1528,17 @@ async function visitForm(v = {}, after) {
     }
     cards = [...own, ...extraCards.filter((c) => !own.some((o) => o.id === c.id))];
     const sel = pick || v.card_id;
-    $('#cardBox').innerHTML = (cards.length ? `<div class="form-grid"><div><label>Trừ vào thẻ</label><select name="card_id"><option value="">Không dùng thẻ</option>
+    const gift = !sel && cards.find((c) => c.sale_type === 'gift' && c.balance > 0 && c.customer_id === Number(customerId));
+    $('#cardBox').innerHTML = (gift ? `<div class="gift-ban">🎁 Khách có <b>${esc(gift.name)}</b> (${esc(gift.code)}) còn <b>${money(gift.balance)}</b>. Chỉ dùng 1 lần, dư không giữ lại.
+        <button type="button" class="btn sm primary" id="useGift">Dùng thẻ cho lượt này</button></div>` : '')
+      + (cards.length ? `<div class="form-grid"><div><label>Trừ vào thẻ</label><select name="card_id"><option value="">Không dùng thẻ</option>
       ${cards.map((c) => `<option value="${c.id}" ${sel === c.id ? 'selected' : ''}>${esc(c.code)} · ${esc(c.name)} · còn ${money(c.balance)}${c.customer_id !== Number(customerId) ? ' · thẻ của ' + esc(c.customer_name) : ''}${c.expires_at < S.today ? ' (HẾT HẠN)' : ''}</option>`).join('')}</select></div>
       <div><label>Số tiền trừ thẻ (trống = tự tính)</label><input type="number" name="card_paid" min="0" step="1000" value="${isEdit && v.card_id ? v.card_paid : ''}"><div class="small muted" id="cardHint"></div></div></div>` : '')
       + (customerId ? `<div class="row small" style="margin-top:6px"><button type="button" class="btn sm" id="vGift">🎁 Tặng thẻ tri ân 1Tr</button><button type="button" class="btn sm" id="vSell">💳 Bán thẻ trả trước</button>
         <span class="muted">→ tạo xong trừ vào thẻ luôn ở phiếu này</span></div><div id="vSellBox"></div>` : '')
       + (customerId ? `<div class="row small" style="margin-top:6px"><span class="muted">Khách dùng thẻ tặng của người khác?</span><input id="giftQ" placeholder="Mã thẻ (T1M-…) hoặc SĐT chủ thẻ" style="width:auto;flex:1;min-width:150px"><button type="button" class="btn sm" id="giftFind">Tìm thẻ</button></div>` : '');
     if (cards.length) { f.card_id.onchange = calc; f.card_paid.oninput = calc; }
+    const ug = $('#useGift'); if (ug) ug.onclick = () => loadCards(customerId, gift.id);
     // Bán / tặng thẻ ngay trong phiếu thu, rồi chọn luôn thẻ đó để trừ
     const giftType = S.cardTypes.find((t) => t.active && !t.price && t.fixed_expiry) || S.cardTypes.find((t) => t.active && !t.price);
     const makeCard = async (body) => {
