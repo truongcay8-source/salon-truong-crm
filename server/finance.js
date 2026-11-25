@@ -76,6 +76,24 @@ CREATE TABLE IF NOT EXISTS other_income (
 );
 CREATE INDEX IF NOT EXISTS idx_other_income_date ON other_income(date);
 `);
+if (!db.prepare('PRAGMA table_info(other_income)').all().some((c) => c.name === 'import_ref')) {
+  db.exec('ALTER TABLE other_income ADD COLUMN import_ref TEXT; CREATE UNIQUE INDEX IF NOT EXISTS idx_other_income_ref ON other_income(import_ref) WHERE import_ref IS NOT NULL');
+}
+// Sổ đặt lịch có cột "Khách Lì xì khai trương" → ghi Thu nhập khác 1 lần (đồng bộ lại không nhân đôi; xóa trên app thì cũng không nhập lại)
+function importLixi(blocks, user, summary) {
+  const st = summary.lixi || (summary.lixi = { created: 0, skipped: 0, amount: 0 });
+  const ins = db.prepare("INSERT INTO other_income(date,amount,kind,method,note,created_by,import_ref) VALUES (?,?,'Lì xì khai trương',NULL,?,?,?)");
+  const seen = db.prepare('SELECT 1 FROM other_income WHERE import_ref=?');
+  const gone = db.prepare("SELECT 1 FROM audit_log WHERE action='finance.income.delete' AND detail LIKE ?");
+  for (const b of blocks) for (const x of b.lixi) {
+    const ref = `LX:${b.date}:${x.time}:${x.amount}`;
+    if (seen.get(ref)) { st.skipped++; continue; }
+    try { if (gone.get('%' + ref + '%')) { st.skipped++; continue; } } catch { /* chưa có bảng nhật ký */ }
+    const who = String(x.who || '').split(' / ')[0].replace(/^\d{1,2}:\d{2}\s*/, '').split(/\s+[–-]\s+/)[0].trim();
+    ins.run(b.date, x.amount, (who ? who + ' · ' : '') + 'từ sổ đặt lịch', user.id, ref);
+    st.created++; st.amount += x.amount;
+  }
+}
 
 // Chi phí cố định mặc định mỗi tháng (lấy từ file Excel cũ – bạn sửa trên trang). cash=0: không phải tiền chi ra (khấu hao)
 const DEFAULT_FIXED = [
@@ -255,4 +273,4 @@ function mount(app, { OWNER }) {
   });
 }
 
-module.exports = { mount, report, headCost };
+module.exports = { mount, report, headCost, importLixi };
