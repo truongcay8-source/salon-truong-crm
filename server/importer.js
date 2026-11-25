@@ -732,6 +732,7 @@ async function importWorkbook(buffer, opts, user) {
       recognised = true; summary.format = summary.format || 'Sổ đặt lịch theo ngày';
       const t = L.today();
       if (opts.bookMoney !== false) require('./expenses').importFromBook(blocks.filter((b) => b.date <= t).map((b) => ({ date: b.date, items: b.spend })), user, summary);
+      if (opts.bookMoney !== false) require('./finance').importLixi(blocks.filter((b) => b.date <= t && b.lixi.length), user, summary);
       for (const b of blocks) {
         const until = L.isDate(getSettings().book_money_until) ? getSettings().book_money_until : null;
         const money = opts.bookMoney && b.date >= BOOK_FROM && b.date < t && (!until || b.date < until);
@@ -963,6 +964,7 @@ async function importWorkbook(buffer, opts, user) {
       }
       function findDayBlocks(ws) {
         const out = [];
+        let sheetLixi = null; // cột lì xì chỉ ghi tiêu đề ở khối ngày đầu → các ngày sau dùng lại
         for (let r = 1; r <= ws.rowCount; r++) {
           const row = ws.getRow(r);
           if (norm(asText(row.getCell(1).value)) !== 'giờ') continue;
@@ -982,8 +984,11 @@ async function importWorkbook(buffer, opts, user) {
           }
           const entries = [], rows = [];
           let amtCol = null, tipCol = null;
-          let chiCol = null, noteCol = null;
-          for (let c = 2; c <= 20; c++) { const h = norm(asText(row.getCell(c).value)); if (h === 'thu tiền') amtCol = c; else if (/^tiền tip|^tip$/.test(h)) tipCol = c; else if (h === 'chi') chiCol = c; else if (h === 'ghi chú' && chiCol && !noteCol) noteCol = c; }
+          let chiCol = null, noteCol = null, lixiCol = null;
+          for (let c = 2; c <= 20; c++) { const h = norm(asText(row.getCell(c).value)); if (h === 'thu tiền') amtCol = c; else if (/^tiền tip|^tip$/.test(h)) tipCol = c; else if (h === 'chi') chiCol = c; else if (h === 'ghi chú' && chiCol && !noteCol) noteCol = c;
+            else if (/li ?xi/.test(stripAccents(h))) lixiCol = c; }
+          if (lixiCol) sheetLixi = lixiCol; else lixiCol = sheetLixi;
+          const lixi = []; // cột "Khách Lì xì khai trương": tiền khách lì xì cửa hàng → Thu nhập khác (không phải tip)
           if (chiCol && !noteCol) noteCol = chiCol + 1;
           const spend = [];
           for (let i = r + 1; i <= Math.min(ws.rowCount, r + 40); i++) {
@@ -993,7 +998,9 @@ async function importWorkbook(buffer, opts, user) {
             // Cột Chi + Ghi chú (khoản chi trong ngày, có thể nằm ở dòng không có giờ)
             if (chiCol) { const v = asNum(rr.getCell(chiCol).value); if (v > 0 && v < 50000000) spend.push({ amount: v, note: asText(rr.getCell(noteCol).value) }); }
             const time = asTime(rr.getCell(1).value);
-            if (!time) continue;
+            if (!time) continue; // dòng không có giờ = dòng tổng → bỏ
+            const lx = lixiCol ? asNum(rr.getCell(lixiCol).value) : 0;
+            if (lx > 0 && lx < 100000000) lixi.push({ time, amount: lx, who: cols.map((x) => asText(rr.getCell(x.c).value)).filter(Boolean).join(' / ').replace(/\s+/g, ' ').trim() });
             const rowE = [];
             for (const x of cols) {
               const text = asText(rr.getCell(x.c).value);
@@ -1001,7 +1008,7 @@ async function importWorkbook(buffer, opts, user) {
             }
             if (rowE.length) rows.push({ time, entries: rowE, amount: amtCol ? asNum(rr.getCell(amtCol).value) : 0, tip: tipCol ? asNum(rr.getCell(tipCol).value) : 0 });
           }
-          out.push({ date, entries, rows, spend });
+          out.push({ date, entries, rows, spend, lixi });
         }
         return out;
       }

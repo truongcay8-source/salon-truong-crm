@@ -637,3 +637,16 @@ test('thu nhập khác (lì xì khai trương): cộng lãi lỗ + dòng tiền,
   const s = client(); assert.equal((await s.post('/login', { username: 'thu', password: 'moi-thu' })).status, 200);
   assert.equal((await s.post('/finance/income', { amount: 1 })).status, 403);
 });
+
+test('lì xì khai trương từ sổ đặt lịch → thu nhập khác, nhập lại không nhân đôi', () => {
+  const F = require('../server/finance');
+  const u = db.prepare("SELECT * FROM users WHERE role='owner'").get();
+  const blocks = [{ date: '2025-09-25', lixi: [{ time: '14:30', amount: 1000000, who: '14:30 Anh Vĩnh – Cắt tóc nam – Director(Thoại phụ)' }, { time: '19:30', amount: 1500000, who: '' }] }];
+  const s1 = {}; F.importLixi(blocks, u, s1);
+  const s2 = {}; F.importLixi(blocks, u, s2);
+  assert.equal(s1.lixi.created, 2); assert.equal(s2.lixi.created, 0);
+  const rows = db.prepare("SELECT * FROM other_income WHERE date='2025-09-25' ORDER BY id").all();
+  assert.equal(rows.reduce((a, x) => a + x.amount, 0), 2500000);
+  assert.ok(rows[0].note.startsWith('Anh Vĩnh'));
+  assert.equal(F.report('2025-09').other_income.total, 2500000);
+});
