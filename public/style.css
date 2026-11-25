@@ -318,3 +318,18 @@ table.fin tr.big td{font-size:1.1em}
 
 .tipd summary { cursor: pointer; color: var(--accent, inherit); text-decoration: underline dotted; }
 .tipd[open] summary { margin-bottom: 4px; }
+
+/* Phiếu thu: khu thanh toán gọn */
+.pay-box { border: 1px solid var(--line, #e6ddd3); border-radius: 12px; padding: 10px 12px; }
+.pay-box .btn.ghost { background: transparent; border-style: dashed; }
+.pay-give { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.pay-give label { margin: 0; font-weight: 600; }
+.pay-give input { width: 170px; }
+.short-pick, .debt-note { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: #fdecea; }
+.debt-note { background: #fff4e0; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .short-pick { background: #3d1f1c; } :root:not([data-theme="light"]) .debt-note { background: #3a2c14; } }
+:root[data-theme="dark"] .short-pick { background: #3d1f1c; }
+:root[data-theme="dark"] .debt-note { background: #3a2c14; }
+.tipbox summary, .card-more summary { cursor: pointer; padding: 4px 0; }
+.card-more { margin-top: 6px; }
+.debt-line { flex-wrap: wrap; gap: 6px; }

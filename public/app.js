@@ -560,6 +560,9 @@ VIEWS.pos = async (main) => {
     `<button class="btn primary" id="walk">+ Khách vãng lai</button><button class="btn" id="close">🔒 Kết ca</button>`) +
     `${isMgr() ? `<div class="card"><div class="row"><input type="date" id="pd" value="${date}" style="width:auto">${date !== S.today ? '<button class="btn sm" id="tdy">Hôm nay</button>' : ''}<span class="small muted">${dmy(date)}</span></div></div>` : ''}
     ${tot}
+    ${r.debts && r.debts.length ? `<div class="card"><h3>📝 Khách còn nợ <span class="badge bad">${money(r.debts.reduce((s, d) => s + d.debt, 0))}</span></h3>
+      ${r.debts.map((d) => `<div class="stat-line debt-line"><span><b>${esc(d.name)}</b> <span class="small muted">${dmy(d.date)} · ${esc(d.visit_code)}${d.staff_name ? ' · ' + esc(d.staff_name) : ''}</span></span>
+        <span class="row" style="gap:4px;justify-content:flex-end"><b style="color:var(--bad)">${money(d.debt)}</b>${S.settings.payment_methods.slice(0, 3).map((m) => `<button class="btn sm" data-debt="${d.visit_id}" data-m="${esc(m)}">Thu: ${payIcon(m)} ${esc(m)}</button>`).join('')}</span></div>`).join('')}</div>` : ''}
     <div class="card pos-find"><input id="pq" type="search" placeholder="🔍 Tìm khách: tên, SĐT, thợ, dịch vụ…" autocomplete="off">
       <div class="chips" id="pst"><button class="chip on" data-pst="">Tất cả thợ</button>${[...new Set(r.waiting.concat(r.serving, r.unpaid, r.paid).map((a) => a.staff_name).filter(Boolean))].map((n) => `<button class="chip" data-pst="${esc(n)}">${esc(n)}</button>`).join('')}</div>
       <div id="pfind"></div></div>
@@ -572,6 +575,7 @@ VIEWS.pos = async (main) => {
       <div class="stat-line"><span>Tiền mặt từ hóa đơn (${C.invoices} hóa đơn)</span><b>${money(C.visits)}</b></div>
       <div class="stat-line"><span>Tip chung trả tiền mặt</span><b>${money(C.tips)}</b></div>
       <div class="stat-line"><span>Bán thẻ tiền mặt</span><b>${money(C.cards)}</b></div>
+      ${C.debts ? `<div class="stat-line"><span>Thu nợ tiền mặt</span><b>${money(C.debts)}</b></div>` : ''}
       <div class="stat-line"><span><b>Máy tính phải có</b></span><b>${money(C.total)}</b></div>
       ${r.closes.map((k) => `<div class="stat-line"><span>Kết ca ${esc(k.created_at.slice(11, 16))} · ${esc(k.user_name || '')}${k.note ? ` <span class="small muted">${esc(k.note)}</span>` : ''}</span><b>đếm ${money(k.counted)} · <span style="color:${k.diff ? 'var(--bad,#c0392b)' : 'var(--ok,#1e8449)'}">${k.diff ? (k.diff > 0 ? 'thừa ' : 'thiếu ') + money(Math.abs(k.diff)) : 'khớp'}</span></b></div>`).join('') || '<div class="small muted">Chưa ai kết ca hôm nay.</div>'}
       <div class="small muted" style="margin-top:6px">Không gồm phong bì quỹ chi tiêu 1tr và tip riêng. Người kết ca không thấy số máy tính (đếm mù) nên không "đếm cho khớp" được.</div>
@@ -603,6 +607,7 @@ VIEWS.pos = async (main) => {
     }, 300);
   };
   $('#pq').oninput = applyF;
+  $$('[data-debt]', main).forEach((b) => (b.onclick = () => guard(b, async () => { const x = await api('/pos/debt/' + b.dataset.debt, { method: 'POST', body: { method: b.dataset.m } }); toast(`Đã thu nợ ${money(x.amount)} (${b.dataset.m})`); reload(); })));
   $$('[data-pst]', main).forEach((b) => (b.onclick = () => { pst = b.dataset.pst; $$('[data-pst]', main).forEach((x) => x.classList.toggle('on', x === b)); applyF(); }));
   $$('[data-vw]', main).forEach((b) => (b.onclick = () => guard(b, async () => { if (isOwner()) visitForm(await api('/visits/' + b.dataset.vw), reload); else showReceipt(Number(b.dataset.vw)); })));
   if ($('#pd')) $('#pd').onchange = (e) => e.target.value && go('pos', { date: e.target.value });
@@ -709,6 +714,7 @@ async function showReceipt(id) {
     <hr>${line('Tổng dịch vụ', money(v.total), true)}
     ${v.card_paid ? line(`Trừ thẻ ${esc(v.card_code || '')}`, '−' + money(v.card_paid)) : ''}
     ${line('Khách thanh toán', money(paid), true)}${v.payment_method && paid ? line('Hình thức', esc(v.payment_method)) : ''}
+    ${v.debt ? line(v.debt_paid_at ? `Đã trả nợ ${dmy(v.debt_paid_at)}` : 'CÒN NỢ', money(v.debt), true) : ''}
     ${v.tip ? line('Tip cho thợ', money(v.tip)) : ''}
     ${v.tip_private ? line('Tip riêng · ' + esc(staffName(v.tip_private_to)), money(v.tip_private)) : ''}
     ${r.card_balance != null ? line(`Số dư thẻ còn lại`, money(r.card_balance), true) : ''}
@@ -718,7 +724,7 @@ async function showReceipt(id) {
   const text = [`${s.name} – HÓA ĐƠN ${v.code}`, `Ngày: ${dmy(v.date)} ${v.time || ''}`, `Khách: ${v.customer_name}`, '',
     ...v.items.map((i) => `• ${i.name}: ${money(i.price)}`),
     v.surcharge ? `• Phụ thu: ${money(v.surcharge)}` : '', v.discount ? `• Giảm giá: −${money(v.discount)}` : '',
-    `Tổng dịch vụ: ${money(v.total)}`, v.card_paid ? `Trừ thẻ: −${money(v.card_paid)}` : '', `Thanh toán: ${money(paid)}${v.payment_method && paid ? ' (' + v.payment_method + ')' : ''}`,
+    `Tổng dịch vụ: ${money(v.total)}`, v.card_paid ? `Trừ thẻ: −${money(v.card_paid)}` : '', `Thanh toán: ${money(paid)}${v.payment_method && paid ? ' (' + v.payment_method + ')' : ''}`, v.debt && !v.debt_paid_at ? `Còn nợ: ${money(v.debt)}` : '',
     r.card_balance != null ? `Số dư thẻ còn lại: ${money(r.card_balance)}` : '',
     ...(v.warranties && v.warranties.length ? ['', 'BẢO HÀNH:', ...warrantyLines(v.warranties), WARRANTY_EXCLUDE] : []), '', s.footer || ''].filter((x, i, arr) => x !== '' || (arr[i - 1] !== '' && i > 0)).join('\n');
   openModal('Hóa đơn ' + v.code, html + `<div class="modal-foot"><button class="btn" id="rcPrint">🖨 In</button><button class="btn primary" id="rcCopy">📋 Copy gửi Zalo</button>
@@ -1217,6 +1223,7 @@ VIEWS.customer = async (main) => {
       <div class="stat-line"><span class="muted">Thợ phụ trách</span><b>${c.staff_name ? esc(c.staff_name) : '<span class="badge warn">chưa giao</span>'}</b></div>
       <div class="stat-line"><span class="muted">Số lượt</span><b>${c.stats.visits}</b></div>
       ${c.stats.spend != null ? `<div class="stat-line"><span class="muted">Tổng chi tiêu</span><b>${money(c.stats.spend)}</b></div>` : ''}
+      ${c.debt ? `<div class="stat-line"><span style="color:var(--bad)">📝 Đang nợ</span><b style="color:var(--bad)">${money(c.debt)}</b></div>` : ''}
       <div class="stat-line"><span class="muted">Lần gần nhất</span><b>${dmy(c.stats.last_visit) || '—'}</b></div>
       <div class="stat-line"><span class="muted">Sinh nhật</span><b>${c.birthday ? (c.birthday.length === 10 ? dmy(c.birthday) : c.birthday.split('-').reverse().join('/')) : '<span class="badge warn">chưa có</span>'}</b></div>
       ${c.gender ? `<div class="stat-line"><span class="muted">Giới tính</span><b>${esc(c.gender)}</b></div>` : ''}
@@ -1391,20 +1398,21 @@ async function visitForm(v = {}, after) {
       <input type="number" id="discPct" min="0" max="100" step="1" placeholder="%" title="Giảm theo % tiền dịch vụ" style="width:70px"><span class="muted">%</span></div>
       <div class="row" style="gap:4px;margin-top:4px">${[10, 15, 20, 30, 50].map((p) => `<button type="button" class="btn sm" data-dpct="${p}">${p}%</button>`).join('')}<button type="button" class="btn sm" data-dpct="0">Bỏ</button></div>
       <div class="small muted" id="discTxt"></div></div>
-    <div class="full"><label>Lý do giảm (bắt buộc nếu có giảm)</label><input name="discount_reason" list="reasons" value="${esc(v.discount_reason || '')}">
+    <div class="full" id="discRW" style="${v.discount ? '' : 'display:none'}"><label>Lý do giảm (bắt buộc khi có giảm)</label><input name="discount_reason" list="reasons" value="${esc(v.discount_reason || '')}">
       <datalist id="reasons"><option value="Khách quen"><option value="Khách giới thiệu"><option value="Khuyến mãi"><option value="Bù lỗi dịch vụ"><option value="Người nhà / nhân viên"><option value="Trẻ em dưới 13 tuổi (giảm 50%)"></datalist></div>
     <div id="cardBox" class="full"></div>
-    <div class="full"><label>Hình thức thanh toán</label><div class="row pay-quick">${methods.map((m) => `<button type="button" class="btn ${v.payment_method === m ? 'primary' : ''}" data-pm="${esc(m)}">${payIcon(m)} ${esc(m)}</button>`).join('')}
-      <button type="button" class="btn sm" id="pay2Tg">${v.pay2_method ? '− Bỏ trả 2 cách' : '+ Trả 2 cách'}</button></div>
+    <div class="full"><div class="totals" id="tot"></div></div>
+    <div class="full pay-box"><label>Khách trả bằng</label><div class="row pay-quick">${methods.map((m) => `<button type="button" class="btn ${v.payment_method === m ? 'primary' : ''}" data-pm="${esc(m)}">${payIcon(m)} ${esc(m)}</button>`).join('')}
+      <button type="button" class="btn sm ghost" id="pay2Tg">${v.pay2_method ? '− Bỏ trả 2 cách' : '+ Trả 2 cách'}</button></div>
       <select name="payment_method" style="display:none"><option value="">—</option>${methods.map((m) => `<option ${v.payment_method === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>
       <div class="row" id="pay2Box" style="margin-top:6px;gap:6px;${v.pay2_method ? '' : 'display:none'}"><span class="small">Trong đó trả bằng</span><select name="pay2_method" style="width:auto"><option value="">—</option>${methods.map((m) => `<option ${v.pay2_method === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>
         <input type="number" name="pay2_amount" min="0" step="1000" placeholder="số tiền" value="${v.pay2_amount || ''}" style="width:130px"><span class="small muted" id="pay2Txt"></span></div>
-      <div id="qrBox"></div></div>
-    <div><label>Khách trả thực tế (tiền mặt/CK)</label><input type="number" id="paidAct" min="0" step="1000" placeholder="Trả dư → tự cộng tip chung"><div class="small muted" id="paidHint"></div></div>
-    <div><label>Tip chung (chia cả nhóm)</label><input type="number" name="tip" min="0" step="1000" value="${v.tip || ''}"></div>
-    <div class="full"><div class="form-grid" style="margin:0"><div><label>Tip riêng (khách tặng riêng 1 người)</label><input type="number" name="tip_private" min="0" step="1000" value="${v.tip_private || ''}"></div>
-      <div><label>Người nhận tip riêng</label><select name="tip_private_to">${staffOptions(v.tip_private_to || null, '— Thợ chính —')}</select></div></div></div>
-    <div class="full"><div class="totals" id="tot"></div></div>
+      <div id="qrBox"></div>
+      <div class="pay-give"><label for="paidAct">Khách đưa</label><input type="number" id="paidAct" min="0" step="1000" placeholder="trống = trả đủ"><span class="small" id="paidHint"></span></div>
+      <div id="shortBox"></div><input type="hidden" name="debt" value="${v.debt || ''}"></div>
+    <details class="full tipbox" ${v.tip || v.tip_private ? 'open' : ''}><summary>💝 Tip <span class="small muted">(khách cho thêm · trả dư tự vào tip chung)</span></summary>
+      <div class="form-grid" style="margin:6px 0 0"><div><label>Tip chung (chia cả nhóm)</label><input type="number" name="tip" min="0" step="1000" value="${v.tip || ''}"></div>
+      <div><label>Tip riêng 1 người</label><div class="row" style="gap:6px;flex-wrap:nowrap"><input type="number" name="tip_private" min="0" step="1000" value="${v.tip_private || ''}" style="flex:1;min-width:0"><select name="tip_private_to" style="flex:1;min-width:0">${staffOptions(v.tip_private_to || null, '— Thợ chính —')}</select></div></div></div></details>
     <div class="full"><label>Tình trạng tóc trước khi làm</label>${hairChips()}<textarea name="hair_before">${esc(v.hair_before || '')}</textarea></div>
     <div class="full"><label>Mong muốn của khách</label><input name="wish" value="${esc(v.wish || '')}"></div>
     <div class="full"><label>Công thức / tỷ lệ pha</label><div id="fHint"></div><textarea name="formula" placeholder="VD: 9nb 35ml + 7glca 25ml, oxi 20 (gõ lượng ml/g để app tự tính hóa chất & giá cốt)">${esc(v.formula || '')}</textarea><div id="fCost" class="small"></div></div>
@@ -1418,20 +1426,32 @@ async function visitForm(v = {}, after) {
   let cards = [];
   // Khách trả dư so với số phải trả → phần dư tự vào TIP CHUNG (chia đều người đi làm hôm đó)
   let due = 0;
+  const debtNow = () => Number((f.debt && f.debt.value) || 0);
   const paidSync = () => {
-    const pa = $('#paidAct'); if (!pa || pa.value === '') { if ($('#paidHint')) $('#paidHint').textContent = ''; return; }
-    const extra = Number(pa.value) - due;
-    $('#paidHint').textContent = extra > 0 ? `Dư ${money(extra)} → tip chung` : extra < 0 ? `Còn thiếu ${money(-extra)}` : 'Đủ tiền';
-    if (extra >= 0) f.tip.value = extra || '';
+    const pa = $('#paidAct'), sb = $('#shortBox'); if (!pa || !sb) return;
+    const debt = debtNow();
+    sb.innerHTML = debt ? `<div class="debt-note">📝 ${v.debt_paid_at ? `Khách đã trả nợ ${money(debt)} ngày ${dmy(v.debt_paid_at)}` : `Ghi nợ <b>${money(debt)}</b> – khách trả sau, thu ở trang Thu ngân`}
+      ${v.debt_paid_at ? '' : '<button type="button" class="btn sm" id="debtX">Bỏ nợ</button>'}</div>` : '';
+    if (pa.value === '') { $('#paidHint').textContent = ''; }
+    else {
+      const extra = Number(pa.value) - (due - debt);
+      $('#paidHint').innerHTML = extra > 0 ? `<span style="color:var(--ok)">Dư ${money(extra)} → tip chung</span>` : extra < 0 ? `<b style="color:var(--bad)">Thiếu ${money(-extra)}</b>` : '<span style="color:var(--ok)">✓ Đủ tiền</span>';
+      if (extra > 0) { f.tip.value = extra; $('.tipbox', f).open = true; } else if (extra === 0 && !debt) f.tip.value = '';
+      if (extra < 0) sb.innerHTML += `<div class="short-pick"><span>Khách đưa thiếu <b>${money(-extra)}</b>, xử lý:</span>
+        <button type="button" class="btn sm primary" id="shDebt">📝 Ghi nợ, trả sau</button><button type="button" class="btn sm" id="shDisc">🏷 Giảm giá ${money(-extra)}</button></div>`;
+      const sd = $('#shDebt'); if (sd) sd.onclick = () => { f.debt.value = debt - extra; calc(); };
+      const sc = $('#shDisc'); if (sc) sc.onclick = () => { $('#discPct').value = ''; f.discount.value = Number(f.discount.value || 0) - extra; if (!f.discount_reason.value) f.discount_reason.value = 'Khách trả thiếu'; calc(); };
+    }
+    const dx = $('#debtX'); if (dx) dx.onclick = () => { f.debt.value = ''; calc(); };
   };
   // QR chuyển khoản có sẵn số tiền (VietQR) – hiện khi chọn Chuyển khoản
   const qrSync = () => {
     const box = $('#qrBox'); if (!box) return;
     const pm = f.payment_method.value, m2 = f.pay2_method.value, a2 = Number(f.pay2_amount.value || 0);
-    const two = $('#pay2Box').style.display !== 'none' && m2 && a2 > 0;
-    $('#pay2Txt').textContent = two ? `· còn ${money(Math.max(0, due - a2))} bằng ${pm || '…'}` : '';
+    const two = $('#pay2Box').style.display !== 'none' && m2 && a2 > 0, now = Math.max(0, due - debtNow());
+    $('#pay2Txt').textContent = two ? `· còn ${money(Math.max(0, now - a2))} bằng ${pm || '…'}` : '';
     const isCk = (m) => /khoản|ck|bank/i.test(m || '');
-    const amt = two && isCk(m2) ? a2 : isCk(pm) ? (two ? Math.max(0, due - a2) : due) : 0;
+    const amt = two && isCk(m2) ? a2 : isCk(pm) ? (two ? Math.max(0, now - a2) : now) : 0;
     const q = S.settings.qr;
     if (!amt) { box.innerHTML = ''; return; }
     if (!q) { box.innerHTML = isOwner() ? '<div class="small muted" style="margin-top:6px">Muốn hiện mã QR chuyển khoản có sẵn số tiền: vào Cài đặt › Tham số, điền ngân hàng + số tài khoản.</div>' : ''; return; }
@@ -1469,6 +1489,7 @@ async function visitForm(v = {}, after) {
     if (pct > 0) { f.discount.value = Math.round((sub * Math.min(100, pct)) / 100 / 1000) * 1000; $('#discTxt').textContent = `${pct}% của ${money(sub)} = −${money(Number(f.discount.value))}`; }
     else $('#discTxt').textContent = Number(f.discount.value) > 0 && sub ? `≈ ${Math.round((Number(f.discount.value) / sub) * 1000) / 10}% tiền dịch vụ` : '';
     const total = Math.max(0, sub + Number(f.surcharge.value || 0) - Number(f.discount.value || 0));
+    $('#discRW').style.display = Number(f.discount.value) > 0 ? '' : 'none';
     const cardSel = f.card_id ? Number(f.card_id.value) : 0;
     let cardPaid = 0;
     if (cardSel) {
@@ -1479,10 +1500,11 @@ async function visitForm(v = {}, after) {
         ? (total > 0 ? `🎁 Thẻ tri ân dùng 1 lần: trừ <b>${money(cardPaid)}</b>${bal > cardPaid ? `, <span style="color:var(--bad)">bỏ ${money(bal - cardPaid)}</span> (không giữ cho lần sau)` : ''}. Lưu xong thẻ tự đóng.` : `🎁 Thẻ tri ân ${money(bal)} – thêm dịch vụ để tính tiền trừ.`)
         : `Số dư khả dụng ${money(bal)}`;
     }
-    $('#tot').innerHTML = `<div class="row"><span>Tạm tính</span><span class="num">${money(sub)}</span></div>
+    $('#tot').innerHTML = `${sub !== total ? `<div class="row"><span>Tạm tính</span><span class="num">${money(sub)}</span></div>` : ''}
       <div class="row"><span>Doanh số lượt này</span><span class="num big">${money(total)}</span></div>
       ${cardSel ? `<div class="row"><span>Trừ thẻ</span><span class="num">−${money(cardPaid)}</span></div>` : ''}
-      <div class="row"><span><b>Khách trả thêm</b></span><span class="num big">${money(Math.max(0, total - cardPaid))}</span></div>${(() => { due = Math.max(0, total - cardPaid); setTimeout(() => { paidSync(); qrSync(); }); return ''; })()}
+      <div class="row"><span><b>Khách cần trả</b></span><span class="num big">${money(Math.max(0, total - cardPaid))}</span></div>
+      ${debtNow() ? `<div class="row" style="color:var(--bad)"><span>Ghi nợ (trả sau)</span><span class="num">−${money(debtNow())}</span></div><div class="row"><span><b>Thu bây giờ</b></span><span class="num big">${money(Math.max(0, total - cardPaid - debtNow()))}</span></div>` : ''}${(() => { due = Math.max(0, total - cardPaid); setTimeout(() => { paidSync(); qrSync(); }); return ''; })()}
       ${Number(f.surcharge.value) > 0 ? (() => { const sc = Number(f.surcharge.value), r = S.settings.surcharge_salon_rate ?? 0.33, st = sc - Math.round(sc * r), as = f.assistant_id.value ? Math.floor(st / 2) : 0;
         return `<div class="row small muted"><span>Phụ thu chia: cửa hàng ${money(sc - st)} (${Math.round(r * 100)}%) · thợ chính ${money(st - as)}${as ? ' · người phụ ' + money(as) : ''}</span></div>`; })() : ''}
       ${f.time.value >= '19:00' && sub && !Number(f.surcharge.value) ? `<div class="row small" style="color:var(--warn)"><span>Lịch sau 19:00: phụ thu 10% theo bảng giá</span><button type="button" class="btn sm" id="eveSur">+ ${money(Math.round(sub * 0.1 / 1000) * 1000)}</button></div>` : ''}
@@ -1534,9 +1556,9 @@ async function visitForm(v = {}, after) {
       + (cards.length ? `<div class="form-grid"><div><label>Trừ vào thẻ</label><select name="card_id"><option value="">Không dùng thẻ</option>
       ${cards.map((c) => `<option value="${c.id}" ${sel === c.id ? 'selected' : ''}>${esc(c.code)} · ${esc(c.name)} · còn ${money(c.balance)}${c.customer_id !== Number(customerId) ? ' · thẻ của ' + esc(c.customer_name) : ''}${c.expires_at < S.today ? ' (HẾT HẠN)' : ''}</option>`).join('')}</select></div>
       <div><label>Số tiền trừ thẻ (trống = tự tính)</label><input type="number" name="card_paid" min="0" step="1000" value="${isEdit && v.card_id ? v.card_paid : ''}"><div class="small muted" id="cardHint"></div></div></div>` : '')
-      + (customerId ? `<div class="row small" style="margin-top:6px"><button type="button" class="btn sm" id="vGift">🎁 Tặng thẻ tri ân 1Tr</button><button type="button" class="btn sm" id="vSell">💳 Bán thẻ trả trước</button>
+      + (customerId ? `<details class="small card-more"><summary>Tặng / bán thẻ · khách dùng thẻ của người khác</summary><div class="row small" style="margin-top:6px"><button type="button" class="btn sm" id="vGift">🎁 Tặng thẻ tri ân 1Tr</button><button type="button" class="btn sm" id="vSell">💳 Bán thẻ trả trước</button>
         <span class="muted">→ tạo xong trừ vào thẻ luôn ở phiếu này</span></div><div id="vSellBox"></div>` : '')
-      + (customerId ? `<div class="row small" style="margin-top:6px"><span class="muted">Khách dùng thẻ tặng của người khác?</span><input id="giftQ" placeholder="Mã thẻ (T1M-…) hoặc SĐT chủ thẻ" style="width:auto;flex:1;min-width:150px"><button type="button" class="btn sm" id="giftFind">Tìm thẻ</button></div>` : '');
+      + (customerId ? `<div class="row small" style="margin-top:6px"><span class="muted">Khách dùng thẻ tặng của người khác?</span><input id="giftQ" placeholder="Mã thẻ (T1M-…) hoặc SĐT chủ thẻ" style="width:auto;flex:1;min-width:150px"><button type="button" class="btn sm" id="giftFind">Tìm thẻ</button></div></details>` : '');
     if (cards.length) { f.card_id.onchange = calc; f.card_paid.oninput = calc; }
     const ug = $('#useGift'); if (ug) ug.onclick = () => loadCards(customerId, gift.id);
     // Bán / tặng thẻ ngay trong phiếu thu, rồi chọn luôn thẻ đó để trừ
@@ -1641,7 +1663,7 @@ async function visitForm(v = {}, after) {
   $('#discPct').addEventListener('input', () => setPct(Number($('#discPct').value) || 0));
   $$('[data-dpct]', f).forEach((b) => (b.onclick = () => setPct(Number(b.dataset.dpct))));
   f.assistant_id.addEventListener('change', calc);
-  $('#paidAct').addEventListener('input', paidSync);
+  $('#paidAct').addEventListener('input', () => { if (debtNow() && !v.debt_paid_at) { f.debt.value = ''; calc(); } else paidSync(); });
   f.main_staff_id.addEventListener('change', () => { const sw = items.map((it) => levelSwap(it, f.main_staff_id.value)).some(Boolean); renderItems(); if (sw) toast('Đã đổi giá cắt theo cấp của thợ chính'); });
   f.assistant_id.addEventListener('change', () => renderItems());
   renderItems();
@@ -1650,6 +1672,8 @@ async function visitForm(v = {}, after) {
   f.onsubmit = (e) => {
     e.preventDefault();
     guard($('#vfSave'), async () => {
+      const pa = $('#paidAct').value;
+      if (pa !== '' && Number(pa) < due - debtNow()) throw new Error(`Khách đưa thiếu ${money(due - debtNow() - Number(pa))}: bấm "Ghi nợ" hoặc "Giảm giá" ở phần thanh toán`);
       const d = formData(f);
       const body = { ...d, items: items.filter((i) => i.service_id || i.name || i.material_id).map((i) => (i.material_id ? { material_id: i.material_id, qty: i.qty || 1, price: i.price === '' ? null : Number(i.price), staff_id: Number(i.staff_id) || null, assistant_id: i.assistant_id === '' || i.assistant_id == null ? null : Number(i.assistant_id) }
         : { service_id: i.service_id || null, name: i.name, price: i.price === '' ? null : Number(i.price), staff_id: Number(i.staff_id) || null, assistant_id: i.assistant_id === '' || i.assistant_id == null ? null : Number(i.assistant_id) })), appointment_id: v.appointment_id };

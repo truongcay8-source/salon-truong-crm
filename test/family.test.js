@@ -501,3 +501,30 @@ test('lịch hẹn: người nhận lịch mặc định là người đặt; l�
   const r = (await o.get(`/appointments?from=${d}&to=${d}`)).data.find((a) => a.id === id);
   assert.ok(r.taken_by_name);
 });
+
+test('khách trả thiếu: ghi nợ, thu nợ ngày sau tính tiền vào ngày trả', async () => {
+  const L = require('../server/logic');
+  const P = require('../server/pos');
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const s = client(); assert.equal((await s.post('/login', { username: 'thu', password: 'moi-thu' })).status, 200);
+  const duong = db.prepare("SELECT id FROM users WHERE username='duong'").get().id;
+  const cut = db.prepare("SELECT id FROM services WHERE active=1 AND grp='Cắt' AND price>0 ORDER BY id LIMIT 1").get();
+  const cid = (await o.post('/customers', { name: 'Khách nợ', phone: '0913777666' })).data.id;
+  const d = '2025-03-15';
+  assert.equal((await o.post('/visits', { customer_id: cid, date: d, time: '10:00', main_staff_id: duong, payment_method: 'Tiền mặt', debt: 900000, items: [{ service_id: cut.id, price: 500000 }] })).status, 400, 'nợ không quá số phải trả');
+  const v = (await o.post('/visits', { customer_id: cid, date: d, time: '10:00', main_staff_id: duong, payment_method: 'Tiền mặt', debt: 100000, items: [{ service_id: cut.id, price: 500000 }] })).data;
+  const row = db.prepare('SELECT total, cash_paid, debt FROM visits WHERE id=?').get(v.id);
+  assert.deepEqual(row, { total: 500000, cash_paid: 400000, debt: 100000 });
+  let sm = L.salesReport(d, d, { role: 'owner' }).summary;
+  assert.equal(sm.service_sales, 500000); assert.equal(sm.unpaid, 100000); assert.equal(sm.money_in, 400000);
+  assert.equal((await o.get('/customers/' + cid)).data.debt, 100000);
+  assert.ok((await s.get('/pos')).data.debts.some((x) => x.visit_id === v.id));
+  assert.equal((await s.post('/pos/debt/' + v.id, { method: 'Tiền mặt' })).status, 200);
+  assert.equal((await s.post('/pos/debt/' + v.id, { method: 'Tiền mặt' })).status, 400, 'không thu 2 lần');
+  const t = L.today();
+  sm = L.salesReport(t, t, { role: 'owner' }).summary;
+  assert.ok(sm.debt_in >= 100000);
+  assert.ok(P.expectedCash(t).debts >= 100000);
+  assert.equal(L.salesReport(d, d, { role: 'owner' }).summary.unpaid, 0);
+  assert.equal((await o.get('/customers/' + cid)).data.debt, 0);
+});

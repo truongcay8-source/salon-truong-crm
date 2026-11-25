@@ -280,6 +280,7 @@ app.get('/api/customers/:id', (req, res) => {
   c.family = family.members(id);
   c.hair_log = visits.filter((v) => v.hair_before || v.result || v.formula).slice(0, 20)
     .map((v) => ({ id: v.id, date: v.date, staff: v.main_staff_name, services: v.items.map((i) => i.name).join(' + '), hair_before: v.hair_before, result: v.result, formula: v.formula }));
+  c.debt = db.prepare("SELECT COALESCE(SUM(debt),0) s FROM visits WHERE customer_id=? AND status='done' AND debt>0 AND debt_paid_at IS NULL").get(c.id).s;
   c.stats = { visits: visits.length, spend: req.user.role === 'staff' ? null : visits.reduce((s, v) => s + (v.total || 0), 0), last_visit: visits[0] ? visits[0].date : null };
   res.json(c);
 });

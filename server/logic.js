@@ -182,7 +182,11 @@ function saveVisit(input, user, existing, opts = {}) {
     if (cardPaid > bal) throw bad('Số dư thẻ chỉ còn ' + bal.toLocaleString('vi-VN') + 'đ');
     if (cardPaid > total) throw bad('Tiền trừ thẻ lớn hơn tổng tiền');
   }
-  const cashPaid = total - cardPaid;
+  // Khách trả thiếu, hẹn trả sau: phần nợ không tính là tiền đã thu. Nợ đã trả rồi thì giữ nguyên.
+  let debt = Math.max(0, int(input.debt) || 0);
+  if (!isNew && existing.debt_paid_at) debt = existing.debt || 0;
+  if (debt > total - cardPaid) throw bad('Số nợ lớn hơn số khách phải trả');
+  const cashPaid = total - cardPaid - debt;
   const methods = getSettings().payment_methods.split(',').map((s) => s.trim());
   const pm = str(input.payment_method);
   if (!opts.imported) {
@@ -237,7 +241,7 @@ function saveVisit(input, user, existing, opts = {}) {
   const row = {
     customer_id: customerId, date, time: str(input.time), main_staff_id: mainStaff, assistant_id: assistant,
     subtotal, surcharge, discount, discount_reason: str(input.discount_reason), total,
-    card_id: cardId, card_paid: cardPaid, cash_paid: cashPaid, payment_method: cashPaid > 0 ? pm : null, pay2_method: pay2Method, pay2_amount: pay2Amount,
+    card_id: cardId, card_paid: cardPaid, cash_paid: cashPaid, payment_method: cashPaid > 0 ? pm : null, pay2_method: pay2Method, pay2_amount: pay2Amount, debt,
     tip: Math.max(0, int(input.tip)), tip_private: Math.max(0, int(input.tip_private)),
     tip_private_to: int(input.tip_private) > 0 ? int(input.tip_private_to) || mainStaff : null, main_commission: mainCommission, assistant_commission: assistantCommission,
     surcharge_main: sc.main, surcharge_assist: sc.assist,
@@ -332,7 +336,7 @@ function maskVisitMoney(v, user) {
   v = { ...v, cost: null, materials: v.materials ? v.materials.map((m) => ({ ...m, unit_cost: null })) : v.materials };
   if (v.main_staff_id === user.id || v.assistant_id === user.id || (v.items || []).some((i) => i.staff_id === user.id || i.assistant_id === user.id)) return v;
   const out = { ...v };
-  for (const k of ['subtotal', 'surcharge', 'discount', 'total', 'card_paid', 'cash_paid', 'pay2_amount', 'tip', 'tip_private', 'main_commission', 'assistant_commission', 'surcharge_main', 'surcharge_assist']) out[k] = null;
+  for (const k of ['subtotal', 'surcharge', 'discount', 'total', 'card_paid', 'cash_paid', 'pay2_amount', 'debt', 'tip', 'tip_private', 'main_commission', 'assistant_commission', 'surcharge_main', 'surcharge_assist']) out[k] = null;
   if (out.items) out.items = out.items.map((i) => ({ ...i, price: null }));
   out.masked = true;
   return out;
@@ -437,6 +441,13 @@ function salesReport(from, to, user) {
     summary.by_day[v.date] = (summary.by_day[v.date] || 0) + v.total;
   }
   for (const c of cards) { const k = c.payment_method || 'Chưa ghi'; summary.by_method[k] = (summary.by_method[k] || 0) + c.price; }
+  // Nợ: lượt trong kỳ còn nợ → chưa thu; nợ trả trong kỳ (của lượt bất kỳ ngày nào) → tiền vào ngày trả
+  summary.debt_open = visits.reduce((s, v) => s + (v.debt && !v.debt_paid_at ? v.debt : 0), 0);
+  summary.unpaid += summary.debt_open;
+  const repaid = db.prepare("SELECT debt, debt_paid_method m FROM visits WHERE status='done' AND debt>0 AND debt_paid_at BETWEEN ? AND ?").all(from, to);
+  summary.debt_in = repaid.reduce((s, r) => s + r.debt, 0);
+  summary.service_cash += summary.debt_in;
+  for (const r of repaid) { const k = r.m || 'Chưa ghi'; summary.by_method[k] = (summary.by_method[k] || 0) + r.debt; }
   summary.money_in = summary.service_cash + summary.card_sales;
   // Tách 3 loại doanh số (chỉ Lãnh đạo xem): dịch vụ làm tại tiệm / bán sản phẩm / bán thẻ
   summary.product_sales = productTotal;
