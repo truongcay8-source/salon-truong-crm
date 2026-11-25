@@ -2279,12 +2279,18 @@ VIEWS.sales = async (main) => {
   }
   const showUnpaid = () => {
     const L = s.unpaid_list;
-    openModal(`Chưa thu ${money(s.unpaid)} · ${L.length} lượt`, `<div class="small muted" style="margin-bottom:8px">Bấm tên khách mở phiếu. Khách đã trả: mở phiếu, chọn hình thức thanh toán (hoặc bấm Thu nợ ở Thu ngân) rồi lưu.</div>
+    openModal(`Chưa thu ${money(s.unpaid)} · ${L.length} lượt`, `<div class="small muted" style="margin-bottom:8px">Khách đã trả: bấm <b>Đã thu</b> đúng hình thức (TM / CK / Thẻ). Bấm tên khách để mở phiếu.</div>
       <div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Khách</th><th>Thợ</th><th class="num">Chưa thu</th><th>Nguồn</th></tr></thead><tbody>
       ${L.map((x) => `<tr><td>${dmy(x.date)} ${esc(x.time || '')}</td><td><a href="#" data-uv="${x.id}">${esc(x.name || x.code)}</a>${x.phone ? `<div class="small muted">${esc(x.phone)}</div>` : ''}</td><td>${esc(x.staff || '')}</td>
-        <td class="num"><b>${money(x.amount)}</b>${x.amount !== x.total ? `<div class="small muted">/ ${money(x.total)}</div>` : ''}</td><td class="small">${esc(x.kind)}</td></tr>`).join('')}
-      <tr><td colspan="3"><b>Tổng</b></td><td class="num"><b>${money(L.reduce((t, x) => t + x.amount, 0))}</b></td><td></td></tr></tbody></table></div>`);
+        <td class="num"><b>${money(x.amount)}</b>${x.amount !== x.total ? `<div class="small muted">/ ${money(x.total)}</div>` : ''}</td><td class="small">${esc(x.kind)}
+          ${isOwner() ? `<div class="row" style="gap:4px;margin-top:4px;flex-wrap:nowrap" data-upr="${x.id}"><span class="small muted">Đã thu:</span>${S.settings.payment_methods.slice(0, 3).map((m) => `<button class="btn sm" data-upd="${x.id}" data-m="${esc(m)}" title="Khách đã trả: ${esc(m)}">${payIcon(m)} ${esc(/mặt/i.test(m) ? 'TM' : /khoản/i.test(m) ? 'CK' : /thẻ/i.test(m) ? 'Thẻ' : m)}</button>`).join('')}</div>` : ''}</td></tr>`).join('')}
+      <tr><td colspan="3"><b>Tổng</b></td><td class="num"><b>${money(L.reduce((t, x) => t + x.amount, 0))}</b></td><td></td></tr></tbody></table></div>`, true);
     $$('[data-uv]').forEach((a) => (a.onclick = async (e) => { e.preventDefault(); visitForm(await api('/visits/' + a.dataset.uv), () => VIEWS.sales(main)); }));
+    $$('[data-upd]').forEach((b) => (b.onclick = () => guard(b, async () => {
+      await api(`/visits/${b.dataset.upd}/mark-paid`, { method: 'POST', body: { method: b.dataset.m } });
+      const box = $(`[data-upr="${b.dataset.upd}"]`); box.innerHTML = `<span class="badge ok">✓ Đã thu ${esc(b.dataset.m)}</span>`;
+      box.closest('tr').style.opacity = 0.55; toast('Đã ghi khách đã trả: ' + b.dataset.m); VIEWS.sales(main);
+    })));
   };
   main.innerHTML = header('Doanh số & hoa hồng', isMgr() ? 'Toàn tiệm' : 'Chỉ hiển thị số liệu của bạn') +
     `<div class="card"><div class="row"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="t" value="${to}" style="width:auto">

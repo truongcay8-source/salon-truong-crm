@@ -386,6 +386,23 @@ app.post('/api/appointments/:id/pay-note', OWNER, (req, res) => {
   audit(req.user.id, 'appointment_pay', 'appointment', a.id, { pay_note: [a.pay_note, v] });
   res.json({ ok: true });
 });
+// Lãnh đạo đánh dấu lượt "chưa thu" là khách đã trả (ô hồng trên sổ → chọn hình thức; ghi nợ → thu nợ hôm nay)
+app.post('/api/visits/:id/mark-paid', OWNER, (req, res) => {
+  const v = db.prepare("SELECT id, payment_method, note, debt, debt_paid_at, cash_paid FROM visits WHERE id=? AND status='done'").get(int(req.params.id));
+  if (!v) throw new HttpError(404, 'Không tìm thấy lượt');
+  const m = str(req.body && req.body.method);
+  if (!getSettings().payment_methods.split(',').map((x) => x.trim()).includes(m)) throw bad('Chọn hình thức thanh toán');
+  let done = false;
+  if (!v.payment_method && /CHƯA THANH TOÁN/.test(v.note || '')) {
+    db.prepare('UPDATE visits SET payment_method=? WHERE id=?').run(m, v.id);
+    db.prepare("UPDATE appointments SET pay_note=? WHERE visit_id=? AND pay_note='Chưa thanh toán'").run(m, v.id);
+    done = true;
+  }
+  if (v.debt && !v.debt_paid_at) { db.prepare('UPDATE visits SET debt_paid_at=?, debt_paid_method=?, debt_paid_by=? WHERE id=?').run(today(), m, req.user.id, v.id); done = true; }
+  if (!done) throw bad('Lượt này không còn khoản chưa thu');
+  audit(req.user.id, 'visit_mark_paid', 'visit', v.id, { method: m });
+  res.json({ ok: true });
+});
 app.get('/api/appointments', (req, res) => {
   const from = L.isDate(req.query.from) ? req.query.from : today();
   const to = L.isDate(req.query.to) ? req.query.to : from;

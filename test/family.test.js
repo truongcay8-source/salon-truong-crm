@@ -536,3 +536,22 @@ test('đặt lịch khách mới mà SĐT đã có → gắn vào khách cũ', a
   const a = db.prepare('SELECT customer_id, guest_name FROM appointments WHERE id=?').get(id);
   assert.equal(a.customer_id, cid); assert.equal(a.guest_name, null);
 });
+
+test('chưa thu: Lãnh đạo bấm đã thu ngay trong danh sách', async () => {
+  const L = require('../server/logic');
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const s = client(); assert.equal((await s.post('/login', { username: 'thu', password: 'moi-thu' })).status, 200);
+  const duong = db.prepare("SELECT id FROM users WHERE username='duong'").get().id;
+  const cut = db.prepare("SELECT id FROM services WHERE active=1 AND grp='Cắt' AND price>0 ORDER BY id LIMIT 1").get();
+  const cid = (await o.post('/customers', { name: 'Khách ô hồng', phone: '0913555444' })).data.id;
+  const d = '2025-04-02';
+  const v = (await o.post('/visits', { customer_id: cid, date: d, time: '10:00', main_staff_id: duong, payment_method: 'Tiền mặt', items: [{ service_id: cut.id, price: 300000 }] })).data;
+  db.prepare("UPDATE visits SET payment_method=NULL, note='Sổ đặt lịch: x · CHƯA THANH TOÁN (ô hồng), giá theo bảng giá' WHERE id=?").run(v.id);
+  let sm = L.salesReport(d, d, { role: 'owner' }).summary;
+  assert.equal(sm.unpaid, 300000); assert.equal(sm.unpaid_list.length, 1);
+  assert.equal((await s.post(`/visits/${v.id}/mark-paid`, { method: 'Chuyển khoản' })).status, 403);
+  assert.equal((await o.post(`/visits/${v.id}/mark-paid`, { method: 'Chuyển khoản' })).status, 200);
+  sm = L.salesReport(d, d, { role: 'owner' }).summary;
+  assert.equal(sm.unpaid, 0); assert.equal(sm.by_method['Chuyển khoản'], 300000);
+  assert.equal((await o.post(`/visits/${v.id}/mark-paid`, { method: 'Chuyển khoản' })).status, 400);
+});
