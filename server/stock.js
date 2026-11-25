@@ -157,6 +157,9 @@ const need = (k) => (req, res, next) => (perm(req.user)[k] ? next() : next(new H
 
 // Tồn kho cho người kiểm/đặt hàng: KHÔNG có giá nhập
 function stockLevels() {
+  try { syncFormulaUse(); } catch (e) { console.error('Tự trừ kho theo công thức lỗi:', e.message); }
+  const d30 = L.addDays(today(), -30);
+  const use30 = new Map(db.prepare("SELECT material_id, SUM(-qty) q FROM stock_moves WHERE kind IN ('use','sale') AND date>? GROUP BY material_id").all(d30).map((r) => [r.material_id, r.q]));
   const lastIn = db.prepare("SELECT MAX(created_at) t FROM stock_moves WHERE material_id=? AND kind='in'");
   const lastCount = db.prepare("SELECT s.date, s.created_at, u.full_name by_name FROM stock_moves s LEFT JOIN users u ON u.id=s.created_by WHERE s.material_id=? AND s.kind='adjust' AND s.note LIKE 'Kiểm kho%' ORDER BY s.id DESC LIMIT 1");
   return db.prepare(`SELECT m.*, u.full_name ordered_by_name FROM materials m LEFT JOIN users u ON u.id=m.ordered_by WHERE m.active=1 ORDER BY m.kind, m.grp, m.name`).all().map((m) => {
@@ -165,11 +168,15 @@ function stockLevels() {
     const reported = m.reported_at && !(li && li > m.reported_at) ? m.reported_at : null; // nhân viên báo hết qua chat, chưa nhập hàng lại
     // Chưa đặt mức báo: hóa chất báo khi đã mở đơn vị cuối (còn < 1), sản phẩm bán báo khi còn 1
     const lowAt = m.min_qty != null ? m.min_qty : m.kind === 'retail' ? 1 : null;
-    const status = stock <= 0 ? 'out' : (lowAt != null ? stock <= lowAt : stock < 1) ? 'low' : reported ? 'low' : 'ok';
+    const u30 = use30.get(m.id) || 0;
+    const daysLeft = u30 > 0 && stock > 0 ? Math.floor(stock / (u30 / 30)) : null;
+    // Chưa đặt mức báo mà theo tốc độ dùng 30 ngày chỉ còn đủ < 7 ngày → báo sắp hết để kịp đặt hàng
+    const status = stock <= 0 ? 'out' : (lowAt != null ? stock <= lowAt : stock < 1) ? 'low' : reported ? 'low' : (m.min_qty == null && daysLeft != null && daysLeft < 7) ? 'low' : 'ok';
     const ordered = m.ordered_at && !(li && li > m.ordered_at) ? m.ordered_at : null;
     const lc = lastCount.get(m.id);
     return { id: m.id, code: m.code, name: m.name, kind: m.kind, grp: m.grp, unit: m.unit, size: m.size, size_unit: m.size_unit,
-      stock, min_qty: m.min_qty, status, barcode: m.barcode, sell_price: m.sell_price, ordered_at: ordered, ordered_by_name: ordered ? m.ordered_by_name : null,
+      stock, left_amt: m.size && stock > 0 ? Math.round(stock * m.size) : null, use30: r2(u30), use30_amt: m.size ? Math.round(u30 * m.size) : null, days_left: daysLeft,
+      min_qty: m.min_qty, status, barcode: m.barcode, sell_price: m.sell_price, ordered_at: ordered, ordered_by_name: ordered ? m.ordered_by_name : null,
       last_count: lc ? lc.date : null, last_count_by: lc ? lc.by_name : null, reported_at: reported };
   });
 }
@@ -213,21 +220,66 @@ function materialRows(user, opts = {}) {
 // Ghi vật tư của 1 lượt làm: hóa chất dùng (use) + sản phẩm bán (sale). Trả về giá cốt lượt.
 // used = null (phiếu không gửi danh sách hóa chất) → giữ nguyên hóa chất đã ghi trước đó
 function applyVisit(visitId, date, items, used, user) {
-  if (!used) used = db.prepare("SELECT material_id, -qty qty FROM stock_moves WHERE visit_id=? AND kind='use' ORDER BY id").all(visitId);
+  if (!used) used = db.prepare("SELECT material_id, -qty qty, note FROM stock_moves WHERE visit_id=? AND kind='use' ORDER BY id").all(visitId);
   db.prepare('DELETE FROM stock_moves WHERE visit_id=?').run(visitId);
-  const ins = db.prepare('INSERT INTO stock_moves(material_id,date,kind,qty,unit_cost,price,visit_id,created_by) VALUES (?,?,?,?,?,?,?,?)');
+  const ins = db.prepare('INSERT INTO stock_moves(material_id,date,kind,qty,unit_cost,price,visit_id,created_by,note) VALUES (?,?,?,?,?,?,?,?,?)');
   let cost = 0;
-  const one = (mid, qty, kind, price) => {
+  const one = (mid, qty, kind, price, note) => {
     const m = db.prepare('SELECT id FROM materials WHERE id=?').get(mid);
     if (!m || !(qty > 0)) return;
     const uc = avgCost(mid);
-    ins.run(mid, date, kind, -qty, uc, price ?? null, visitId, user.id);
+    ins.run(mid, date, kind, -qty, uc, price ?? null, visitId, user.id, note === AUTO_NOTE ? AUTO_NOTE : null);
     cost += qty * uc;
   };
-  for (const u of used || []) one(int(u.material_id), Number(u.qty), 'use');
+  for (const u of used || []) one(int(u.material_id), Number(u.qty), 'use', null, u.note);
   for (const i of items) if (i.material_id) one(i.material_id, i.qty || 1, 'sale', i.price);
   db.prepare('UPDATE visits SET cost=? WHERE id=?').run(Math.round(cost), visitId);
   return Math.round(cost);
+}
+// Tự trừ kho theo công thức thợ ghi: lượt hóa chất chưa ghi "hóa chất đã dùng" (lượt đồng bộ từ sổ, hoặc thợ ghi công thức
+// ở hồ sơ khách trong 10 ngày sau) → đọc công thức, đổi g/ml ra số tuýp/chai, ghi xuất kho (note AUTO_NOTE).
+// Không trừ lượt trước lần kiểm kho gần nhất của món đó (số đếm đã gồm phần dùng) và không sửa lượt đã bị kiểm kho chốt.
+const AUTO_NOTE = 'Tự trừ theo công thức';
+let lastSync = 0;
+function syncFormulaUse(force) {
+  if (!force && Date.now() - lastSync < 60000) return 0;
+  lastSync = Date.now();
+  const { parseFormula } = require('../public/formula.js');
+  const set = getSettings().formula_stock_from;
+  const from = [isDate(set) ? set : '2026-11-01', L.addDays(today(), -40)].sort()[1];
+  const mats = db.prepare('SELECT id, name, kind, size, size_unit, formula_keys, formula_default, active FROM materials').all();
+  const byId = new Map(mats.map((m) => [m.id, m]));
+  const counted = new Map(db.prepare("SELECT material_id, MAX(date) d FROM stock_moves WHERE kind='adjust' AND note LIKE 'Kiểm kho%' GROUP BY material_id").all().map((r) => [r.material_id, r.d]));
+  const visits = db.prepare(`SELECT v.id, v.date, v.formula, v.main_staff_id, c.formula cformula, c.formula_at,
+      (SELECT COUNT(*) FROM stock_moves WHERE visit_id=v.id AND kind='use' AND (note IS NULL OR note<>?)) manual
+    FROM visits v JOIN customers c ON c.id=v.customer_id
+    WHERE v.status='done' AND v.date>=? AND EXISTS (SELECT 1 FROM visit_items WHERE visit_id=v.id AND grp='Hóa chất')`).all(AUTO_NOTE, from);
+  const cur = db.prepare("SELECT material_id, -qty qty FROM stock_moves WHERE visit_id=? AND kind='use' AND note=?");
+  const del = db.prepare("DELETE FROM stock_moves WHERE visit_id=? AND kind='use' AND note=?");
+  const ins = db.prepare("INSERT INTO stock_moves(material_id,date,kind,qty,unit_cost,visit_id,note,created_by) VALUES (?,?,'use',?,?,?,?,?)");
+  const setCost = db.prepare("UPDATE visits SET cost=(SELECT COALESCE(ROUND(SUM(-qty*unit_cost)),0) FROM stock_moves WHERE visit_id=? AND kind IN ('use','sale')) WHERE id=?");
+  let n = 0;
+  db.transaction(() => {
+    for (const v of visits) {
+      if (v.manual) continue; // đã ghi hóa chất bằng tay ở phiếu → giữ nguyên
+      const have = cur.all(v.id, AUTO_NOTE);
+      if (have.some((h) => (counted.get(h.material_id) || '') >= v.date)) continue; // đã kiểm kho sau lượt này
+      const late = v.formula_at && v.formula_at >= v.date && v.formula_at <= L.addDays(v.date, 10);
+      const text = v.formula || (late ? v.cformula : null);
+      const want = new Map();
+      if (text) for (const l of parseFormula(text, mats).lines) {
+        const m = byId.get(l.material_id);
+        if (!m || !m.size || !(l.amt > 0) || (counted.get(m.id) || '') >= v.date) continue;
+        want.set(m.id, r2((want.get(m.id) || 0) + l.amt / m.size));
+      }
+      if (have.length === want.size && have.every((h) => Math.abs((want.get(h.material_id) ?? -1) - h.qty) < 1e-6)) continue;
+      del.run(v.id, AUTO_NOTE);
+      for (const [mid, q] of want) ins.run(mid, v.date, -q, avgCost(mid), v.id, AUTO_NOTE, v.main_staff_id || null);
+      setCost.run(v.id, v.id);
+      n++;
+    }
+  })();
+  return n;
 }
 function clearVisit(visitId) { db.prepare('DELETE FROM stock_moves WHERE visit_id=?').run(visitId); }
 function visitMaterials(visitId) {
@@ -448,4 +500,4 @@ function mount(app, { MGR }) {
 }
 
 module.exports = {
-  findByBarcode, attachBarcode, codeList, perm, stockAlerts, mount, applyVisit, clearVisit, visitMaterials, importPurchases: (...a) => { const r = importPurchases(...a); seedFormulaKeys(); fillSizes(); fillPrices(); return r; }, avgCost, parseSize, seedFormulaKeys, fillSizes };
+  findByBarcode, attachBarcode, syncFormulaUse, AUTO_NOTE, codeList, perm, stockAlerts, mount, applyVisit, clearVisit, visitMaterials, importPurchases: (...a) => { const r = importPurchases(...a); seedFormulaKeys(); fillSizes(); fillPrices(); return r; }, avgCost, parseSize, seedFormulaKeys, fillSizes };

@@ -570,3 +570,33 @@ test('gộp khách trùng SĐT: dồn lượt về 1 hồ sơ, hồ sơ thừa b
   void a;
   assert.equal((await o.post('/customers', { name: 'Trùng', phone: '0868000111', allow_duplicate: true })).status, 409);
 });
+
+test('tự trừ kho theo công thức thợ ghi (lượt chưa ghi hóa chất), sửa công thức thì trừ lại, kiểm kho chốt', async () => {
+  const st = require('../server/stock');
+  const L = require('../server/logic');
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const mid = db.prepare("INSERT INTO materials(name,kind,unit,size,size_unit,formula_keys) VALUES ('Màu ZZ','service','Tuýp',80,'g','zzmau')").run().lastInsertRowid;
+  db.prepare("INSERT INTO stock_moves(material_id,date,kind,qty,unit_cost) VALUES (?,?,'in',2,200000)").run(mid, L.addDays(L.today(), -20));
+  const chem = db.prepare("SELECT id FROM services WHERE active=1 AND grp='Hóa chất' ORDER BY id LIMIT 1").get();
+  const cid = (await o.post('/customers', { name: 'Khách màu', phone: '0913777888' })).data.id;
+  const d = L.addDays(L.today(), -3);
+  const duong = db.prepare("SELECT id FROM users WHERE username='duong'").get().id;
+  const v = (await o.post('/visits', { customer_id: cid, date: d, time: '10:00', main_staff_id: duong, payment_method: 'Tiền mặt', items: [{ service_id: chem.id, price: 800000 }] })).data;
+  assert.ok(v.id, JSON.stringify(v));
+  db.prepare("UPDATE visits SET formula='zzmau 40g' WHERE id=?").run(v.id);
+  st.syncFormulaUse(true);
+  const stock = () => db.prepare('SELECT SUM(qty) q FROM stock_moves WHERE material_id=?').get(mid).q;
+  assert.equal(stock(), 1.5);
+  assert.equal(db.prepare('SELECT cost FROM visits WHERE id=?').get(v.id).cost, 100000);
+  const lv = st.syncFormulaUse(true); assert.equal(lv, 0, 'chạy lại không trừ 2 lần');
+  db.prepare("UPDATE visits SET formula='zzmau 60g' WHERE id=?").run(v.id);
+  st.syncFormulaUse(true);
+  assert.equal(stock(), 1.25);
+  const lvl = (await o.get('/stock/levels')).data.find((m) => m.id === mid);
+  assert.equal(lvl.left_amt, 100); assert.ok(lvl.days_left != null);
+  // Kiểm kho sau lượt → công thức sửa sau đó không đổi kho nữa
+  db.prepare("INSERT INTO stock_moves(material_id,date,kind,qty,note) VALUES (?,?,'adjust',0,'Kiểm kho')").run(mid, L.today());
+  db.prepare("UPDATE visits SET formula='zzmau 10g' WHERE id=?").run(v.id);
+  st.syncFormulaUse(true);
+  assert.equal(stock(), 1.25);
+});
