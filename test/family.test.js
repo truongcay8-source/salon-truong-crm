@@ -623,3 +623,17 @@ test('chi: nguồn tiền (quỹ / nhân viên ứng / chủ trả), hoàn ứng
   const fin = require('../server/finance').report('2025-06');
   assert.equal(fin.fund.total, 400000); assert.equal(fin.cash.fund, 1500000);
 });
+
+test('thu nhập khác (lì xì khai trương): cộng lãi lỗ + dòng tiền, không phải tip', async () => {
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const F = require('../server/finance');
+  const before = F.report('2025-08');
+  assert.equal((await o.post('/finance/income', { date: '2025-08-02', amount: '2000000', kind: 'Lì xì khai trương', method: 'Tiền mặt', note: 'anh A' })).status, 200);
+  const after = F.report('2025-08');
+  assert.equal(after.other_income.total, 2000000);
+  assert.equal(after.profit - before.profit, 2000000);
+  assert.equal(after.cash.net - before.cash.net, 2000000);
+  assert.equal(after.revenue.tips, before.revenue.tips);
+  const s = client(); assert.equal((await s.post('/login', { username: 'thu', password: 'moi-thu' })).status, 200);
+  assert.equal((await s.post('/finance/income', { amount: 1 })).status, 403);
+});

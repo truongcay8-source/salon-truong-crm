@@ -818,6 +818,7 @@ function dayMoneyCard(M, est) {
     <div class="small" style="margin-top:8px;display:grid;gap:4px">
       <div>💝 <b>Tip ${money(M.tips)}</b>: ${M.tip_list.length ? M.tip_list.map((t) => `<a href="#" data-dmv="${t.id}">${esc(t.name)}</a> ${money(t.tip)} <span class="muted">(${esc(/mặt/i.test(t.method) ? 'TM' : /khoản|ck/i.test(t.method) ? 'CK' : t.method)})</span>`).join(' · ') : '<span class="muted">không có</span>'}</div>
       <div>🧾 <b>Chi ${money(M.expense_total)}</b>: ${M.expenses.length ? M.expenses.map((e) => `${esc((e.note || e.category || 'Chi').replace(/ · từ sổ đặt lịch$/, ''))} ${money(e.amount)}${e.source !== 'fund' ? ` <span class="muted">(${e.source === 'staff' ? esc(e.by_name || 'NV') + ' ứng' : 'chủ trả'})</span>` : ''}${e.spread_months > 1 ? ` <span class="muted">(chia ${e.spread_months} th)</span>` : ''}${e.status === 'pending' ? ' <span class="muted">(chờ duyệt)</span>' : ''}`).join(' · ') : '<span class="muted">không có</span>'}${M.reimbursed.length ? ` · hoàn ứng TM: ${M.reimbursed.map((x) => `${esc(x.by_name || '')} ${money(x.amount)}`).join(', ')}` : ''}</div>
+      ${M.other_income && M.other_income.length ? `<div>🧧 <b>Thu khác ${money(M.other_income.reduce((t, x) => t + x.amount, 0))}</b> <span class="muted">(không phải tip, không tính doanh số thợ)</span>: ${M.other_income.map((x) => `${esc(x.kind)}${x.note ? ' – ' + esc(x.note) : ''} ${money(x.amount)} <span class="muted">(${/chuy/i.test(x.method || '') ? 'CK' : 'TM'})</span>`).join(' · ')}</div>` : ''}
       <div>💵 <b>Tiền mặt sau chi: ${money(sumK(by, cashK) + cashTip - M.expense_shop_cash)}</b> <span class="muted">= TM thu ${money(sumK(by, cashK) + cashTip)} − chi lấy TM tại tiệm ${money(M.expense_shop_cash)}</span></div>
       ${other.length || extra || est ? `<div class="muted">${[other.map(([k, v]) => `${esc(k)} ${money(v)}`).join(' · '), extra, est ? `lịch chưa thu dự kiến ~${money(est)}` : ''].filter(Boolean).join(' · ')}</div>` : ''}
     </div></div>`;
@@ -2488,12 +2489,14 @@ VIEWS.finance = async (main) => {
       ${row('− Chi phát sinh (đã duyệt)', neg(r.fund.total), '', r.fund.rows.map((x) => `${esc(x.category)} ${money(x.amount)}`).join(' · ')
         + (r.fund.spread && r.fund.spread.length ? `<br>chia tháng: ${r.fund.spread.map((x) => `${esc(x.note)} ${money(x.share)}/tháng (${money(x.amount)} ÷ ${x.months})`).join(' · ')}` : ''))}
       ${F.rows.map((f) => row('− ' + esc(f.name), neg(f.amount), '', [f.cash ? '' : 'không chi tiền', f.source === 'tháng này' ? 'riêng tháng này' : '', esc(f.note)].filter(Boolean).join(' · '))).join('')}
+      ${r.other_income.total ? row('+ Thu nhập khác', `+${money(r.other_income.total)}`, '', r.other_income.rows.map((x) => `${esc(x.kind)}${x.note ? ' – ' + esc(x.note) : ''} ${money(x.amount)}`).join(' · ')) : ''}
       ${row(`<b>(3) ${r.profit < 0 ? 'LỖ' : 'LÃI'} SAU MỌI CHI PHÍ</b>`, sign(r.profit), 'sum big')}
       ${row('Lãi/lỗ trước khấu hao', r.ebitda < 0 ? '−' + money(-r.ebitda) : money(r.ebitda), '', 'cộng lại khấu hao – gần với tiền thật kiếm được')}
     </tbody></table></div></div>
     <div class="card"><h3>Dòng tiền tháng (tiền thật vào/ra)</h3><div class="table-wrap"><table class="fin"><tbody>
       ${row('Tiền khách trả dịch vụ + SP', money(K.in_service), '', 'không gồm ô hồng chưa trả, phần trừ thẻ')}
       ${row('Tiền bán thẻ', money(K.in_cards), '', 'thu trước – khách sẽ dùng dịch vụ sau')}
+      ${K.in_other ? row('Thu nhập khác', money(K.in_other), '', 'lì xì khai trương…') : ''}
       ${row('<b>Tiền vào</b>', `<b>${money(K.in_total)}</b>`, 'sum')}
       ${row('− Lương (không tip)', neg(K.payroll))}
       ${row('− Chi phát sinh', neg(K.fund), '', 'tiền thật trả trong tháng, kể cả khoản chia nhiều tháng')}
@@ -2501,7 +2504,15 @@ VIEWS.finance = async (main) => {
       ${row('− Nhập hàng trong tháng', neg(K.purchases))}
       ${row('<b>Tiền còn lại</b>', sign(K.net), 'sum big')}
     </tbody></table></div>
-    <div class="small muted" style="margin-top:8px">Khác với lãi/lỗ: bán thẻ là tiền thu trước (chưa phải doanh thu); khách dùng thẻ thì có doanh thu nhưng không có tiền vào. Tip ${money(R.tips)} là tiền khách cho thợ nên không tính.</div></div></div>
+    <div class="small muted" style="margin-top:8px">Khác với lãi/lỗ: bán thẻ là tiền thu trước (chưa phải doanh thu); khách dùng thẻ thì có doanh thu nhưng không có tiền vào. Tip ${money(R.tips)} là tiền khách cho thợ nên không tính. Lì xì cho cửa hàng ghi ở mục 🧧 Thu nhập khác.</div></div></div>
+    <div class="card"><h3>🧧 Thu nhập khác (lì xì khai trương…)</h3><div class="small muted">Tiền khách/đối tác lì xì cho cửa hàng: <b>không</b> chia tip, <b>không</b> tính doanh số thợ, được cộng vào lãi/lỗ và dòng tiền.</div>
+      <form id="oi" class="row" style="margin-top:8px;flex-wrap:wrap;gap:6px"><input type="date" name="date" value="${S.today.slice(0, 7) === month ? S.today : month + '-01'}" style="width:auto">
+        <input name="kind" list="oikinds" value="Lì xì khai trương" style="flex:2;min-width:150px"><datalist id="oikinds"><option value="Lì xì khai trương"><option value="Lì xì Tết"><option value="Hỗ trợ NCC"><option value="Thu khác"></datalist>
+        <input name="amount" inputmode="numeric" placeholder="Số tiền" style="flex:1;min-width:110px"><select name="method" style="width:auto"><option>Tiền mặt</option><option>Chuyển khoản</option></select>
+        <input name="note" placeholder="Ai lì xì / ghi chú" style="flex:2;min-width:140px"><button class="btn primary">+ Thêm</button></form><div class="err"></div>
+      ${r.other_income.rows.map((x) => `<div class="stat-line"><span>${dmy(x.date)} · ${esc(x.kind)}${x.note ? ` <span class="small muted">${esc(x.note)}</span>` : ''} <span class="small muted">${/chuy/i.test(x.method || '') ? 'CK' : 'TM'}</span></span><span><b>${money(x.amount)}</b> <button class="btn sm" data-oid="${x.id}">✕</button></span></div>`).join('')}
+      ${r.other_income.rows.length ? `<div class="stat-line"><b>Tổng tháng</b><b>${money(r.other_income.total)}</b></div>` : ''}
+    </div>
     <div class="card"><h3>Khoản chi riêng tháng này</h3><div class="small muted">Nhập điện nước, sửa chữa, quảng cáo… của riêng tháng ${month.slice(5)}. Trùng tên với khoản mặc định thì <b>thay</b> khoản mặc định (vd "Điện, nước, internet").</div>
       <form id="fi" class="row" style="margin-top:8px;flex-wrap:wrap;gap:6px"><input name="name" placeholder="Tên khoản" list="fnames" style="flex:2;min-width:160px"><datalist id="fnames">${r.defaults.fixed.map((f) => `<option value="${esc(f.name)}">`).join('')}</datalist>
         <input name="amount" inputmode="numeric" placeholder="Số tiền" style="flex:1;min-width:110px"><input name="note" placeholder="Ghi chú" style="flex:2;min-width:140px">
@@ -2515,6 +2526,10 @@ VIEWS.finance = async (main) => {
     await api('/finance/items', { method: 'POST', body: { month, name: b.name, amount: String(b.amount).replace(/\D/g, ''), note: b.note, cash: b.cash ? 1 : 0 } });
     toast('Đã thêm khoản chi'); VIEWS.finance(main); }); };
   $$('[data-del]', main).forEach((x) => (x.onclick = () => guard(x, async () => { if (!confirm('Xóa khoản chi này?')) return; await api('/finance/items/' + x.dataset.del, { method: 'DELETE' }); VIEWS.finance(main); })));
+  $('#oi').onsubmit = (e) => { e.preventDefault(); const b = formData(e.target); guard($('button.primary', e.target), async () => {
+    await api('/finance/income', { method: 'POST', body: { ...b, amount: String(b.amount).replace(/\D/g, '') } });
+    toast('Đã ghi thu nhập khác'); VIEWS.finance(main); }); };
+  $$('[data-oid]', main).forEach((x) => (x.onclick = () => guard(x, async () => { if (!confirm('Xóa khoản thu này?')) return; await api('/finance/income/' + x.dataset.oid, { method: 'DELETE' }); VIEWS.finance(main); })));
   $('#fcfg').onclick = () => finConfig(r.defaults, () => VIEWS.finance(main));
 };
 function finConfig(d, after) {
