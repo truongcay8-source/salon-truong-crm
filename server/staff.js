@@ -258,7 +258,7 @@ function mount(app, { MGR, OWNER }) {
         helps.get(k).lines.push((role === 'phụ' ? 'phụ ' : '') + i.name);
       }
     }
-    res.json({ date, appointments: appts, visits: free, helps: [...helps.values()], offs: offRows(date, date, req.user) });
+    res.json({ date, appointments: appts, visits: free, helps: [...helps.values()], offs: offRows(date, date, req.user), money: u.role === 'owner' ? L.dayMoney(date) : undefined });
   });
 }
 

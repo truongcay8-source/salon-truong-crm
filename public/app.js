@@ -757,11 +757,12 @@ VIEWS.appointments = async (main) => {
     const sc = mine ? null : await api('/schedule?date=' + date);
     body = `<div class="card"><h3>${mine ? `Lịch của ${esc(S.me.full_name)} · 7 ngày từ ${dmy(date)}` : dmy(date)} · ${rows.filter((r) => !['cancelled', 'noshow'].includes(r.status)).length} lịch</h3>${apptList(rows, mine)}</div>
       ${sc && sc.visits.length ? `<div class="card"><h3>✓ Khách đã làm (không qua lịch hẹn) · ${sc.visits.length}</h3>${sc.visits.map(visitChipLine).join('')}</div>` : ''}`;
-    main.innerHTML = top + (sc ? daySum(rows, sc.visits) : '') + body;
+    main.innerHTML = top + (sc ? daySum(rows, sc.visits, sc.money) : '') + body;
     bindApptList(main, reload, rows);
+    $$('[data-dmv]', main).forEach((a) => (a.onclick = async (e) => { e.preventDefault(); visitForm(await api('/visits/' + a.dataset.dmv), reload); }));
   } else {
     const sc = await api('/schedule?date=' + date);
-    main.innerHTML = top + daySum(sc.appointments, sc.visits) + `<div class="card grid-card">${scheduleGrid(sc)}</div>
+    main.innerHTML = top + daySum(sc.appointments, sc.visits, sc.money) + `<div class="card grid-card">${scheduleGrid(sc)}</div>
       <div class="small muted" style="margin:0 4px 12px">Bấm ô trống để đặt lịch · bấm lịch để Thu tiền / Sửa / Hủy. <span class="chip-k brand">Đã đặt</span> <span class="chip-k warn">Đã đến</span> <span class="chip-k ok">Đã làm</span> <span class="chip-k help">↪ Làm/phụ trong phiếu người khác</span> <span class="chip-k off">Nghỉ</span></div>`;
     $$('[data-slot]', main).forEach((td) => (td.onclick = (e) => {
       if (e.target.closest('[data-ap],[data-vv]')) return;
@@ -774,6 +775,7 @@ VIEWS.appointments = async (main) => {
       bindApptList($('#oneAp'), () => { closeModal(); reload(); }, [a]);
     }));
     $$('[data-vv]', main).forEach((el) => (el.onclick = () => go('customer', { id: el.dataset.vv })));
+    $$('[data-dmv]', main).forEach((a) => (a.onclick = async (e) => { e.preventDefault(); visitForm(await api('/visits/' + a.dataset.dmv), reload); }));
   }
   $('#prev').onclick = () => set({ date: addDays(date, -1) }); $('#next').onclick = () => set({ date: addDays(date, 1) });
   $('#tod').onclick = () => set({ date: S.today }); $('#d').onchange = (e) => set({ date: e.target.value });
@@ -789,12 +791,35 @@ function visitChipLine(v) {
 const evMoney = (a) => a.visit_id && a.visit_total != null ? `<div class="small"><b>✓ ${money(a.visit_total)}</b></div>`
   : !['cancelled', 'noshow'].includes(a.status) && estTotal(a.service) ? `<div class="small">~${money(estTotal(a.service))}</div>` : '';
 // Tổng tiền trong ngày: đã thu (lượt đã lưu) + còn dự kiến (lịch chưa thu)
-function daySum(appts, visits) {
+function daySum(appts, visits, M) {
   const est = appts.filter((a) => ['booked', 'arrived'].includes(a.status) && !a.visit_id).reduce((t, a) => t + estTotal(a.service), 0);
+  if (M) return dayMoneyCard(M, est);
   const got = appts.reduce((t, a) => t + (a.visit_id ? Number(a.visit_total || 0) : 0), 0) + visits.reduce((t, v) => t + Number(v.total || 0), 0);
   const n = appts.filter((a) => a.visit_id).length + visits.length;
   return `<div class="card daysum"><div><span class="muted small">Đã thu (${n} lượt)</span><b>${money(got)}</b></div><div><span class="muted small">Còn dự kiến (lịch chưa thu)</span><b>${money(est)}</b></div>
     <div><span class="muted small">Cả ngày nếu thu đủ</span><b>${money(got + est)}</b></div></div>`;
+}
+// Lãnh đạo: tiền trong ngày tách rõ trước/sau trừ thẻ, TM/CK, tip từng khách, chi trong ngày
+function dayMoneyCard(M, est) {
+  const by = M.by_method || {};
+  const cashK = Object.keys({ ...by, ...M.tip_by_method }).filter((k) => /mặt/i.test(k));
+  const ckK = Object.keys({ ...by, ...M.tip_by_method }).filter((k) => /khoản|ck/i.test(k));
+  const sumK = (o, ks) => ks.reduce((t, k) => t + (o[k] || 0), 0);
+  const other = Object.entries(by).filter(([k]) => !cashK.includes(k) && !ckK.includes(k) && by[k]);
+  const minus = [[M.gift, 'thẻ tri ân'], [M.prepaid, 'thẻ trả trước'], [M.unpaid, 'chưa thu']].filter(([v]) => v > 0);
+  const cashTip = sumK(M.tip_by_method, cashK), ckTip = sumK(M.tip_by_method, ckK);
+  const extra = [M.card_sales ? `bán thẻ ${money(M.card_sales)}` : '', M.debt_in ? `thu nợ cũ ${money(M.debt_in)}` : ''].filter(Boolean).join(' · ');
+  return `<div class="card"><div class="grid kpis" style="margin:0">
+      <div class="kpi"><div class="l">Tổng hóa đơn (${M.invoices} lượt)</div><div class="v">${money(M.total)}</div><div class="s">trước trừ thẻ${M.discounts ? ` · đã giảm ${money(M.discounts)}` : ''}</div></div>
+      <div class="kpi"><div class="l">Thực thu (sau trừ thẻ)</div><div class="v">${money(M.real)}</div><div class="s">${minus.length ? minus.map(([v, l]) => `− ${l} ${money(v)}`).join('<br>') : 'không trừ thẻ'}</div></div>
+      <div class="kpi"><div class="l">💵 Tiền mặt</div><div class="v">${money(sumK(by, cashK) + cashTip)}</div><div class="s">${cashTip ? `gồm tip ${money(cashTip)}` : 'không có tip'}</div></div>
+      <div class="kpi"><div class="l">🏦 Chuyển khoản</div><div class="v">${money(sumK(by, ckK) + ckTip)}</div><div class="s">${ckTip ? `gồm tip ${money(ckTip)}` : 'không có tip'}</div></div>
+      <div class="kpi"><div class="l">Chi trong ngày</div><div class="v">${money(M.expense_total)}</div><div class="s">${M.expenses.length} khoản</div></div></div>
+    <div class="small" style="margin-top:8px;display:grid;gap:4px">
+      <div>💝 <b>Tip ${money(M.tips)}</b>: ${M.tip_list.length ? M.tip_list.map((t) => `<a href="#" data-dmv="${t.id}">${esc(t.name)}</a> ${money(t.tip)} <span class="muted">(${esc(/mặt/i.test(t.method) ? 'TM' : /khoản|ck/i.test(t.method) ? 'CK' : t.method)})</span>`).join(' · ') : '<span class="muted">không có</span>'}</div>
+      <div>🧾 <b>Chi ${money(M.expense_total)}</b>: ${M.expenses.length ? M.expenses.map((e) => `${esc((e.note || e.category || 'Chi').replace(/ · từ sổ đặt lịch$/, ''))} ${money(e.amount)}${e.status === 'pending' ? ' <span class="muted">(chờ duyệt)</span>' : ''}`).join(' · ') : '<span class="muted">không có</span>'}</div>
+      ${other.length || extra || est ? `<div class="muted">${[other.map(([k, v]) => `${esc(k)} ${money(v)}`).join(' · '), extra, est ? `lịch chưa thu dự kiến ~${money(est)}` : ''].filter(Boolean).join(' · ')}</div>` : ''}
+    </div></div>`;
 }
 function scheduleGrid(sc) {
   const live = (a) => !['cancelled', 'noshow'].includes(a.status);
