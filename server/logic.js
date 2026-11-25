@@ -444,6 +444,13 @@ function salesReport(from, to, user) {
   // Nợ: lượt trong kỳ còn nợ → chưa thu; nợ trả trong kỳ (của lượt bất kỳ ngày nào) → tiền vào ngày trả
   summary.debt_open = visits.reduce((s, v) => s + (v.debt && !v.debt_paid_at ? v.debt : 0), 0);
   summary.unpaid += summary.debt_open;
+  // Nguồn số "chưa thu": từng lượt (ô hồng trên sổ = cả lượt chưa trả; ghi nợ = phần còn nợ)
+  const cname = db.prepare('SELECT name, phone FROM customers WHERE id=?');
+  summary.unpaid_list = visits.filter((v) => (!v.payment_method && /CHƯA THANH TOÁN/.test(v.note || '') && v.cash_paid) || (v.debt && !v.debt_paid_at))
+    .map((v) => { const c = cname.get(v.customer_id) || {}; const pink = !v.payment_method && /CHƯA THANH TOÁN/.test(v.note || '');
+      return { id: v.id, code: v.code, date: v.date, time: v.time, customer_id: v.customer_id, name: c.name, phone: c.phone, total: v.total,
+        amount: (pink ? v.cash_paid : 0) + (v.debt && !v.debt_paid_at ? v.debt : 0), kind: pink ? 'Sổ ghi chưa thanh toán (ô hồng)' : 'Ghi nợ trên app', staff: (per.get(v.main_staff_id) || {}).name }; })
+    .sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || '')));
   const repaid = db.prepare("SELECT debt, debt_paid_method m FROM visits WHERE status='done' AND debt>0 AND debt_paid_at BETWEEN ? AND ?").all(from, to);
   summary.debt_in = repaid.reduce((s, r) => s + r.debt, 0);
   summary.service_cash += summary.debt_in;
