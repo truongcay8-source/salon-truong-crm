@@ -863,7 +863,7 @@ function apptForm(a = {}, after, onSaved) {
   openModal(isEdit ? 'Sửa lịch hẹn' : 'Đặt lịch hẹn', `<form id="af"><div class="form-grid">
     <div class="full"><label>Khách hàng có sẵn</label>${customerPicker('customer_id', a.customer_id ? { id: a.customer_id, code: a.customer_code || '', name: a.name } : null)}</div>
     <div><label>…hoặc tên khách mới</label><input name="guest_name" value="${esc(a.customer_id ? '' : a.guest_name || a.name || '')}"></div>
-    <div><label>SĐT khách mới</label><input name="guest_phone" inputmode="tel" value="${esc(a.customer_id ? '' : a.guest_phone || a.phone || '')}"></div>
+    <div><label>SĐT khách mới</label><input name="guest_phone" inputmode="tel" value="${esc(a.customer_id ? '' : a.guest_phone || a.phone || '')}"><div class="small" id="gpHit"></div></div>
     <div><label>Ngày</label><input type="date" name="date" value="${a.date || S.today}" required></div>
     <div><label>Giờ</label><input type="time" name="time" value="${a.time || '09:00'}" step="900" required></div>
     <div><label>Thợ làm chính</label><select name="staff_id">${staffOptions(a.staff_id, 'Chưa chọn')}</select></div>
@@ -883,6 +883,14 @@ function apptForm(a = {}, after, onSaved) {
     if (st.value) return;
     try { const b = await api(`/customers/${cid}/brief`); if (b.staff_id) { st.value = b.staff_id; toast('Đã chọn thợ phụ trách: ' + b.staff_name); } } catch { /* bỏ qua */ }
   });
+  // Gõ SĐT khách mới: đã có trong danh bạ thì báo, lưu lịch sẽ tự gắn vào hồ sơ khách cũ
+  const gp = $('#af [name=guest_phone]');
+  let gpT;
+  const gpCheck = () => { clearTimeout(gpT); const q = gp.value.replace(/\D/g, ''); if (q.length < 9) { $('#gpHit').innerHTML = ''; return; }
+    gpT = setTimeout(async () => { const cs = await api('/customers?limit=3&q=' + q).catch(() => []); const list = Array.isArray(cs) ? cs : cs.rows || [];
+      const hit = list.find((c) => String(c.phone || '').replace(/\D/g, '').endsWith(q.slice(-9)));
+      $('#gpHit').innerHTML = hit ? `<span style="color:var(--ok)">✓ Đã có khách <b>${esc(hit.name)}</b> (${esc(hit.code || '')}) – lịch sẽ gắn vào hồ sơ này, không tạo khách mới</span>` : ''; }, 300); };
+  gp.addEventListener('input', gpCheck); gpCheck();
   const svcIn = $('#af [name=service]');
   let chosen = splitSvc(svcIn.value);
   const drawChips = () => {
@@ -2272,15 +2280,27 @@ VIEWS.sales = async (main) => {
   main.innerHTML = header('Doanh số & hoa hồng', isMgr() ? 'Toàn tiệm' : 'Chỉ hiển thị số liệu của bạn') +
     `<div class="card"><div class="row"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="t" value="${to}" style="width:auto">
       <button class="btn sm" data-p="today">Hôm nay</button><button class="btn sm" data-p="month">Tháng này</button><button class="btn sm" data-p="last">Tháng trước</button><button class="btn sm" data-p="all">Từ khai trương</button></div></div>
-    ${s ? `<div class="grid kpis">
-      <div class="kpi"><div class="l">✂️ DS dịch vụ tại tiệm</div><div class="v">${money(s.shop_service_sales)}</div><div class="s">${s.visits} lượt · giảm giá ${money(s.discounts)}<br>cơ sở xét thưởng (trước khi trừ tri ân, người nhà)</div></div>
-      <div class="kpi"><div class="l">🧴 DS bán sản phẩm</div><div class="v">${money(s.product_sales)}</div><div class="s">riêng, chỉ tính % HH sản phẩm</div></div>
-      <div class="kpi"><div class="l">💳 DS bán thẻ</div><div class="v">${money(s.card_sales)}</div><div class="s">tiền thu lúc bán thẻ · riêng, chỉ tính HH thẻ</div></div>
-      <div class="kpi"><div class="l">Tiền vào thực tế</div><div class="v">${money(s.money_in)}</div><div class="s">thu dịch vụ &amp; SP ${money(s.service_cash)} + bán thẻ ${money(s.card_sales)}${s.unpaid ? `<br>⚠ chưa thu (ô hồng): <b>${money(s.unpaid)}</b>` : ''}</div></div>
-      <div class="kpi"><div class="l">Dịch vụ trả bằng thẻ</div><div class="v">${money(s.paid_by_card)}</div><div class="s">${s.paid_by_gift ? `trong đó thẻ tặng ${money(s.paid_by_gift)} (chi phí tri ân, không có tiền vào)` : 'đã thu tiền lúc bán thẻ'}</div></div>
-      <div class="kpi"><div class="l">Tip</div><div class="v">${money(s.tips)}</div><div class="s">không tính doanh số</div></div></div>
-      ${Object.keys(s.gift_by_group || {}).length ? `<div class="card"><h3>🎁 Thẻ tri ân đã dùng vào (chi phí cửa hàng)</h3>${Object.entries(s.gift_by_group).map(([k, v]) => `<div class="stat-line"><span>${esc(k)}</span><b>${money(v)}</b></div>`).join('')}<div class="stat-line"><span>Tổng</span><b>${money(s.paid_by_gift)}</b></div></div>` : ''}
-      <div class="card"><h3>Tiền vào theo hình thức</h3>${Object.entries(s.by_method).map(([k, v]) => `<div class="stat-line"><span>${esc(k)}</span><b>${money(v)}</b></div>`).join('') || '<div class="empty">—</div>'}</div>` : ''}
+    ${s ? (() => {
+      // Doanh thu dịch vụ = tiền dịch vụ thực tính khách (đã trừ giảm giá), KHÔNG gồm phần khách trả bằng thẻ tri ân (chi phí tiệm)
+      const giftSvc = s.paid_by_gift - ((s.gift_by_group || {})['Bán sản phẩm'] || 0);
+      const svcNet = s.shop_service_sales - giftSvc;
+      const line = (l, v, sub) => `<div class="stat-line"><span>${l}${sub ? `<div class="small muted">${sub}</div>` : ''}</span><b>${v}</b></div>`;
+      return `<div class="grid kpis">
+      <div class="kpi"><div class="l">✂️ Doanh thu dịch vụ</div><div class="v">${money(svcNet)}</div><div class="s">${s.visits} lượt</div></div>
+      <div class="kpi"><div class="l">🧴 Bán sản phẩm</div><div class="v">${money(s.product_sales)}</div></div>
+      <div class="kpi"><div class="l">💳 Bán thẻ</div><div class="v">${money(s.card_sales)}</div></div>
+      <div class="kpi"><div class="l">💰 Tiền vào thực tế</div><div class="v">${money(s.money_in)}</div>${s.unpaid ? `<div class="s" style="color:var(--bad)">chưa thu ${money(s.unpaid)}</div>` : ''}</div></div>
+      <details class="card sales-more"><summary><b>Chi tiết</b> <span class="small muted">giảm giá · thẻ tri ân · trả bằng thẻ · tip · hình thức trả</span></summary>
+        <div class="sales-cols"><div>
+          ${line('Giảm giá đã cho khách', money(s.discounts), 'đã trừ sẵn trong doanh thu')}
+          ${line('🎁 Khách dùng thẻ tri ân', money(s.paid_by_gift), 'chi phí tiệm, không tính doanh thu' + (Object.keys(s.gift_by_group || {}).length ? ': ' + Object.entries(s.gift_by_group).map(([k, v]) => esc(k) + ' ' + money(v)).join(', ') : ''))}
+          ${line('Dịch vụ trả bằng thẻ trả trước', money(s.paid_by_card - s.paid_by_gift), 'đã thu tiền lúc bán thẻ')}
+          ${line('Tip', money(s.tips), 'không tính doanh thu')}
+        </div><div>
+          <div class="small muted" style="margin-bottom:4px">Tiền vào theo hình thức</div>
+          ${Object.entries(s.by_method).filter(([, v]) => v).map(([k, v]) => line(esc(k), money(v))).join('') || '<div class="empty">—</div>'}
+        </div></div></details>`;
+    })() : ''}
     ${!isMgr() ? r.rows.map((x) => `<div class="card"><h3>${esc(x.name)}</h3>
       <div class="stat-line"><span class="muted">Lượt làm chính / phụ</span><b>${x.main_count} / ${x.assist_count}</b></div>
       <div class="small" style="margin-top:6px"><b>① Doanh số dịch vụ</b> (xét thưởng)</div>

@@ -333,3 +333,8 @@ table.fin tr.big td{font-size:1.1em}
 .tipbox summary, .card-more summary { cursor: pointer; padding: 4px 0; }
 .card-more { margin-top: 6px; }
 .debt-line { flex-wrap: wrap; gap: 6px; }
+
+/* Doanh số: phần chi tiết gập */
+.sales-more summary { cursor: pointer; }
+.sales-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 10px; }
+@media (max-width: 720px) { .sales-cols { grid-template-columns: 1fr; gap: 10px; } }
