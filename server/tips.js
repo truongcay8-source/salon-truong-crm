@@ -40,6 +40,18 @@ function tipReport(month) {
   const usesAttendance = checked.size > 0;
   const per = new Map(members.map((m) => [m.id, { user_id: m.id, name: m.name, exact: 0, days_shared: 0, days_off: 0 }]));
   let unallocated = 0;
+  // Từng lượt có tip trong ngày: để soát tip ở đâu ra (khách đưa / tiền dư sổ tự chuyển / ghi trên app)
+  const tipRows = db.prepare(`SELECT v.id, v.code, v.date, v.time, v.tip, v.import_ref, v.note, c.name customer_name, u.full_name staff_name
+    FROM visits v LEFT JOIN customers c ON c.id=v.customer_id LEFT JOIN users u ON u.id=v.main_staff_id
+    WHERE v.status='done' AND v.tip>0 AND v.date BETWEEN ? AND ? ORDER BY v.date, v.time, v.id`).all(from, to);
+  const tipBy = new Map();
+  for (const t of tipRows) {
+    const m = /trả dư ([\d.]+) → tip chung/.exec(t.note || '');
+    const auto = m ? Number(m[1].replace(/\./g, '')) : 0;
+    if (!tipBy.has(t.date)) tipBy.set(t.date, []);
+    tipBy.get(t.date).push({ id: t.id, code: t.code, time: t.time, tip: t.tip, customer: t.customer_name, staff: t.staff_name,
+      source: t.import_ref ? 'sổ' : 'app', auto_extra: Math.min(auto, t.tip) });
+  }
   const days = tipDays.map((d) => {
     const present = members.filter((m) => !fullOff.has(`${m.id}|${d.date}`)).map((m) => m.id);
     const absent = members.filter((m) => fullOff.has(`${m.id}|${d.date}`)).map((m) => m.id);
@@ -47,7 +59,7 @@ function tipReport(month) {
     if (!present.length) unallocated += d.tip;
     for (const id of present) { const p = per.get(id); p.exact += share; p.days_shared++; }
     for (const id of absent) per.get(id).days_off++;
-    return { date: d.date, tip: d.tip, visits: d.n, present, absent, share: Math.round(share),
+    return { date: d.date, tip: d.tip, visits: d.n, present, absent, share: Math.round(share), list: tipBy.get(d.date) || [],
       partial: members.filter((m) => partOff.has(`${m.id}|${d.date}`)).map((m) => m.id),
       no_checkin: usesAttendance ? present.filter((id) => !checked.has(`${id}|${d.date}`)) : [] };
   });
