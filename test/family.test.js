@@ -528,3 +528,11 @@ test('khách trả thiếu: ghi nợ, thu nợ ngày sau tính tiền vào ngày
   assert.equal(L.salesReport(d, d, { role: 'owner' }).summary.unpaid, 0);
   assert.equal((await o.get('/customers/' + cid)).data.debt, 0);
 });
+
+test('đặt lịch khách mới mà SĐT đã có → gắn vào khách cũ', async () => {
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const cid = (await o.post('/customers', { name: 'Anh Có SĐT', phone: '0912345670' })).data.id;
+  const id = (await o.post('/appointments', { guest_name: 'anh sdt', guest_phone: '0912 345 670', date: '2026-12-20', time: '10:00', service: 'Cắt' })).data.id;
+  const a = db.prepare('SELECT customer_id, guest_name FROM appointments WHERE id=?').get(id);
+  assert.equal(a.customer_id, cid); assert.equal(a.guest_name, null);
+});

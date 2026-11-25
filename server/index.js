@@ -410,8 +410,14 @@ function offWarning(a) {
 function apptInput(b) {
   if (!L.isDate(b.date)) throw bad('Chọn ngày hẹn');
   if (!/^\d{2}:\d{2}$/.test(String(b.time || ''))) throw bad('Chọn giờ hẹn');
-  const customerId = int(b.customer_id) || null;
+  let customerId = int(b.customer_id) || null;
   const guestName = str(b.guest_name);
+  // Gõ SĐT khách mới mà SĐT đã có trong danh bạ → gắn luôn vào khách cũ (dịch vụ vào đúng hồ sơ)
+  if (!customerId && b.guest_phone) {
+    const p = L.normPhone(b.guest_phone);
+    const hit = p && /^0\d{9,10}$/.test(p) ? db.prepare('SELECT id FROM customers WHERE phone=? AND deleted=0 ORDER BY id LIMIT 1').get(p) : null;
+    if (hit) customerId = hit.id;
+  }
   if (!customerId && !guestName) throw bad('Chọn khách hoặc nhập tên khách mới');
   const status = ['booked', 'arrived', 'done', 'cancelled', 'noshow'].includes(b.status) ? b.status : 'booked';
   return { customer_id: customerId, guest_name: customerId ? null : guestName, guest_phone: customerId ? null : L.normPhone(b.guest_phone),
@@ -930,6 +936,12 @@ if (require.main === module) {
   try { const n = db.prepare(`UPDATE appointments SET pay_note=(SELECT v.payment_method FROM visits v WHERE v.id=appointments.visit_id)
       WHERE pay_note='Chưa thanh toán' AND visit_id IN (SELECT id FROM visits WHERE status='done' AND payment_method IS NOT NULL AND payment_method<>'')`).run().changes;
     if (n) console.log(`Đã sửa ${n} lịch bị báo chưa thanh toán dù đã thu`); } catch (e) { console.error('Sửa lịch đã thu lỗi:', e.message); }
+  // Lịch cũ ghi "khách mới" nhưng SĐT đã có trong danh bạ → gắn vào khách cũ
+  try {
+    const n = db.prepare(`UPDATE appointments SET customer_id=(SELECT c.id FROM customers c WHERE c.phone=appointments.guest_phone AND c.deleted=0 ORDER BY c.id LIMIT 1), guest_name=NULL, guest_phone=NULL
+      WHERE customer_id IS NULL AND guest_phone IS NOT NULL AND EXISTS (SELECT 1 FROM customers c WHERE c.phone=appointments.guest_phone AND c.deleted=0)`).run().changes;
+    if (n) console.log(`Đã gắn ${n} lịch hẹn vào khách có sẵn theo SĐT`);
+  } catch (e) { console.error('Gắn lịch theo SĐT lỗi:', e.message); }
   try { const n = require('./importer').mergeSameVisits(); if (n) console.log(`Đã gộp ${n} lượt cùng khách làm cùng lúc / trùng lượt ghi tay`); } catch (e) { console.error('Gộp lượt lỗi:', e.message); }
   try { const n = require('./importer').closeUsedGifts(); if (n) console.log(`Đã đóng ${n} thẻ tri ân đã dùng 1 lần`); } catch (e) { console.error('Đóng thẻ tri ân lỗi:', e.message); }
   try { const n = require('./importer').dedupeVisits(); if (n) console.log(`Đã dọn ${n} lượt làm trùng do sổ sửa chữ`); } catch (e) { console.error('Dọn lượt trùng lỗi:', e.message); }
