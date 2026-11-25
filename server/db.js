@@ -222,6 +222,7 @@ const DEFAULT_SETTINGS = {
   qr_bank: '', // mã ngân hàng cho QR chuyển khoản (VD: VCB, TCB, MB, 970436)
   qr_account: '',
   qr_name: '',
+  formula_stock_from: '2026-11-01', // tự trừ kho theo công thức thợ ghi cho lượt từ ngày này (chỉ lượt sau lần kiểm kho gần nhất)
   book_money_until: '2026-12-01', // từ ngày này: sổ đặt lịch chỉ lấy LỊCH HẸN, tiền tính trên app (trống = vẫn lấy tiền từ sổ)
 };
 // Nâng cấp CSDL cũ: thêm cột cho lịch hẹn (lý do hủy, ai hủy, đã mời đặt lại)

@@ -13,6 +13,7 @@ const { parseFormula } = require('../public/formula.js');
 // của khách cập nhật trong 10 ngày sau lượt) × giá nhập bình quân → không có thì ước theo % giá dịch vụ.
 function headCost(from, to, rate) {
   const stock = require('./stock');
+  try { stock.syncFormulaUse(true); } catch (e) { console.error('Tự trừ kho theo công thức lỗi:', e.message); }
   const mats = db.prepare('SELECT id, name, kind, size, size_unit, formula_keys, formula_default, active FROM materials').all();
   const byId = new Map(mats.map((m) => [m.id, m]));
   const cache = new Map();
@@ -20,7 +21,7 @@ function headCost(from, to, rate) {
   const rows = db.prepare(`SELECT v.id, v.code, v.date, v.time, v.formula, c.name customer, c.formula cformula, c.formula_at, u.full_name staff,
       (SELECT SUM(price) FROM visit_items WHERE visit_id=v.id AND grp='Hóa chất') chem,
       (SELECT GROUP_CONCAT(name, ' + ') FROM visit_items WHERE visit_id=v.id AND grp='Hóa chất') svc,
-      (SELECT SUM(-qty*unit_cost) FROM stock_moves WHERE visit_id=v.id AND kind='use') used
+      (SELECT SUM(-qty*unit_cost) FROM stock_moves WHERE visit_id=v.id AND kind='use' AND (note IS NULL OR note<>'Tự trừ theo công thức')) used
     FROM visits v JOIN customers c ON c.id=v.customer_id LEFT JOIN users u ON u.id=v.main_staff_id
     WHERE v.status='done' AND v.date BETWEEN ? AND ? AND EXISTS (SELECT 1 FROM visit_items WHERE visit_id=v.id AND grp='Hóa chất')
     ORDER BY v.date, v.time`).all(from, to);

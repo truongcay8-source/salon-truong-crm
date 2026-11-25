@@ -298,7 +298,10 @@ app.put('/api/customers/:id', (req, res) => {
   db.prepare('UPDATE customers SET cycle_days=?, cycle_call=?, cycle_note=? WHERE id=?').run(c.cycle_days, c.cycle_call, c.cycle_note, id);
   // Người nhà chủ (giảm 50%, không tính thưởng): chỉ Lãnh đạo đặt
   if (req.user.role === 'owner' && 'owner_family' in req.body) db.prepare('UPDATE customers SET owner_family=? WHERE id=?').run([true, '1', 'on', 1].includes(req.body.owner_family) ? 1 : 0, id);
-  if ((before.formula || null) !== (c.formula || null)) db.prepare('UPDATE customers SET formula_at=?, formula_by=? WHERE id=?').run(today(), req.user.id, id);
+  if ((before.formula || null) !== (c.formula || null)) {
+    db.prepare('UPDATE customers SET formula_at=?, formula_by=? WHERE id=?').run(today(), req.user.id, id);
+    try { require('./stock').syncFormulaUse(true); } catch (e) { console.error('Tự trừ kho theo công thức lỗi:', e.message); }
+  }
   const changed = {};
   for (const k of Object.keys(c)) if ((before[k] || null) !== (c[k] || null)) changed[k] = [before[k], c[k]];
   audit(req.user.id, 'update_customer', 'customer', id, { changes: changed });
