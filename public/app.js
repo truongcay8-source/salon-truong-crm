@@ -2277,6 +2277,15 @@ VIEWS.sales = async (main) => {
     x.product_commission = x.product_commission || 0;
     x.service_commission = x.main_commission - x.product_commission;
   }
+  const showUnpaid = () => {
+    const L = s.unpaid_list;
+    openModal(`Chưa thu ${money(s.unpaid)} · ${L.length} lượt`, `<div class="small muted" style="margin-bottom:8px">Bấm tên khách mở phiếu. Khách đã trả: mở phiếu, chọn hình thức thanh toán (hoặc bấm Thu nợ ở Thu ngân) rồi lưu.</div>
+      <div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Khách</th><th>Thợ</th><th class="num">Chưa thu</th><th>Nguồn</th></tr></thead><tbody>
+      ${L.map((x) => `<tr><td>${dmy(x.date)} ${esc(x.time || '')}</td><td><a href="#" data-uv="${x.id}">${esc(x.name || x.code)}</a>${x.phone ? `<div class="small muted">${esc(x.phone)}</div>` : ''}</td><td>${esc(x.staff || '')}</td>
+        <td class="num"><b>${money(x.amount)}</b>${x.amount !== x.total ? `<div class="small muted">/ ${money(x.total)}</div>` : ''}</td><td class="small">${esc(x.kind)}</td></tr>`).join('')}
+      <tr><td colspan="3"><b>Tổng</b></td><td class="num"><b>${money(L.reduce((t, x) => t + x.amount, 0))}</b></td><td></td></tr></tbody></table></div>`);
+    $$('[data-uv]').forEach((a) => (a.onclick = async (e) => { e.preventDefault(); visitForm(await api('/visits/' + a.dataset.uv), () => VIEWS.sales(main)); }));
+  };
   main.innerHTML = header('Doanh số & hoa hồng', isMgr() ? 'Toàn tiệm' : 'Chỉ hiển thị số liệu của bạn') +
     `<div class="card"><div class="row"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="t" value="${to}" style="width:auto">
       <button class="btn sm" data-p="today">Hôm nay</button><button class="btn sm" data-p="month">Tháng này</button><button class="btn sm" data-p="last">Tháng trước</button><button class="btn sm" data-p="all">Từ khai trương</button></div></div>
@@ -2289,7 +2298,7 @@ VIEWS.sales = async (main) => {
       <div class="kpi"><div class="l">✂️ Doanh thu dịch vụ</div><div class="v">${money(svcNet)}</div><div class="s">${s.visits} lượt</div></div>
       <div class="kpi"><div class="l">🧴 Bán sản phẩm</div><div class="v">${money(s.product_sales)}</div></div>
       <div class="kpi"><div class="l">💳 Bán thẻ</div><div class="v">${money(s.card_sales)}</div></div>
-      <div class="kpi"><div class="l">💰 Tiền vào thực tế</div><div class="v">${money(s.money_in)}</div>${s.unpaid ? `<div class="s" style="color:var(--bad)">chưa thu ${money(s.unpaid)}</div>` : ''}</div></div>
+      <div class="kpi"><div class="l">💰 Tiền vào thực tế</div><div class="v">${money(s.money_in)}</div>${s.unpaid ? `<div class="s"><a href="#" id="unpaidL" style="color:var(--bad)">chưa thu ${money(s.unpaid)} · xem ${s.unpaid_list.length} lượt ›</a></div>` : ''}</div></div>
       <details class="card sales-more"><summary><b>Chi tiết</b> <span class="small muted">giảm giá · thẻ tri ân · trả bằng thẻ · tip · hình thức trả</span></summary>
         <div class="sales-cols"><div>
           ${line('Giảm giá đã cho khách', money(s.discounts), 'đã trừ sẵn trong doanh thu')}
@@ -2336,6 +2345,7 @@ VIEWS.sales = async (main) => {
   const set = (a, b) => go('sales', { from: a, to: b });
   $$('[data-sl]', main).forEach((a) => (a.onclick = (e) => { e.preventDefault(); salesLines(from, to, Number(a.dataset.sl), a.dataset.g, () => VIEWS.sales(main)); }));
   $('#f').onchange = (e) => set(e.target.value, to); $('#t').onchange = (e) => set(from, e.target.value);
+  if ($('#unpaidL')) $('#unpaidL').onclick = (e) => { e.preventDefault(); showUnpaid(); };
   $$('[data-p]').forEach((b) => (b.onclick = () => {
     const t = S.today;
     if (b.dataset.p === 'today') set(t, t);
