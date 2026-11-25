@@ -600,3 +600,26 @@ test('tự trừ kho theo công thức thợ ghi (lượt chưa ghi hóa chất)
   st.syncFormulaUse(true);
   assert.equal(stock(), 1.25);
 });
+
+test('chi: nguồn tiền (quỹ / nhân viên ứng / chủ trả), hoàn ứng, chia tháng vào lãi lỗ', async () => {
+  const E = require('../server/expenses');
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const b0 = E.fundState().balance;
+  const d = '2025-06-10';
+  const mk = async (x) => (await o.post('/expenses', { kind: 'out', category: 'Khác', date: d, ...x })).data;
+  await mk({ amount: 100000, note: 'nước' });
+  const st = await mk({ amount: 200000, note: 'khăn – Thu mua hộ', source: 'staff', pay_method: 'Chuyển khoản' });
+  await mk({ amount: 1200000, note: 'Canva 1 năm', source: 'owner', spread_months: 12 });
+  assert.equal(E.fundState().balance, b0 - 100000, 'chỉ khoản lấy TM tại tiệm trừ quỹ');
+  assert.equal(E.fundState().reimburse_due.reduce((a, x) => a + x.amount, 0), 200000);
+  assert.equal((await o.post(`/expenses/${st.id}/reimburse`, { method: 'fund' })).status, 200);
+  assert.equal(E.fundState().balance, b0 - 300000, 'hoàn ứng bằng TM tại tiệm trừ quỹ');
+  assert.equal(E.fundState().reimburse_due.length, 0);
+  const share = (m) => E.monthExpenses(m).reduce((a, x) => a + x.share, 0);
+  assert.equal(share('2025-06'), 100000 + 200000 + 100000);
+  assert.equal(share('2025-07'), 100000);
+  assert.equal(share('2026-05'), 100000);
+  assert.equal(share('2026-06'), 0);
+  const fin = require('../server/finance').report('2025-06');
+  assert.equal(fin.fund.total, 400000); assert.equal(fin.cash.fund, 1500000);
+});

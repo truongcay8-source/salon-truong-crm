@@ -131,9 +131,15 @@ function report(month) {
   const noParams = pr.rows.filter((r) => !r.has_params).map((r) => r.name);
 
   // 4) Chi quỹ tiền mặt đã duyệt (nước uống, giặt khăn, sửa nhỏ…)
-  const fundRows = db.prepare(`SELECT COALESCE(category,'Khác') category, SUM(amount) amount FROM expenses
-    WHERE kind='out' AND status='approved' AND date BETWEEN ? AND ? GROUP BY 1 ORDER BY 2 DESC`).all(from, to);
+  // Mọi nguồn tiền (quỹ tại tiệm, nhân viên ứng, chủ trả cá nhân) đều là chi phí tiệm; khoản chia N tháng chỉ lấy phần của tháng này
+  const mexp = require('./expenses').monthExpenses(month);
+  const catMap = {};
+  for (const e of mexp) catMap[e.category || 'Khác'] = (catMap[e.category || 'Khác'] || 0) + e.share;
+  const fundRows = Object.entries(catMap).map(([category, amount]) => ({ category, amount })).sort((a, b) => b.amount - a.amount);
   const fund = fundRows.reduce((a, r) => a + r.amount, 0);
+  const spreadRows = mexp.filter((e) => e.spread_months > 1).map((e) => ({ id: e.id, date: e.date, note: String(e.note || '').replace(/ · từ sổ đặt lịch$/, ''), amount: e.amount, months: e.spread_months, share: e.share }));
+  // Dòng tiền: tiền thật chi ra trong tháng (cả khoản chia tháng tính đủ ngày trả)
+  const fundCash = db.prepare(`SELECT COALESCE(SUM(amount),0) s FROM expenses WHERE kind='out' AND status='approved' AND date BETWEEN ? AND ?`).get(from, to).s;
   // Khoản chi quỹ dễ bị TRÙNG với chi phí cố định (điện, internet, phần mềm, tiền nhà) hoặc KHÔNG phải chi phí (đổi tiền, ứng lương)
   const fundFlags = db.prepare(`SELECT id, date, amount, note FROM expenses WHERE kind='out' AND status='approved' AND date BETWEEN ? AND ?`).all(from, to)
     .filter((e) => /điện|internet|wifi|youtube|youtobe|canva|capcut|phần mềm|tiền nhà|thuê nhà|đổi tiền|ứng lương|rút tiền/i.test(e.note || ''))
@@ -160,7 +166,7 @@ function report(month) {
 
   // Dòng tiền tháng: tiền khách trả (DV + SP + bán thẻ) − tiền chi thật
   const purchases = Math.round(db.prepare(`SELECT COALESCE(SUM(qty*unit_cost),0) c FROM stock_moves WHERE kind='in' AND date BETWEEN ? AND ?`).get(from, to).c);
-  const cashOut = payTotal + fund + (fixedTotal - depreciation) + purchases;
+  const cashOut = payTotal + fundCash + (fixedTotal - depreciation) + purchases;
 
   return {
     month, from, to, locked_payroll: !!pr.locked, rates,
@@ -170,10 +176,10 @@ function report(month) {
     gross, gross_pct: revenue ? gross / revenue : 0, head_cost: hc,
     payroll: { fixed: payFixed, variable: payVar, plus_minus: plusMinus, total: payTotal, people: pr.rows.length, no_params: noParams,
       base: T.base, allowance: T.allowance, commission: T.commission, bonus: T.bonus, kpi: T.kpi, floor_topup: T.floor_topup },
-    fund: { total: fund, rows: fundRows, flags: fundFlags },
+    fund: { total: fund, rows: fundRows, flags: fundFlags, spread: spreadRows, by_source: mexp.reduce((m, e) => ((m[e.source || 'fund'] = (m[e.source || 'fund'] || 0) + e.share), m), {}) },
     fixed: { rows: fixed, total: fixedTotal, depreciation },
     opex, profit, profit_pct: revenue ? profit / revenue : 0, ebitda, breakeven,
-    cash: { in_service: S.service_cash, in_cards: S.card_sales, in_total: S.money_in, payroll: payTotal, fund, fixed: fixedTotal - depreciation, purchases, out_total: cashOut, net: S.money_in - cashOut },
+    cash: { in_service: S.service_cash, in_cards: S.card_sales, in_total: S.money_in, payroll: payTotal, fund: fundCash, fixed: fixedTotal - depreciation, purchases, out_total: cashOut, net: S.money_in - cashOut },
   };
 }
 

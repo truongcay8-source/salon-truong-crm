@@ -814,10 +814,11 @@ function dayMoneyCard(M, est) {
       <div class="kpi"><div class="l">Thực thu (sau trừ thẻ)</div><div class="v">${money(M.real)}</div><div class="s">${minus.length ? minus.map(([v, l]) => `− ${l} ${money(v)}`).join('<br>') : 'không trừ thẻ'}</div></div>
       <div class="kpi"><div class="l">💵 Tiền mặt</div><div class="v">${money(sumK(by, cashK) + cashTip)}</div><div class="s">${cashTip ? `gồm tip ${money(cashTip)}` : 'không có tip'}</div></div>
       <div class="kpi"><div class="l">🏦 Chuyển khoản</div><div class="v">${money(sumK(by, ckK) + ckTip)}</div><div class="s">${ckTip ? `gồm tip ${money(ckTip)}` : 'không có tip'}</div></div>
-      <div class="kpi"><div class="l">Chi trong ngày</div><div class="v">${money(M.expense_total)}</div><div class="s">${M.expenses.length} khoản</div></div></div>
+      <div class="kpi"><div class="l">Chi trong ngày</div><div class="v">${money(M.expense_total)}</div><div class="s">${M.expense_shop_cash !== M.expense_total ? `TM tại tiệm ${money(M.expense_shop_cash)} · nguồn khác ${money(M.expense_total - M.expenses.filter((e) => e.source === 'fund').reduce((t, e) => t + e.amount, 0))}` : `${M.expenses.length} khoản, lấy TM tại tiệm`}</div></div></div>
     <div class="small" style="margin-top:8px;display:grid;gap:4px">
       <div>💝 <b>Tip ${money(M.tips)}</b>: ${M.tip_list.length ? M.tip_list.map((t) => `<a href="#" data-dmv="${t.id}">${esc(t.name)}</a> ${money(t.tip)} <span class="muted">(${esc(/mặt/i.test(t.method) ? 'TM' : /khoản|ck/i.test(t.method) ? 'CK' : t.method)})</span>`).join(' · ') : '<span class="muted">không có</span>'}</div>
-      <div>🧾 <b>Chi ${money(M.expense_total)}</b>: ${M.expenses.length ? M.expenses.map((e) => `${esc((e.note || e.category || 'Chi').replace(/ · từ sổ đặt lịch$/, ''))} ${money(e.amount)}${e.status === 'pending' ? ' <span class="muted">(chờ duyệt)</span>' : ''}`).join(' · ') : '<span class="muted">không có</span>'}</div>
+      <div>🧾 <b>Chi ${money(M.expense_total)}</b>: ${M.expenses.length ? M.expenses.map((e) => `${esc((e.note || e.category || 'Chi').replace(/ · từ sổ đặt lịch$/, ''))} ${money(e.amount)}${e.source !== 'fund' ? ` <span class="muted">(${e.source === 'staff' ? esc(e.by_name || 'NV') + ' ứng' : 'chủ trả'})</span>` : ''}${e.spread_months > 1 ? ` <span class="muted">(chia ${e.spread_months} th)</span>` : ''}${e.status === 'pending' ? ' <span class="muted">(chờ duyệt)</span>' : ''}`).join(' · ') : '<span class="muted">không có</span>'}${M.reimbursed.length ? ` · hoàn ứng TM: ${M.reimbursed.map((x) => `${esc(x.by_name || '')} ${money(x.amount)}`).join(', ')}` : ''}</div>
+      <div>💵 <b>Tiền mặt sau chi: ${money(sumK(by, cashK) + cashTip - M.expense_shop_cash)}</b> <span class="muted">= TM thu ${money(sumK(by, cashK) + cashTip)} − chi lấy TM tại tiệm ${money(M.expense_shop_cash)}</span></div>
       ${other.length || extra || est ? `<div class="muted">${[other.map(([k, v]) => `${esc(k)} ${money(v)}`).join(' · '), extra, est ? `lịch chưa thu dự kiến ~${money(est)}` : ''].filter(Boolean).join(' · ')}</div>` : ''}
     </div></div>`;
 }
@@ -1078,19 +1079,24 @@ VIEWS.chat = async (main) => {
 
 // ---------- Chi trong ngày + quỹ tiền mặt ----------
 const EXP_ST = { pending: ['Chờ duyệt', 'warn'], approved: ['Đã duyệt', 'ok'], rejected: ['Không duyệt', 'bad'] };
+const EXP_SRC = { fund: '💵 TM tại tiệm', staff: '👤 Nhân viên ứng', owner: '🏠 Chủ trả' };
 VIEWS.expenses = async (main) => {
   const from = S.params.from || S.today, to = S.params.to || from;
   const r = await api(`/expenses?from=${from}&to=${to}`);
   const reload = () => VIEWS.expenses(main);
   const pct = Math.max(0, Math.min(100, Math.round((r.balance / r.target) * 100)));
   const row = (e) => `<div class="list-item exp-row ${e.status === 'rejected' ? 'rej' : ''}"><div style="flex:1;min-width:0">
-      <div>${e.kind === 'in' ? '<b class="ok-text">+ Nạp quỹ</b>' : `<b>${esc(e.note || '')}</b>`} <span class="badge">${esc(e.category || '')}</span>${e.kind === 'out' ? ` <span class="badge ${EXP_ST[e.status][1]}">${EXP_ST[e.status][0]}</span>` : ''}${e.status === 'rejected' && !e.refunded ? ' <span class="badge bad">chưa hoàn quỹ</span>' : ''}</div>
+      <div>${e.kind === 'in' ? '<b class="ok-text">+ Nạp quỹ</b>' : `<b>${esc(e.note || '')}</b>`} <span class="badge">${esc(e.category || '')}</span>${e.kind === 'out' ? ` <span class="badge ${EXP_ST[e.status][1]}">${EXP_ST[e.status][0]}</span>` : ''}${e.status === 'rejected' && !e.refunded && (e.source || 'fund') === 'fund' ? ' <span class="badge bad">chưa hoàn quỹ</span>' : ''}
+        ${e.kind === 'out' && e.source && e.source !== 'fund' ? ` <span class="badge">${EXP_SRC[e.source]}${e.pay_method ? ' · ' + (/chuy/i.test(e.pay_method) ? 'CK' : 'TM') : ''}</span>` : ''}${e.spread_months > 1 ? ` <span class="badge">chia ${e.spread_months} tháng · ${money(Math.round(e.amount / e.spread_months))}/th</span>` : ''}
+        ${e.source === 'staff' && e.status === 'approved' ? (e.reimbursed_at ? ` <span class="badge ok">Đã hoàn ứng ${dmy(e.reimbursed_at)} · ${esc(r.reimburse_methods[e.reimburse_method] || '')}</span>` : ' <span class="badge warn">chờ hoàn ứng</span>') : ''}</div>
       <div class="small muted">${dmy(e.date)} ${esc(e.created_at.slice(11, 16))} · ${esc(e.by_name || '')}${e.kind === 'in' && e.note ? ' · ' + esc(e.note) : ''}${e.decided_by_name && e.kind === 'out' && e.status !== 'pending' ? ` · ${e.status === 'approved' ? 'duyệt' : 'từ chối'} bởi ${esc(e.decided_by_name)}` : ''}${e.reason ? ' · Lý do: ' + esc(e.reason) : ''}</div>
       ${e.photo ? `<a href="/api/expenses/${e.id}/photo" target="_blank" class="small">🧾 Xem hóa đơn</a>` : ''}</div>
     <div style="text-align:right"><div class="${e.kind === 'in' ? 'ok-text' : ''}"><b>${e.kind === 'in' ? '+' : '−'}${money(e.amount)}</b></div>
       <div class="row" style="justify-content:flex-end;margin-top:4px">${r.can_decide && e.kind === 'out' && e.status !== 'approved' ? `<button class="btn sm primary" data-ok="${e.id}">✓ Duyệt</button>` : ''}
       ${r.can_decide && e.kind === 'out' && e.status !== 'rejected' ? `<button class="btn sm" data-no="${e.id}">✕ Không duyệt</button>` : ''}
-      ${r.can_decide && e.status === 'rejected' && !e.refunded ? `<button class="btn sm" data-rf="${e.id}">Đã hoàn quỹ</button>` : ''}
+      ${r.can_decide && e.status === 'rejected' && !e.refunded && (e.source || 'fund') === 'fund' ? `<button class="btn sm" data-rf="${e.id}">Đã hoàn quỹ</button>` : ''}
+      ${r.can_decide && e.source === 'staff' && e.status === 'approved' && !e.reimbursed_at ? `<button class="btn sm primary" data-rb="${e.id}">Hoàn ứng</button>` : ''}
+      ${r.can_decide && e.kind === 'out' ? `<button class="btn sm" data-ee="${e.id}" title="Nguồn tiền / chia tháng">⚙</button>` : ''}
       ${(r.can_decide || (e.created_by === S.me.id && e.status === 'pending')) ? `<button class="btn sm" data-del="${e.id}" title="Xóa">🗑</button>` : ''}</div></div></div>`;
   main.innerHTML = header('Chi & quỹ tiền mặt', `Quỹ để ở tiệm ${money(r.target)} · ai mua gì thì ghi lại, quản lý trở lên duyệt`,
     `<button class="btn primary" id="addE">+ Ghi khoản chi</button>${r.can_decide ? '<button class="btn" id="topE">+ Nạp quỹ</button>' : ''}`) +
@@ -1098,10 +1104,14 @@ VIEWS.expenses = async (main) => {
       <div class="kpi"><div class="l">Quỹ còn (sổ sách)</div><div class="v ${r.balance < r.target * 0.3 ? 'bad-text' : ''}">${money(r.balance)}</div><div class="fund-bar"><span style="width:${pct}%"></span></div><div class="s">${r.need_topup ? `cần nạp thêm <b>${money(r.need_topup)}</b> để đủ ${money(r.target)}` : 'đủ quỹ'}</div></div>
       <div class="kpi"><div class="l">Chi ${from === to ? (from === S.today ? 'hôm nay' : dmy(from)) : 'trong kỳ'}</div><div class="v">${money(r.total_out)}</div><div class="s">${r.rows.filter((x) => x.kind === 'out').length} khoản (không tính khoản bị từ chối)</div></div>
       <div class="kpi"><div class="l">Chờ duyệt</div><div class="v">${r.pending_count}</div><div class="s">${money(r.pending_amount)}</div></div>
+      ${r.reimburse_due.length ? `<div class="kpi"><div class="l">Tiệm nợ nhân viên (chờ hoàn ứng)</div><div class="v warn-text">${money(r.reimburse_due.reduce((a, x) => a + x.amount, 0))}</div><div class="s">${r.reimburse_due.map((x) => esc(x.name) + ' ' + money(x.amount)).join(', ')}</div></div>` : ''}
       ${r.refund_due.length ? `<div class="kpi"><div class="l">Phải hoàn lại quỹ</div><div class="v bad-text">${money(r.refund_due.reduce((a, x) => a + x.amount, 0))}</div><div class="s">${r.refund_due.map((x) => esc(x.name) + ' ' + money(x.amount)).join(', ')}</div></div>` : ''}</div>
     <div class="card"><div class="row"><input type="date" id="ef" value="${from}" style="width:auto"> → <input type="date" id="et" value="${to}" style="width:auto">
       <button class="btn sm" data-p="today">Hôm nay</button><button class="btn sm" data-p="yest">Hôm qua</button><button class="btn sm" data-p="month">Tháng này</button>
       ${r.can_decide ? `<span class="spacer"></span><a class="btn sm" href="/api/expenses/export?from=${from}&to=${to}" download>📥 Xuất Excel</a><button class="btn sm" id="tgE">Đổi mức quỹ</button>` : ''}</div></div>
+    ${r.reimburse_list.length ? `<div class="card"><h3>👤 Chờ hoàn ứng cho nhân viên (${r.reimburse_list.length})</h3>${r.reimburse_list.map(row).join('')}</div>` : ''}
+    ${r.spread_list.length ? `<details class="card"><summary><b>📆 Khoản đang chia tháng (${r.spread_list.length})</b> <span class="small muted">còn phân bổ ${money(r.spread_list.reduce((a, x) => a + x.left, 0))}</span></summary>
+      ${r.spread_list.map((x) => `<div class="stat-line"><span>${esc(String(x.note || '').replace(/ · từ sổ đặt lịch$/, ''))} <span class="small muted">${dmy(x.date)} · ${money(x.amount)} ÷ ${x.spread_months} tháng</span></span><b>${money(x.per_month)}/th · còn ${x.months_left} th</b></div>`).join('')}</details>` : ''}
     ${r.older_pending.length ? `<div class="card"><h3>⏳ Khoản chờ duyệt từ ngày khác (${r.older_pending.length})</h3>${r.older_pending.map(row).join('')}</div>` : ''}
     <div class="grid two"><div class="card"><h3>Các khoản</h3>${r.rows.map(row).join('') || '<div class="empty">Chưa có khoản chi nào</div>'}</div>
       <div class="card"><h3>Theo loại</h3>${Object.entries(r.by_category).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="stat-line"><span>${esc(k)}</span><b>${money(v)}</b></div>`).join('') || '<div class="empty">—</div>'}
@@ -1112,15 +1122,32 @@ VIEWS.expenses = async (main) => {
   const form = (kind) => {
     openModal(kind === 'in' ? 'Nạp tiền vào quỹ' : 'Ghi khoản chi', `<form id="xf"><div class="form-grid">
       ${kind === 'out' ? `<div class="full"><label>Mua gì / chi việc gì *</label><input name="note" required placeholder="VD: 2 thùng nước suối, gửi xe…"></div>
-      <div><label>Loại</label><select name="category">${r.categories.map((c) => `<option>${esc(c)}</option>`).join('')}</select></div>` : '<div class="full"><label>Ghi chú</label><input name="note" placeholder="VD: nạp đủ quỹ đầu tuần"></div>'}
+      <div><label>Loại</label><select name="category">${r.categories.map((c) => `<option>${esc(c)}</option>`).join('')}</select></div>
+      <div class="full"><label>Tiền lấy từ đâu?</label><div class="row" style="gap:6px">
+        <label class="chk"><input type="radio" name="source" value="fund" checked> 💵 Lấy TM tại tiệm</label>
+        <label class="chk"><input type="radio" name="source" value="staff"> 👤 Tôi tự ứng trước (tiệm hoàn lại)</label>
+        ${isMgr() ? '<label class="chk"><input type="radio" name="source" value="owner"> 🏠 Chủ trả cá nhân</label>' : ''}</div>
+        <div id="pmW" style="display:none;margin-top:6px"><select name="pay_method" style="width:auto"><option>Tiền mặt</option><option>Chuyển khoản</option></select> <span class="small muted">trả bằng</span></div></div>
+      ${isMgr() ? `<div><label>Tính chi phí cho</label><select name="spread_months">${[[1, 'Hết vào tháng này'], [3, 'Chia 3 tháng'], [6, 'Chia 6 tháng'], [12, 'Chia 12 tháng (trả theo năm)'], [24, 'Chia 24 tháng (đồ dùng lâu)'], [36, 'Chia 36 tháng']].map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select><div class="small muted" id="spTxt"></div></div>` : ''}`
+      : '<div class="full"><label>Ghi chú</label><input name="note" placeholder="VD: nạp đủ quỹ đầu tuần"></div>'}
       <div><label>Số tiền *</label><input name="amount" inputmode="numeric" required placeholder="${kind === 'in' ? r.need_topup || 1000000 : '50000'}" value="${kind === 'in' && r.need_topup ? r.need_topup : ''}"><div class="small muted" id="amtTxt"></div></div>
       ${isMgr() ? `<div><label>Ngày</label><input type="date" name="date" value="${S.today}"></div>` : ''}
       ${kind === 'out' ? '<div class="full"><label>📷 Ảnh hóa đơn (nếu có)</label><input type="file" name="photo" accept="image/*" capture="environment"></div>' : ''}</div>
-      ${kind === 'out' && !isMgr() ? '<div class="small muted">Khoản chi sẽ chờ quản lý duyệt.</div>' : ''}
+      ${kind === 'out' && !isMgr() ? '<div class="small muted">Khoản chi sẽ chờ quản lý duyệt. Chọn "Tôi tự ứng trước" nếu bạn trả bằng tiền/CK của mình – tiệm sẽ hoàn lại.</div>' : ''}
       <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu</button></div></form>`);
     const amt = $('#xf [name=amount]');
     const show = () => { const v = Number(amt.value.replace(/\D/g, '')); $('#amtTxt').textContent = v ? money(v) : ''; };
-    amt.oninput = show; show();
+    const sp = $('#xf [name=spread_months]');
+    const spShow = () => { if (!sp) return; const v = Number(amt.value.replace(/\D/g, '')), n = Number(sp.value); $('#spTxt').textContent = n > 1 && v ? `≈ ${money(Math.round(v / n))}/tháng trong ${n} tháng` : ''; };
+    amt.oninput = () => { show(); spShow(); }; show();
+    if (sp) { sp.onchange = spShow; const nt = $('#xf [name=note]'), ct = $('#xf [name=category]');
+      // Gợi ý: app/phần mềm trả năm → chia 12; xe đẩy, máy, ghế… → chia 24
+      const hint = () => { const t = (nt.value || '').toLowerCase(); if (sp.dataset.touched) return;
+        if (/năm|nam |1 năm|app|phần mềm|canva|capcut|youtube|tên miền/.test(t) || ct.value === 'Phần mềm / app') sp.value = '12';
+        else if (/xe đẩy|máy|ghế|gương|tủ|kệ|bồn|giường/.test(t) || ct.value === 'Dụng cụ, thiết bị') sp.value = Number(amt.value.replace(/\D/g, '')) >= 2000000 ? '24' : '1';
+        else sp.value = '1'; spShow(); };
+      sp.addEventListener('change', () => (sp.dataset.touched = '1')); nt.addEventListener('change', hint); ct.addEventListener('change', hint); amt.addEventListener('change', hint); }
+    $$('#xf [name=source]').forEach((x) => (x.onchange = () => ($('#pmW').style.display = $('#xf [name=source]:checked').value === 'fund' ? 'none' : '')));
     $('#xf').onsubmit = (e) => { e.preventDefault(); guard($('#xf button.primary'), async () => {
       const fd = new FormData($('#xf')); fd.append('kind', kind); fd.set('amount', amt.value.replace(/\D/g, ''));
       const ph = $('#xf [name=photo]'); if (ph && !ph.files.length) fd.delete('photo');
@@ -1134,6 +1161,26 @@ VIEWS.expenses = async (main) => {
   $$('[data-no]', main).forEach((b) => (b.onclick = () => { const why = prompt('Lý do không duyệt (người chi phải hoàn tiền lại quỹ):'); if (!why) return;
     guard(b, async () => { await api(`/expenses/${b.dataset.no}/decide`, { method: 'POST', body: { status: 'rejected', reason: why } }); refreshReminderBadge(); reload(); }); }));
   $$('[data-rf]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/expenses/${b.dataset.rf}/refunded`, { method: 'POST', body: {} }); reload(); })));
+  const allRows = [...r.rows, ...r.older_pending, ...r.reimburse_list];
+  $$('[data-rb]', main).forEach((b) => (b.onclick = () => {
+    const e = allRows.find((x) => x.id === Number(b.dataset.rb));
+    openModal('Hoàn ứng cho ' + esc(e.by_name || ''), `<div><b>${esc(e.note)}</b> · ${money(e.amount)}</div><div class="row" style="gap:6px;margin-top:10px">
+      ${Object.entries(r.reimburse_methods).map(([k, l]) => `<button class="btn ${k === 'fund' ? 'primary' : ''}" data-rbm="${k}">${esc(l)}</button>`).join('')}</div>
+      <div class="small muted" style="margin-top:8px">TM tại tiệm: trừ vào quỹ/két hôm nay. Cộng vào lương: nhớ nhập khoản này ở Bảng lương (ô cộng/trừ) khi chốt tháng.</div>`);
+    $$('[data-rbm]').forEach((x) => (x.onclick = () => guard(x, async () => { await api(`/expenses/${e.id}/reimburse`, { method: 'POST', body: { method: x.dataset.rbm } }); closeModal(); toast('Đã ghi hoàn ứng'); reload(); })));
+  }));
+  $$('[data-ee]', main).forEach((b) => (b.onclick = () => {
+    const e = allRows.find((x) => x.id === Number(b.dataset.ee));
+    openModal('Nguồn tiền / chia tháng', `<form id="eef"><div class="small"><b>${esc(e.note)}</b> · ${money(e.amount)} · ${dmy(e.date)}</div><div class="form-grid" style="margin-top:8px">
+      <div><label>Tiền lấy từ đâu</label><select name="source">${Object.entries(r.sources).map(([k, l]) => `<option value="${k}" ${(e.source || 'fund') === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
+      <div><label>Trả bằng</label><select name="pay_method"><option ${!/chuy/i.test(e.pay_method || '') ? 'selected' : ''}>Tiền mặt</option><option ${/chuy/i.test(e.pay_method || '') ? 'selected' : ''}>Chuyển khoản</option></select></div>
+      <div><label>Loại</label><select name="category">${r.categories.map((c) => `<option ${c === e.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
+      <div><label>Chia chi phí cho (tháng)</label><input type="number" name="spread_months" min="1" max="60" value="${e.spread_months || 1}"></div></div>
+      ${e.reimbursed_at ? `<div class="small" style="margin-top:6px">Đã hoàn ứng ${dmy(e.reimbursed_at)} <button type="button" class="btn sm" id="unRb">Bỏ đánh dấu hoàn ứng</button></div>` : ''}
+      <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu</button></div></form>`);
+    if ($('#unRb')) $('#unRb').onclick = () => guard($('#unRb'), async () => { await api(`/expenses/${e.id}/reimburse`, { method: 'POST', body: { undo: true } }); closeModal(); reload(); });
+    $('#eef').onsubmit = (ev) => { ev.preventDefault(); guard($('#eef button.primary'), async () => { await api('/expenses/' + e.id, { method: 'PUT', body: formData($('#eef')) }); closeModal(); toast('Đã lưu'); reload(); }); };
+  }));
   $$('[data-del]', main).forEach((b) => (b.onclick = () => { if (!confirm('Xóa khoản này?')) return; guard(b, async () => { await api('/expenses/' + b.dataset.del, { method: 'DELETE' }); refreshReminderBadge(); reload(); }); }));
 };
 
@@ -2438,7 +2485,8 @@ VIEWS.finance = async (main) => {
       ${row('− Lương cứng + phụ cấp + KPI', neg(P.base + P.allowance + P.kpi + P.floor_topup), '', P.floor_topup ? 'gồm bù sàn ' + money(P.floor_topup) : '')}
       ${row('− Hoa hồng + thưởng doanh số', neg(P.commission + P.bonus), '', 'theo Bảng lương, không tính tip')}
       ${P.plus_minus ? row('− Cộng/trừ khác trong lương', P.plus_minus > 0 ? neg(P.plus_minus) : money(-P.plus_minus)) : ''}
-      ${row('− Chi quỹ tiền mặt (đã duyệt)', neg(r.fund.total), '', r.fund.rows.map((x) => `${esc(x.category)} ${money(x.amount)}`).join(' · '))}
+      ${row('− Chi phát sinh (đã duyệt)', neg(r.fund.total), '', r.fund.rows.map((x) => `${esc(x.category)} ${money(x.amount)}`).join(' · ')
+        + (r.fund.spread && r.fund.spread.length ? `<br>chia tháng: ${r.fund.spread.map((x) => `${esc(x.note)} ${money(x.share)}/tháng (${money(x.amount)} ÷ ${x.months})`).join(' · ')}` : ''))}
       ${F.rows.map((f) => row('− ' + esc(f.name), neg(f.amount), '', [f.cash ? '' : 'không chi tiền', f.source === 'tháng này' ? 'riêng tháng này' : '', esc(f.note)].filter(Boolean).join(' · '))).join('')}
       ${row(`<b>(3) ${r.profit < 0 ? 'LỖ' : 'LÃI'} SAU MỌI CHI PHÍ</b>`, sign(r.profit), 'sum big')}
       ${row('Lãi/lỗ trước khấu hao', r.ebitda < 0 ? '−' + money(-r.ebitda) : money(r.ebitda), '', 'cộng lại khấu hao – gần với tiền thật kiếm được')}
@@ -2448,7 +2496,7 @@ VIEWS.finance = async (main) => {
       ${row('Tiền bán thẻ', money(K.in_cards), '', 'thu trước – khách sẽ dùng dịch vụ sau')}
       ${row('<b>Tiền vào</b>', `<b>${money(K.in_total)}</b>`, 'sum')}
       ${row('− Lương (không tip)', neg(K.payroll))}
-      ${row('− Chi quỹ', neg(K.fund))}
+      ${row('− Chi phát sinh', neg(K.fund), '', 'tiền thật trả trong tháng, kể cả khoản chia nhiều tháng')}
       ${row('− Chi phí cố định trả tiền', neg(K.fixed), '', 'tiền nhà tính đều 15tr/tháng')}
       ${row('− Nhập hàng trong tháng', neg(K.purchases))}
       ${row('<b>Tiền còn lại</b>', sign(K.net), 'sum big')}
