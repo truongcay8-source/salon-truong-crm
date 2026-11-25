@@ -2372,7 +2372,17 @@ VIEWS.finance = async (main) => {
   const neg = (v) => (v ? '−' + money(v) : money(0));
   const row = (l, v, cls = '', sub = '') => `<tr class="${cls}"><td>${l}${sub ? `<div class="small muted">${sub}</div>` : ''}</td><td class="num">${v}</td></tr>`;
   const sign = (v) => `<b style="color:${v < 0 ? 'var(--danger,#c0392b)' : 'var(--ok,#1e8449)'}">${v < 0 ? '−' + money(-v) : money(v)}</b>`;
-  const estTxt = Object.entries(C.est).map(([g, v]) => `${esc(g)} ${money(v)} (${pct(r.rates[g])})`).join(' · ');
+  const estTxt = Object.entries(C.est).map(([g, v]) => `${esc(g)} ${money(v)}${r.rates[g] != null ? ` (${pct(r.rates[g])})` : ''}`).join(' · ');
+  const H = r.head_cost;
+  const headCard = H && H.heads ? `<div class="card"><h3>🧪 Giá cốt mỗi đầu hóa chất (tháng ${month.slice(5)})</h3>
+      <div class="grid kpis" style="margin:0">
+        <div class="kpi"><div class="l">Cốt TB / đầu (theo công thức + xuất kho)</div><div class="v">${H.real_heads ? money(H.real_avg_cost) : '—'}</div><div class="s">${H.real_heads ? `${H.real_heads} đầu · ${pct(H.real_pct)} giá dịch vụ` : 'chưa có lượt nào ghi công thức có lượng'}</div></div>
+        <div class="kpi"><div class="l">Cốt TB / đầu (cả tháng)</div><div class="v">${money(H.avg_cost)}</div><div class="s">${H.heads} đầu hóa chất · ${Object.entries(H.by_source).map(([k, v]) => `${esc(k)} ${v}`).join(' · ')}</div></div></div>
+      <details style="margin-top:8px"><summary class="small">Xem từng đầu</summary><div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Khách · thợ</th><th>Dịch vụ</th><th class="num">Giá</th><th class="num">Cốt</th><th class="num">%</th><th>Tính từ</th></tr></thead><tbody>
+        ${H.rows.map((x) => `<tr><td>${dmy(x.date)}</td><td>${esc(x.customer || '')}<div class="small muted">${esc(x.staff || '')}</div></td><td class="small">${esc(x.services || '')}</td><td class="num">${money(x.price)}</td><td class="num"><b>${money(x.cost)}</b></td><td class="num">${x.price ? pct(x.cost / x.price) : ''}</td>
+          <td class="small">${x.source === 'Ước tính' ? `<span class="muted">Ước tính ${pct(r.rates['Hóa chất'])}</span>` : esc(x.source)}${x.lines.length ? `<div class="muted">${x.lines.map((l) => `${esc(l.name)} ${l.amt}${esc(l.unit || '')} = ${money(l.cost)}`).join('<br>')}</div>` : ''}${x.unknown.length ? `<div style="color:var(--warn)">Chưa nhận ra: ${x.unknown.map(esc).join(', ')}</div>` : ''}</td></tr>`).join('')}
+      </tbody></table></div></details>
+      <div class="small muted" style="margin-top:6px">Lấy hóa chất đã xuất kho ở hóa đơn; chưa có thì đọc công thức thợ ghi (ở lượt, hoặc công thức khách cập nhật trong 10 ngày sau) × giá nhập bình quân; không có công thức thì ước theo %. Công thức không ghi oxi thì chưa tính tiền oxi – nhắc thợ ghi "oxi 20".</div></div>` : '';
   const warn = [];
   if (P.no_params.length) warn.push(`<b>${P.no_params.length} người chưa cài lương cứng</b> (${P.no_params.map(esc).join(', ')}) → chi phí lương đang thiếu phần lương cứng/phụ cấp. Vào 💰 Bảng lương › ⚙ để cài.`);
   if (C.est_total) warn.push(`<b>${C.est_visits} lượt chưa ghi xuất kho</b> → giá vốn ${money(C.est_total)} là <b>ước tính</b> theo % doanh thu. Ghi xuất kho ở hóa đơn để số chính xác hơn.`);
@@ -2389,6 +2399,7 @@ VIEWS.finance = async (main) => {
       <div class="kpi"><div class="l">Doanh thu hòa vốn</div><div class="v">${r.breakeven ? money(r.breakeven) : '—'}</div><div class="s">${r.breakeven ? (R.total >= r.breakeven ? 'đã vượt ' : 'còn thiếu ') + money(Math.abs(R.total - r.breakeven)) : ''}</div></div>
     </div>
     ${warn.length ? `<div class="card" style="border-left:4px solid var(--warn,#e0a800)"><b>Cần lưu ý</b><ul style="margin:6px 0 0 18px">${warn.map((w) => `<li class="small">${w}</li>`).join('')}</ul></div>` : ''}
+    ${headCard}
     <div class="grid2" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px">
     <div class="card"><h3>Lãi / Lỗ tháng ${month.slice(5)}/${month.slice(0, 4)}</h3><div class="table-wrap"><table class="fin"><tbody>
       ${row('Doanh thu dịch vụ tại tiệm', money(R.service), '', `giảm giá đã trừ ${money(R.discounts)}`)}

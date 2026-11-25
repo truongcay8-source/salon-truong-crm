@@ -7,6 +7,48 @@ const { db, audit } = require('./db');
 const L = require('./logic');
 const { bad, int } = L;
 const payroll = require('./payroll');
+const { parseFormula } = require('../public/formula.js');
+
+// Giá cốt mỗi đầu hóa chất: ưu tiên hóa chất đã xuất kho ở hóa đơn → công thức thợ ghi (ở lượt, hoặc công thức
+// của khách cập nhật trong 10 ngày sau lượt) × giá nhập bình quân → không có thì ước theo % giá dịch vụ.
+function headCost(from, to, rate) {
+  const stock = require('./stock');
+  const mats = db.prepare('SELECT id, name, kind, size, size_unit, formula_keys, formula_default, active FROM materials').all();
+  const byId = new Map(mats.map((m) => [m.id, m]));
+  const cache = new Map();
+  const ac = (id) => { if (!cache.has(id)) cache.set(id, stock.avgCost(id)); return cache.get(id); };
+  const rows = db.prepare(`SELECT v.id, v.code, v.date, v.time, v.formula, c.name customer, c.formula cformula, c.formula_at, u.full_name staff,
+      (SELECT SUM(price) FROM visit_items WHERE visit_id=v.id AND grp='Hóa chất') chem,
+      (SELECT GROUP_CONCAT(name, ' + ') FROM visit_items WHERE visit_id=v.id AND grp='Hóa chất') svc,
+      (SELECT SUM(-qty*unit_cost) FROM stock_moves WHERE visit_id=v.id AND kind='use') used
+    FROM visits v JOIN customers c ON c.id=v.customer_id LEFT JOIN users u ON u.id=v.main_staff_id
+    WHERE v.status='done' AND v.date BETWEEN ? AND ? AND EXISTS (SELECT 1 FROM visit_items WHERE visit_id=v.id AND grp='Hóa chất')
+    ORDER BY v.date, v.time`).all(from, to);
+  const out = rows.map((v) => {
+    const r = { id: v.id, code: v.code, date: v.date, time: v.time, customer: v.customer, staff: v.staff, services: v.svc, price: v.chem || 0, lines: [], unknown: [] };
+    if (v.used > 0) { r.cost = Math.round(v.used); r.source = 'Xuất kho'; return r; }
+    const late = v.formula_at && v.formula_at >= v.date && v.formula_at <= L.addDays(v.date, 10);
+    const text = v.formula || (late ? v.cformula : null);
+    if (text) {
+      const p = parseFormula(text, mats);
+      r.lines = p.lines.map((l) => { const m = byId.get(l.material_id); return { name: l.name, amt: l.amt, unit: l.unit, cost: Math.round((m && m.size ? l.amt / m.size : l.amt) * ac(l.material_id)) }; });
+      r.unknown = p.unknown;
+      const c = r.lines.reduce((s, l) => s + l.cost, 0);
+      if (c > 0) { r.cost = c; r.source = 'Công thức'; r.formula = text; return r; }
+    }
+    r.cost = Math.round(r.price * rate); r.source = 'Ước tính';
+    return r;
+  });
+  const sum = (a, k) => a.reduce((s, x) => s + (x[k] || 0), 0);
+  const real = out.filter((x) => x.source !== 'Ước tính');
+  return {
+    rows: out, heads: out.length, cost: sum(out, 'cost'), price: sum(out, 'price'),
+    avg_cost: out.length ? Math.round(sum(out, 'cost') / out.length) : 0,
+    real_heads: real.length, real_avg_cost: real.length ? Math.round(sum(real, 'cost') / real.length) : 0,
+    real_pct: sum(real, 'price') ? sum(real, 'cost') / sum(real, 'price') : 0,
+    by_source: out.reduce((m, x) => ((m[x.source] = (m[x.source] || 0) + 1), m), {}),
+  };
+}
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS fin_conf (key TEXT PRIMARY KEY, value TEXT);
@@ -53,6 +95,8 @@ function report(month) {
     WHERE v.status='done' AND v.date BETWEEN ? AND ? AND s.kind IN ('use','sale') GROUP BY 1`).all(from, to);
   const useCost = Math.round((moves.find((x) => x.kind === 'use') || {}).cost || 0);
   const saleCost = Math.round((moves.find((x) => x.kind === 'sale') || {}).cost || 0);
+  const hc = headCost(from, to, Number(rates['Hóa chất']) || 0);
+  const fromFormula = new Map(hc.rows.filter((x) => x.source === 'Công thức').map((x) => [x.id, x.cost]));
   const est = {}; let estVisits = 0;
   const vis = db.prepare(`SELECT v.id,
       EXISTS(SELECT 1 FROM stock_moves WHERE visit_id=v.id AND kind='use') has_use,
@@ -64,6 +108,8 @@ function report(month) {
     for (const it of items.all(v.id)) {
       const isProd = it.grp === 'Bán sản phẩm';
       if ((isProd && v.has_sale) || (!isProd && v.has_use)) continue;
+      // Hóa chất có công thức thợ ghi → dùng giá cốt theo công thức thay cho % ước tính
+      if (it.grp === 'Hóa chất' && fromFormula.has(v.id)) { est['Hóa chất (theo công thức)'] = (est['Hóa chất (theo công thức)'] || 0) + fromFormula.get(v.id); used = true; continue; }
       const r = Number(rates[it.grp]) || 0;
       if (!r || !it.p) continue;
       est[it.grp] = (est[it.grp] || 0) + Math.round(it.p * r); used = true;
@@ -120,7 +166,7 @@ function report(month) {
     revenue: { service: serviceRev, product: productRev, gift: S.paid_by_gift, total: revenue, unpaid: S.unpaid, tips: S.tips,
       card_sales: S.card_sales, paid_by_card: S.paid_by_card, family: S.family_sales, discounts: S.discounts, visits: S.visits },
     cogs: { use: useCost, sale: saleCost, est, est_total: estTotal, est_visits: estVisits, total: cogs },
-    gross, gross_pct: revenue ? gross / revenue : 0,
+    gross, gross_pct: revenue ? gross / revenue : 0, head_cost: hc,
     payroll: { fixed: payFixed, variable: payVar, plus_minus: plusMinus, total: payTotal, people: pr.rows.length, no_params: noParams,
       base: T.base, allowance: T.allowance, commission: T.commission, bonus: T.bonus, kpi: T.kpi, floor_topup: T.floor_topup },
     fund: { total: fund, rows: fundRows, flags: fundFlags },
@@ -169,4 +215,4 @@ function mount(app, { OWNER }) {
   });
 }
 
-module.exports = { mount, report };
+module.exports = { mount, report, headCost };
