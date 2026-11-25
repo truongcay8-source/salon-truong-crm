@@ -251,8 +251,8 @@ function customerInput(b) {
 app.post('/api/customers', (req, res) => {
   const c = customerInput(req.body);
   if (c.phone) {
-    const dup = db.prepare('SELECT code,name FROM customers WHERE phone=? AND deleted=0').get(c.phone);
-    if (dup && !req.body.allow_duplicate) return res.status(409).json({ error: `SĐT đã có: ${dup.code} – ${dup.name}`, duplicate: dup });
+    const dup = db.prepare('SELECT id,code,name FROM customers WHERE phone=? AND deleted=0').get(c.phone);
+    if (dup) return res.status(409).json({ error: `SĐT đã có: ${dup.code} – ${dup.name}`, duplicate: dup });
   }
   const code = nextCode('customers', 'KH', 4);
   const id = db.prepare('INSERT INTO customers(code,name,phone,gender,birthday,source,hair_notes,notes,created_by,staff_id,formula,formula_at,formula_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')

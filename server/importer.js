@@ -331,8 +331,33 @@ function mergeOrphanCustomers() {
   }
   return n;
 }
+// Khách trùng SĐT → gộp về 1 hồ sơ (giữ hồ sơ nhiều lượt nhất, rồi hồ sơ cũ nhất); hồ sơ thừa bị ẩn (deleted=1), dữ liệu dồn sang
+function mergeSamePhone() {
+  const groups = new Map();
+  for (const c of db.prepare("SELECT id, phone FROM customers WHERE deleted=0 AND phone IS NOT NULL AND TRIM(phone)<>''").all()) {
+    const p = L.normPhone(c.phone);
+    if (!p || !/^0\d{9,10}$/.test(p)) continue;
+    if (!groups.has(p)) groups.set(p, []);
+    groups.get(p).push(c.id);
+  }
+  const nv = db.prepare("SELECT COUNT(*) n FROM visits WHERE customer_id=? AND status='done'");
+  let n = 0; const list = [];
+  for (const [p, ids] of groups) {
+    if (ids.length < 2) continue;
+    const ranked = ids.map((id) => ({ id, n: nv.get(id).n })).sort((a, b) => b.n - a.n || a.id - b.id);
+    const keep = ranked[0].id;
+    db.prepare('UPDATE customers SET phone=? WHERE id IN (' + ids.map(() => '?').join(',') + ')').run(p, ...ids);
+    for (const r of ranked.slice(1)) {
+      const f = db.prepare('SELECT code, name FROM customers WHERE id=?').get(r.id);
+      if (mergeCustomer(r.id, keep)) { n++; list.push(`${f.code} ${f.name} → ${p}`); }
+    }
+  }
+  if (n) console.log(`Đã gộp ${n} hồ sơ khách trùng SĐT: ` + list.join('; '));
+  return { merged: n, list };
+}
 function closeUsedGifts() {
   repairDedupedCards();
+  try { mergeSamePhone(); } catch (e) { console.error('Gộp khách trùng SĐT lỗi:', e.message); }
   try { mergeMergedCustomers(); } catch (e) { console.error('Gộp hồ sơ khách lỗi:', e.message); }
   try { const n = mergeOrphanCustomers(); if (n) console.log(`Đã gộp ${n} hồ sơ khách thừa (0đ) vào hồ sơ đã có lượt`); } catch (e) { console.error('Gộp hồ sơ thừa lỗi:', e.message); }
   let n = 0;
@@ -1034,4 +1059,4 @@ async function importWorkbook(buffer, opts, user) {
 }
 
 const VERSION = 3; // 2: không ghép "E Quang" vào "Quang Anh"
-module.exports = { VERSION, dedupeVisits, closeUsedGifts, mergeSameVisits, mergeOrphanCustomers, dedupeAppointments, apptKey, importWorkbook, asDate, asTime };
+module.exports = { VERSION, dedupeVisits, closeUsedGifts, mergeSamePhone, mergeSameVisits, mergeOrphanCustomers, dedupeAppointments, apptKey, importWorkbook, asDate, asTime };

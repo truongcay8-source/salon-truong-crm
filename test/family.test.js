@@ -555,3 +555,18 @@ test('chưa thu: Lãnh đạo bấm đã thu ngay trong danh sách', async () =>
   assert.equal(sm.unpaid, 0); assert.equal(sm.by_method['Chuyển khoản'], 300000);
   assert.equal((await o.post(`/visits/${v.id}/mark-paid`, { method: 'Chuyển khoản' })).status, 400);
 });
+
+test('gộp khách trùng SĐT: dồn lượt về 1 hồ sơ, hồ sơ thừa bị ẩn; không tạo mới trùng SĐT', async () => {
+  const I = require('../server/importer');
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const a = db.prepare("INSERT INTO customers(code,name,phone) VALUES ('KHT1','Quỳnh Anh','0868000111')").run().lastInsertRowid;
+  const b = db.prepare("INSERT INTO customers(code,name,phone) VALUES ('KHT2','C Quỳnh Anh','0868000111')").run().lastInsertRowid;
+  db.prepare("INSERT INTO appointments(customer_id,date,time,status) VALUES (?,?,?,'booked')").run(b, '2026-12-01', '10:00');
+  const r = I.mergeSamePhone();
+  assert.ok(r.merged >= 1);
+  const alive = db.prepare("SELECT id FROM customers WHERE phone='0868000111' AND deleted=0").all();
+  assert.equal(alive.length, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM appointments WHERE customer_id=?').get(alive[0].id).n, 1);
+  void a;
+  assert.equal((await o.post('/customers', { name: 'Trùng', phone: '0868000111', allow_duplicate: true })).status, 409);
+});

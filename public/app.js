@@ -1210,8 +1210,8 @@ function customerForm(c = {}, after) {
       if (isEdit) r = await api('/customers/' + c.id, { method: 'PUT', body });
       else {
         try { r = await api('/customers', { method: 'POST', body }); } catch (er) {
-          if (er.status === 409 && confirm(er.message + '\nVẫn tạo khách mới trùng SĐT?')) r = await api('/customers', { method: 'POST', body: { ...body, allow_duplicate: true } });
-          else throw er;
+          if (er.status === 409) throw new Error(er.message + ' – không tạo khách mới. Tìm khách theo SĐT này để dùng hồ sơ cũ.');
+          throw er;
         }
       }
       closeModal(); toast('Đã lưu khách'); after && after(isEdit ? c.id : r.id);
