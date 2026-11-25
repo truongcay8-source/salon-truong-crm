@@ -310,3 +310,8 @@ table.fin tr.big td{font-size:1.1em}
 .pos-col { max-height: 70vh; overflow-y: auto; }
 @media (max-width: 820px) { .pos-col { max-height: none; } }
 .pos-find .chip.on { background: var(--brand-soft); border-color: var(--brand-2); font-weight: 600; }
+
+/* Thẻ tri ân chưa dùng */
+.gift-ban { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; margin-bottom: 8px; border-radius: 10px; background: #fff4e0; border: 1px solid #f0c987; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .gift-ban { background: #3a2c14; border-color: #7a5a22; } }
+:root[data-theme="dark"] .gift-ban { background: #3a2c14; border-color: #7a5a22; }
