@@ -63,6 +63,18 @@ CREATE TABLE IF NOT EXISTS fin_items (
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_fin_items_month ON fin_items(month);
+-- Thu nhập khác (lì xì khai trương, lì xì Tết…): KHÔNG phải tip, KHÔNG phải doanh thu dịch vụ; cộng vào lãi/lỗ + dòng tiền
+CREATE TABLE IF NOT EXISTS other_income (
+  id INTEGER PRIMARY KEY,
+  date TEXT NOT NULL,
+  amount INTEGER NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'Lì xì khai trương',
+  method TEXT,
+  note TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_other_income_date ON other_income(date);
 `);
 
 // Chi phí cố định mặc định mỗi tháng (lấy từ file Excel cũ – bạn sửa trên trang). cash=0: không phải tiền chi ra (khấu hao)
@@ -156,7 +168,10 @@ function report(month) {
   const depreciation = fixed.filter((f) => !f.cash).reduce((a, f) => a + f.amount, 0);
 
   const opex = payTotal + fund + fixedTotal;
-  const profit = gross - opex;
+  // Thu nhập khác: lì xì khai trương… (không phải tip, không tính vào doanh số thợ)
+  const incomeRows = db.prepare('SELECT * FROM other_income WHERE date BETWEEN ? AND ? ORDER BY date, id').all(from, to);
+  const otherIncome = incomeRows.reduce((a, x) => a + x.amount, 0);
+  const profit = gross - opex + otherIncome;
   const ebitda = profit + depreciation; // lãi trước khấu hao (gần với tiền thật)
   // Hòa vốn: chi phí cố định / (1 − tỷ lệ chi phí biến đổi)
   const varCost = cogs + payVar;
@@ -178,8 +193,8 @@ function report(month) {
       base: T.base, allowance: T.allowance, commission: T.commission, bonus: T.bonus, kpi: T.kpi, floor_topup: T.floor_topup },
     fund: { total: fund, rows: fundRows, flags: fundFlags, spread: spreadRows, by_source: mexp.reduce((m, e) => ((m[e.source || 'fund'] = (m[e.source || 'fund'] || 0) + e.share), m), {}) },
     fixed: { rows: fixed, total: fixedTotal, depreciation },
-    opex, profit, profit_pct: revenue ? profit / revenue : 0, ebitda, breakeven,
-    cash: { in_service: S.service_cash, in_cards: S.card_sales, in_total: S.money_in, payroll: payTotal, fund: fundCash, fixed: fixedTotal - depreciation, purchases, out_total: cashOut, net: S.money_in - cashOut },
+    other_income: { total: otherIncome, rows: incomeRows }, opex, profit, profit_pct: revenue ? profit / revenue : 0, ebitda, breakeven,
+    cash: { in_service: S.service_cash, in_cards: S.card_sales, in_other: otherIncome, in_total: S.money_in + otherIncome, payroll: payTotal, fund: fundCash, fixed: fixedTotal - depreciation, purchases, out_total: cashOut, net: S.money_in + otherIncome - cashOut },
   };
 }
 
@@ -214,6 +229,24 @@ function mount(app, { OWNER }) {
       .run(b.month, name, money(b.amount), b.cash === false || b.cash === 0 ? 0 : 1, L.str(b.note));
     audit(req.user.id, 'finance.item', 'fin_items', r.lastInsertRowid, b);
     res.json({ id: r.lastInsertRowid });
+  });
+  app.post('/api/finance/income', OWNER, (req, res) => {
+    const b = req.body || {};
+    const amount = money(b.amount);
+    if (!(amount > 0)) throw bad('Nhập số tiền');
+    const date = L.isDate(b.date) ? b.date : L.today();
+    const method = /chuy|ck/i.test(b.method || '') ? 'Chuyển khoản' : 'Tiền mặt';
+    const r = db.prepare('INSERT INTO other_income(date,amount,kind,method,note,created_by) VALUES (?,?,?,?,?,?)')
+      .run(date, amount, L.str(b.kind) || 'Lì xì khai trương', method, L.str(b.note), req.user.id);
+    audit(req.user.id, 'finance.income', 'other_income', r.lastInsertRowid, { date, amount, kind: b.kind, method });
+    res.json({ id: r.lastInsertRowid });
+  });
+  app.delete('/api/finance/income/:id', OWNER, (req, res) => {
+    const x = db.prepare('SELECT * FROM other_income WHERE id=?').get(int(req.params.id));
+    if (!x) throw bad('Không tìm thấy');
+    db.prepare('DELETE FROM other_income WHERE id=?').run(x.id);
+    audit(req.user.id, 'finance.income.delete', 'other_income', x.id, x);
+    res.json({ ok: true });
   });
   app.delete('/api/finance/items/:id', OWNER, (req, res) => {
     db.prepare('DELETE FROM fin_items WHERE id=?').run(int(req.params.id));

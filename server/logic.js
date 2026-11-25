@@ -616,6 +616,7 @@ function dayMoney(date) {
     expenses: exp, expense_total: exp.reduce((t, e) => t + e.amount, 0),
     expense_shop_cash: exp.filter((e) => e.source === 'fund').reduce((t, e) => t + e.amount, 0) + reimb.reduce((t, e) => t + e.amount, 0),
     reimbursed: reimb,
+    other_income: (() => { try { return db.prepare('SELECT id, amount, kind, method, note FROM other_income WHERE date=? ORDER BY id').all(date); } catch { return []; } })(),
   };
 }
 
