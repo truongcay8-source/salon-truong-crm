@@ -43,17 +43,20 @@ function expectedCash(date) {
 function board(date, user) {
   const seeMoney = user.role !== 'staff';
   const appts = db.prepare(`SELECT a.id, a.time, a.status, a.service, a.visit_id, a.staff_id, a.assistant_id, a.customer_id, a.pay_note,
-      COALESCE(c.name, a.guest_name) name, COALESCE(c.phone, a.guest_phone) phone, c.code customer_code, u.full_name staff_name, v.total visit_total, v.code visit_code, v.payment_method, v.main_staff_id v_main, v.assistant_id v_asst
+      COALESCE(c.name, a.guest_name) name, COALESCE(c.phone, a.guest_phone) phone, c.code customer_code, u.full_name staff_name, v.id v_live, v.cash_paid v_cash, v.card_paid v_card, v.total visit_total, v.code visit_code, v.payment_method, v.main_staff_id v_main, v.assistant_id v_asst
     FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id LEFT JOIN visits v ON v.id=a.visit_id AND v.status='done'
     WHERE a.date=? AND a.status IN ('booked','arrived','done') ORDER BY a.time, a.id`).all(date);
   const walk = db.prepare(`SELECT v.id visit_id, v.code visit_code, v.time, v.total visit_total, v.payment_method, v.main_staff_id v_main, v.assistant_id v_asst, c.name, c.phone, u.full_name staff_name,
       (SELECT GROUP_CONCAT(name, ' + ') FROM visit_items WHERE visit_id=v.id) service
     FROM visits v JOIN customers c ON c.id=v.customer_id LEFT JOIN users u ON u.id=v.main_staff_id
     WHERE v.status='done' AND v.date=? AND NOT EXISTS (SELECT 1 FROM appointments a WHERE a.visit_id=v.id) ORDER BY v.time, v.id`).all(date);
-  const mask = (r) => { const own = r.v_main === user.id || r.v_asst === user.id; const { v_main, v_asst, ...x } = r; void v_main; void v_asst; return seeMoney || own ? x : { ...x, visit_total: null }; };
-  const paid = (r) => !!r.visit_id && !(r.pay_note === 'Chưa thanh toán' && !r.payment_method);
+  const mask = (r) => { const own = r.v_main === user.id || r.v_asst === user.id; const { v_main, v_asst, v_live, v_cash, v_card, ...x } = r; void v_main; void v_asst; void v_live; void v_cash; void v_card; return seeMoney || own ? x : { ...x, visit_total: null }; };
+  // Sổ ghi ô hồng nhưng hóa đơn đã trừ thẻ hết (không còn tiền phải thu) → coi như đã thu
+  const paid = (r) => !!r.visit_id && !(r.pay_note === 'Chưa thanh toán' && !r.payment_method && !(r.v_card > 0 && !(r.v_cash > 0)));
   const out = { date, waiting: [], serving: [], unpaid: [], paid: [] };
   for (const a of appts) {
+    // Hóa đơn của lịch đã bị xóa → lịch quay về "Đang phục vụ" để thu tiền lại
+    if (a.visit_id && !a.v_live) { a.visit_id = null; a.visit_total = null; a.visit_code = null; a.payment_method = null; a.status = 'arrived'; }
     if (!a.visit_id) { if (a.status !== 'done') (a.status === 'arrived' ? out.serving : out.waiting).push(mask(a)); }
     else (paid(a) ? out.paid : out.unpaid).push(mask(a));
   }
@@ -91,7 +94,7 @@ function mount(app, { OWNER }) {
   });
   // Khách đến: chuyển lịch sang "Đang phục vụ"
   app.post('/api/pos/checkin/:id', (req, res) => {
-    const a = db.prepare('SELECT id, status, visit_id FROM appointments WHERE id=?').get(int(req.params.id));
+    const a = db.prepare("SELECT a.id, a.status, v.id visit_id FROM appointments a LEFT JOIN visits v ON v.id=a.visit_id AND v.status='done' WHERE a.id=?").get(int(req.params.id));
     if (!a) throw bad('Không tìm thấy lịch hẹn');
     if (a.visit_id) throw bad('Lịch này đã thu tiền');
     const st = req.body && req.body.undo ? 'booked' : 'arrived';

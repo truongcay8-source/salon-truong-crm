@@ -815,3 +815,17 @@ test('hóa đơn sổ ghi lại dịch vụ hóa chất đã có trong hóa đơ
   assert.equal(I.dedupeSameDayChem(), 0);
   assert.equal(db.prepare("SELECT value FROM settings WHERE key='book_money_until'").get().value, '2026-11-26', 'sổ chỉ lấy lịch hẹn từ 26/11');
 });
+
+test('thu ngân: sổ ô hồng nhưng đã trừ thẻ hết → Đã thu; hóa đơn bị xóa → lịch về Đang phục vụ để thu lại', async () => {
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const cid = db.prepare("INSERT INTO customers(code,name) VALUES ('TTT1','Tuấn Tạng test')").run().lastInsertRowid;
+  const tr = db.prepare("SELECT id FROM users WHERE username='truong'").get().id;
+  const vid = db.prepare("INSERT INTO visits(code,customer_id,date,time,main_staff_id,total,cash_paid,card_paid,status) VALUES ('LT1',?,'2026-11-24','12:30',?,1000000,0,1000000,'done')").run(cid, tr).lastInsertRowid;
+  const aid = db.prepare("INSERT INTO appointments(customer_id,date,time,staff_id,status,visit_id,pay_note) VALUES (?,'2026-11-24','12:30',?,'done',?,'Chưa thanh toán')").run(cid, tr, vid).lastInsertRowid;
+  let r = (await o.get('/pos?date=2026-11-24')).data;
+  assert.ok(r.paid.some((a) => a.id === aid), 'trừ thẻ hết → đã thu');
+  db.prepare("UPDATE visits SET status='deleted' WHERE id=?").run(vid);
+  r = (await o.get('/pos?date=2026-11-24')).data;
+  assert.ok(r.serving.some((a) => a.id === aid && !a.visit_id), 'hóa đơn xóa → Đang phục vụ');
+  assert.ok(!r.unpaid.some((a) => a.id === aid));
+});
