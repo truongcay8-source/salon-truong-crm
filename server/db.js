@@ -405,6 +405,8 @@ function nextCode(table, prefix, width) {
     db.prepare("UPDATE users SET works=0 WHERE username='vinh'").run();
   }
 }
+// Vinh 26/11: đổi chữ 'Người nhà' trên hóa đơn thành 'Ưu đãi đặc biệt' cho mỹ miều
+db.prepare("UPDATE visits SET discount_reason='Ưu đãi đặc biệt – giảm 50%' WHERE discount_reason='Người nhà – giảm 50%'").run();
 // Khách cắt định kỳ (vd anh Minh PH 14 ngày/lần, gọi trước hỏi giờ) + thợ không áp bảo hành chỉnh form cắt
 {
   const cc = db.prepare('PRAGMA table_info(customers)').all().map((c) => c.name);

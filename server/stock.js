@@ -141,6 +141,7 @@ fillSizes();
 fillPrices();
 
 const isMgr = (u) => u.role !== 'staff';
+const seeCost = (u) => u.role === 'owner'; // giá nhập / giá cốt / lãi gộp: CHỈ Lãnh đạo (Vinh 26/11)
 // Quyền kho cho nhân viên: xem tồn + báo hàng hết (mặc định Chị Thu, Dương), kiểm kho đếm hàng (mặc định Dương)
 function idsSetting(key, names) {
   const s = getSettings()[key];
@@ -212,7 +213,7 @@ function materialRows(user, opts = {}) {
     const base = { id: m.id, code: m.code, name: m.name, kind: m.kind, grp: m.grp, unit: m.unit, size: m.size, size_unit: m.size_unit, sell_price: m.sell_price, active: m.active,
       formula_keys: m.formula_keys, formula_default: m.formula_default, barcode: m.barcode };
     // Sản phẩm bán lẻ: ai cũng thấy số còn (không có giá nhập) để biết còn hàng lúc bán cho khách
-    if (!isMgr(user)) return m.kind === 'retail' ? { ...base, stock: r2(stockOf(m.id)) } : base;
+    if (!seeCost(user)) return m.kind === 'retail' || isMgr(user) ? { ...base, stock: r2(stockOf(m.id)) } : base;
     const cost = avgCost(m.id), stock = stockOf(m.id);
     return { ...base, note: m.note, ref_cost: m.ref_cost, avg_cost: Math.round(cost), cost_per_size: m.size ? cost / m.size : null, stock: r2(stock), stock_value: Math.round(stock * cost) };
   });
@@ -335,7 +336,7 @@ function importPurchases(rows, helpers, summary, user) {
   }
 }
 
-function mount(app, { MGR }) {
+function mount(app, { MGR, OWNER }) {
   app.get('/api/stock/levels', need('stock_view'), (req, res) => res.json(stockLevels()));
   // Kiểm kho: nhập số đếm thực tế → ghi điều chỉnh chênh lệch (giá vốn bình quân), lưu ngày kiểm
   app.post('/api/stock/count', need('stock_count'), (req, res) => {
@@ -378,9 +379,9 @@ function mount(app, { MGR }) {
     if (!db.prepare('SELECT 1 FROM materials WHERE id=?').get(id)) throw new HttpError(404, 'Không tìm thấy sản phẩm');
     const qty = Number(req.body.qty);
     if (!(qty > 0)) throw bad('Nhập số lượng');
-    const given = isMgr(req.user) && req.body.unit_cost !== '' && req.body.unit_cost != null ? Math.max(0, Number(req.body.unit_cost) || 0) : null;
+    const given = seeCost(req.user) && req.body.unit_cost !== '' && req.body.unit_cost != null ? Math.max(0, Number(req.body.unit_cost) || 0) : null;
     const uc = given != null ? given : avgCost(id);
-    const note = (given == null && !isMgr(req.user) ? 'Nhân viên nhập (giá theo bình quân, chờ quản lý kiểm)' : 'Nhập hàng') + (str(req.body.note) ? ' · ' + str(req.body.note) : '');
+    const note = (given == null && !seeCost(req.user) ? 'Nhập kho (giá theo bình quân, chờ Lãnh đạo kiểm)' : 'Nhập hàng') + (str(req.body.note) ? ' · ' + str(req.body.note) : '');
     db.prepare("INSERT INTO stock_moves(material_id,date,kind,qty,unit_cost,supplier,note,created_by) VALUES (?,?,'in',?,?,?,?,?)")
       .run(id, today(), qty, uc, str(req.body.supplier), note, req.user.id);
     audit(req.user.id, 'stock_in', 'material', id, { qty, by_scan: true });
@@ -447,7 +448,7 @@ function mount(app, { MGR }) {
     audit(req.user.id, 'stock_' + kind, 'material', id, { qty, unit_cost: uc });
     res.json({ ok: true });
   });
-  app.get('/api/materials/:id/moves', MGR, (req, res) => {
+  app.get('/api/materials/:id/moves', OWNER, (req, res) => {
     res.json(db.prepare(`SELECT s.*, v.code visit_code, c.name customer_name FROM stock_moves s LEFT JOIN visits v ON v.id=s.visit_id LEFT JOIN customers c ON c.id=v.customer_id
       WHERE s.material_id=? ORDER BY s.date DESC, s.id DESC LIMIT 200`).all(int(req.params.id)));
   });
@@ -455,7 +456,7 @@ function mount(app, { MGR }) {
   // Định mức hóa chất cho từng dịch vụ (nhân viên lấy để điền sẵn; giá cốt chỉ quản lý thấy)
   app.get('/api/recipes', (req, res) => {
     const rows = db.prepare('SELECT service_id, material_id, qty FROM service_materials ORDER BY id').all();
-    if (!isMgr(req.user)) return res.json(rows);
+    if (!seeCost(req.user)) return res.json(rows);
     res.json(rows.map((r) => ({ ...r, cost: Math.round(r.qty * avgCost(r.material_id)) })));
   });
   app.put('/api/recipes/:serviceId', MGR, (req, res) => {
@@ -470,7 +471,7 @@ function mount(app, { MGR }) {
   });
 
   // Báo cáo giá cốt & lãi gộp
-  app.get('/api/reports/cost', MGR, (req, res) => {
+  app.get('/api/reports/cost', OWNER, (req, res) => {
     const from = isDate(req.query.from) ? req.query.from : today().slice(0, 8) + '01';
     const to = isDate(req.query.to) ? req.query.to : today();
     const grpRev = db.prepare(`SELECT COALESCE(i.grp,'Khác') grp, SUM(i.price) revenue, COUNT(DISTINCT v.id) visits FROM visit_items i JOIN visits v ON v.id=i.visit_id

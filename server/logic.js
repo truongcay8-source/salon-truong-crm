@@ -202,7 +202,7 @@ function saveVisit(input, user, existing, opts = {}) {
   const fam = db.prepare('SELECT owner_family FROM customers WHERE id=?').get(customerId);
   if (fam && fam.owner_family && isNew && !discount && (!opts.imported || /giá theo bảng giá/.test(str(input.note) || ''))) {
     discount = Math.round(cleanItems.reduce((s, i) => s + i.price, 0) * 0.5 / 1000) * 1000;
-    input.discount_reason = 'Người nhà – giảm 50%';
+    input.discount_reason = 'Ưu đãi đặc biệt – giảm 50%';
   }
   if (discount > subtotal + surcharge) throw bad('Giảm giá lớn hơn tổng tiền');
   if (discount > 0 && !str(input.discount_reason) && !opts.imported) throw bad('Ghi lý do giảm giá');
@@ -372,9 +372,9 @@ function getVisit(id) {
   return v;
 }
 
-// Nhân viên không xem tiền của lượt người khác.
+// Vinh 26/11: chỉ Lãnh đạo xem tiền lượt của người khác + giá cốt; quản lý / nhân viên chỉ thấy lượt của mình.
 function maskVisitMoney(v, user) {
-  if (user.role !== 'staff') return v;
+  if (user.role === 'owner') return v;
   // Nhân viên không bao giờ thấy giá cốt / giá nhập hóa chất
   v = { ...v, cost: null, materials: v.materials ? v.materials.map((m) => ({ ...m, unit_cost: null })) : v.materials };
   if (v.main_staff_id === user.id || v.assistant_id === user.id || (v.items || []).some((i) => i.staff_id === user.id || i.assistant_id === user.id)) return v;
@@ -504,7 +504,7 @@ function salesReport(from, to, user) {
   // Tách 3 loại doanh số (chỉ Lãnh đạo xem): dịch vụ làm tại tiệm / bán sản phẩm / bán thẻ
   summary.product_sales = productTotal;
   summary.shop_service_sales = summary.service_sales - productTotal;
-  if (user.role === 'staff') return { from, to, rows: rows.filter((r) => r.user_id === user.id), summary: null };
+  if (user.role !== 'owner') return { from, to, rows: rows.filter((r) => r.user_id === user.id), summary: null };
   return { from, to, rows, summary };
 }
 

@@ -935,3 +935,18 @@ test('Chấm đủ hàng loạt: bỏ ngày OFF, lùi giờ khi nghỉ vài gi�
   r = await o.post('/attendance/fill', { ...body, dry_run: false });
   assert.equal(r.data.added, 0, 'chạy lại không ghi trùng');
 });
+
+test('Quyền tiền: quản lý chỉ thấy doanh số của mình, không thấy giá cốt / giá nhập / tổng tiệm; Thu ngân chỉ hôm nay', async () => {
+  const m = client(); const mu = db.prepare("SELECT username FROM users WHERE role='manager' AND active=1 AND merged_into IS NULL ORDER BY id").get();
+  db.prepare("UPDATE users SET password_hash=?, can_login=1, must_change_pw=0 WHERE username=?").run(require('bcryptjs').hashSync('Mgr-12345', 4), mu.username);
+  assert.equal((await m.post('/login', { username: mu.username, password: 'Mgr-12345' })).status, 200);
+  const me = (await m.get('/me')).data;
+  assert.equal((await m.get('/reports/cost')).status, 403);
+  assert.equal((await m.get('/export')).status, 403);
+  const mats = (await m.get('/materials')).data;
+  assert.ok(mats.every((x) => x.avg_cost === undefined && x.ref_cost === undefined));
+  const rep = (await m.get('/reports/sales?from=2026-01-01&to=2026-12-31')).data;
+  assert.equal(rep.summary, null); assert.ok(rep.rows.every((r) => r.user_id === (me.user || me).id));
+  const pos = (await m.get('/pos?date=2026-01-02')).data;
+  assert.notEqual(pos.date, '2026-01-02', 'quản lý chỉ xem Thu ngân hôm nay'); assert.equal(pos.totals, undefined);
+});
