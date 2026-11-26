@@ -414,7 +414,9 @@ function salesReport(from, to, user) {
   let rows = [...per.values()].map((r) => ({ ...r, gift_sales: Math.round(r.gift_sales), family_sales: Math.round(r.family_sales), product_sales: r.prod_net, service_sales: r.sales - r.prod_net,
       // DS tính thưởng (nhân hệ số) = chỉ DS DỊCH VỤ tự làm − thẻ tri ân − người nhà. Không gồm: bán sản phẩm, bán thẻ, DS làm phụ
       bonus_sales: r.sales - r.prod_net - Math.round(r.gift_sales) - Math.round(r.family_sales) + Math.round(r.prod_excl), total_commission: r.main_commission + r.assistant_commission + r.card_commission + r.surcharge_share }))
-    .filter((r) => (r.active && worksIds.has(r.user_id)) || r.main_count || r.assist_count || r.cards_count);
+    .filter((r) => (r.active && worksIds.has(r.user_id)) || r.main_count || r.assist_count || r.cards_count)
+    // Vinh 26/11: Trường (Director) luôn đứng đầu, còn lại ai doanh số cao đứng trước
+    .sort((a, b) => (b.level === 'Director') - (a.level === 'Director') || (b.sales + b.assist_sales + b.cards_amount) - (a.sales + a.assist_sales + a.cards_amount) || a.user_id - b.user_id);
   const giftCards = new Set(db.prepare("SELECT id FROM cards WHERE sale_type='gift'").all().map((c) => c.id));
   const summary = {
     visits: visits.length,

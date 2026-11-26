@@ -118,10 +118,10 @@ app.post('/api/me/password', (req, res) => {
 // ---------- Tài khoản ----------
 if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'merged_into')) db.exec('ALTER TABLE users ADD COLUMN merged_into INTEGER');
 app.get('/api/staff', (req, res) => {
-  res.json(db.prepare('SELECT id, full_name, role, active, level, works FROM users WHERE merged_into IS NULL ORDER BY active DESC, id').all());
+  res.json(db.prepare('SELECT id, full_name, role, active, level, works FROM users WHERE merged_into IS NULL ORDER BY active DESC, CASE level WHEN \'Director\' THEN 0 WHEN \'Senior\' THEN 1 WHEN \'Stylist\' THEN 2 WHEN \'Junior\' THEN 3 ELSE 4 END, id').all());
 });
 app.get('/api/users', OWNER, (req, res) => {
-  res.json(db.prepare('SELECT id,username,full_name,role,active,can_login,must_change_pw,commission_enabled,works,aliases,level,created_at FROM users WHERE merged_into IS NULL ORDER BY id').all());
+  res.json(db.prepare('SELECT id,username,full_name,role,active,can_login,must_change_pw,commission_enabled,works,aliases,level,created_at FROM users WHERE merged_into IS NULL ORDER BY active DESC, CASE level WHEN \'Director\' THEN 0 WHEN \'Senior\' THEN 1 WHEN \'Stylist\' THEN 2 WHEN \'Junior\' THEN 3 ELSE 4 END, id').all());
 });
 // Chuyển TOÀN BỘ dữ liệu của 1 tài khoản sang tài khoản khác (vd tạo nhầm tài khoản mới cho cùng 1 người) rồi xóa tài khoản cũ
 // Cột tiền (assistant_commission, seller_share…) không đụng; nhật ký giữ nguyên người làm.

@@ -65,7 +65,7 @@ function compute(month) {
   for (const o of db.prepare("SELECT user_id, from_time, to_time FROM staff_off WHERE status='approved' AND date BETWEEN ? AND ?").all(from, to)) {
     offs.set(o.user_id, (offs.get(o.user_id) || 0) + (o.from_time && o.to_time ? 0.5 : 1));
   }
-  const users = db.prepare("SELECT id, full_name, level FROM users WHERE active=1 AND works<>0 ORDER BY id").all();
+  const users = db.prepare("SELECT id, full_name, level FROM users WHERE active=1 AND works<>0 ORDER BY CASE level WHEN 'Director' THEN 0 WHEN 'Senior' THEN 1 WHEN 'Stylist' THEN 2 WHEN 'Junior' THEN 3 ELSE 4 END, id").all();
   const ids = new Set(users.map((u) => u.id));
   for (const r of sales.rows) if (!ids.has(r.user_id) && (r.total_commission || r.sales)) { users.push({ id: r.user_id, full_name: r.name, level: r.level }); ids.add(r.user_id); }
   for (const t of tips.shares) if (!ids.has(t.user_id) && t.amount) { users.push({ id: t.user_id, full_name: t.name }); ids.add(t.user_id); }
