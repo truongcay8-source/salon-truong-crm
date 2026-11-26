@@ -236,7 +236,7 @@ app.post('/api/users/:id/reset-password', OWNER, (req, res) => {
 const publicSettings = () => { const s = { ...getSettings() }; delete s.anthropic_api_key; return s; };
 app.get('/api/settings', MGR, (req, res) => res.json(publicSettings()));
 app.put('/api/settings', OWNER, (req, res) => {
-  const allowed = ['salon_name', 'salon_address', 'salon_phone', 'bank_info', 'receipt_footer', 'return_days', 'birthday_days', 'card_expiry_days', 'card_low_balance', 'assistant_rate', 'assistant_rate_chem', 'card_new_rate', 'card_renewal_rate', 'payment_methods', 'surcharge_salon_rate', 'book_money_until', 'qr_bank', 'qr_account', 'qr_name'];
+  const allowed = ['salon_name', 'salon_address', 'salon_phone', 'bank_info', 'receipt_footer', 'return_days', 'birthday_days', 'card_expiry_days', 'card_low_balance', 'assistant_rate', 'assistant_rate_chem', 'card_new_rate', 'card_renewal_rate', 'payment_methods', 'surcharge_salon_rate', 'book_money_until', 'qr_bank', 'qr_account', 'qr_name', 'warranty_fee', 'warranty_asst_pct', 'warranty_staff_pct'];
   const up = db.prepare('UPDATE settings SET value=? WHERE key=?');
   for (const k of allowed) if (req.body[k] != null) up.run(String(req.body[k]).trim(), k);
   audit(req.user.id, 'update_settings', 'settings', null, req.body);
@@ -924,6 +924,7 @@ app.get('/api/reminders', (req, res) => {
   // Khách đang trong hạn bảo hành: chỉ để tra cứu khi khách quay lại, không tính vào số nhắc
   r.warranty = require('./warranty').active(today(), null, true).sort((a, b) => a.until.localeCompare(b.until));
   if (req.user.role === 'staff') r.warranty = r.warranty.filter((v) => v.main_staff_id === req.user.id);
+  if (req.user.role === 'owner') r.warranty_jobs = require('./warranty').jobs(today().slice(0, 8) + '01', today());
   res.json(r);
 });
 // Khách phụ trách theo thợ: nhân viên chỉ xem dòng của mình, không có số tiền
@@ -975,6 +976,36 @@ app.get('/api/dashboard', (req, res) => {
     customers: db.prepare('SELECT COUNT(*) n FROM customers WHERE deleted=0').get().n });
 });
 
+// ===== Làm lại bảo hành (lỗi kỹ thuật): chỉ Lãnh đạo ghi; thợ chịu theo phương án C, trừ Bảng lương =====
+{
+  const W = require('./warranty');
+  app.get('/api/warranty-jobs/preview', OWNER, (req, res) => { const p = W.preview(int(req.query.visit_id)); if (!p) throw bad('Không tìm thấy lượt gốc'); res.json(p); });
+  app.get('/api/warranty-jobs', OWNER, (req, res) => {
+    const t = today(); const from = L.isDate(req.query.from) ? req.query.from : t.slice(0, 8) + '01'; const to = L.isDate(req.query.to) ? req.query.to : t;
+    res.json({ from, to, rows: W.jobs(from, to), ...W.conf() });
+  });
+  app.post('/api/warranty-jobs', OWNER, (req, res) => {
+    const b = req.body || {};
+    const p = W.preview(int(b.visit_id)); if (!p) throw bad('Không tìm thấy lượt gốc');
+    const date = L.isDate(b.date) ? b.date : today();
+    const chem = Math.max(0, Math.round(Number(b.chem_cost) || 0)), fee = Math.max(0, Math.round(Number(b.fee ?? p.fee) || 0));
+    const staffPct = Math.min(100, Math.max(0, Number(b.staff_pct ?? p.staff_pct)));
+    const main = int(b.main_staff_id) || p.main_staff_id; if (!main) throw bad('Chọn thợ chính chịu trách nhiệm');
+    const asst = int(b.assistant_id) || null;
+    if (asst && asst === main) throw bad('Người phụ phải khác thợ chính');
+    const asstPct = asst ? Math.min(100, Math.max(0, Number(b.asst_pct ?? p.asst_pct))) : 0;
+    const sp = W.split(chem + fee, staffPct, !!asst, asstPct);
+    const id = db.prepare(`INSERT INTO warranty_jobs(orig_visit_id,date,chem_cost,fee,staff_pct,main_staff_id,assistant_id,asst_pct,main_penalty,asst_penalty,note,created_by)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(p.visit.id, date, chem, fee, staffPct / 100, main, asst, asstPct / 100, sp.main, sp.asst, L.str(b.note), req.user.id).lastInsertRowid;
+    audit(req.user.id, 'warranty_job', 'warranty_jobs', id, { visit: p.visit.code, chem, fee, main, asst, main_penalty: sp.main, asst_penalty: sp.asst });
+    res.json({ id, total_cost: chem + fee, main_penalty: sp.main, asst_penalty: sp.asst });
+  });
+  app.delete('/api/warranty-jobs/:id', OWNER, (req, res) => {
+    const j = db.prepare('SELECT * FROM warranty_jobs WHERE id=? AND deleted=0').get(int(req.params.id)); if (!j) throw bad('Không tìm thấy');
+    if (db.prepare('SELECT 1 FROM payroll_locks WHERE month=?').get(j.date.slice(0, 7))) throw bad('Tháng này đã chốt lương');
+    db.prepare('UPDATE warranty_jobs SET deleted=1 WHERE id=?').run(j.id); audit(req.user.id, 'warranty_job_delete', 'warranty_jobs', j.id, {}); res.json({ ok: true });
+  });
+}
 staffMod.mount(app, { MGR, OWNER });
 require('./tips').mount(app, { MGR, OWNER });
 require('./payroll').mount(app, { OWNER }); // Bảng lương: chỉ Lãnh đạo

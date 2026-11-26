@@ -93,14 +93,15 @@ function compute(month) {
     const topup = floorOn && subtotal < p.floor_amount ? p.floor_amount - subtotal : 0;
     const tipShared = t.shared || 0, tipPrivate = t.private || 0;
     const plus = inp.plus || 0, minus = inp.minus || 0, advance = inp.advance || 0;
-    const net = subtotal + topup + tipShared + tipPrivate + plus - minus - advance;
+    const warranty = s.warranty_penalty || 0; // Vinh 26/11: làm lại bảo hành lỗi kỹ thuật – thợ chịu giá cốt (phương án C)
+    const net = subtotal + topup + tipShared + tipPrivate + plus - minus - advance - warranty;
     return {
       user_id: u.id, name: u.full_name, level: u.level || null, has_params: params.has(u.id),
       params: { ...p, bonus_tiers: tiers }, input: { days: inp.days ?? null, kpi_pct: inp.kpi_pct ?? null, errors: inp.errors || 0, advance, plus, minus, note: inp.note || '' },
       days, days_auto: daysAuto, days_source: inp.days != null ? 'nhập tay' : att.has(u.id) ? 'chấm công' : 'công chuẩn − ngày off', std_days: std, kpi_pct: kpiPct,
       sales: s.sales || 0, bonus_sales: bonusSales, gift_sales: s.gift_sales || 0, family_sales: s.family_sales || 0, by_group: s.by_group || {}, main_count: s.main_count || 0, assist_count: s.assist_count || 0,
       base, allowance, commission_detail: c, commission, bonus_pct: bonusPct, bonus, kpi, subtotal, floor_topup: topup,
-      tip_shared: tipShared, tip_private: tipPrivate, plus, minus, advance, net,
+      tip_shared: tipShared, tip_private: tipPrivate, plus, minus, advance, warranty, warranty_list: s.warranty_list || [], net,
     };
   });
   const sum = (k) => rows.reduce((a, r) => a + (r[k] || 0), 0);
