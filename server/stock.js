@@ -211,7 +211,8 @@ function materialRows(user, opts = {}) {
   return rows.map((m) => {
     const base = { id: m.id, code: m.code, name: m.name, kind: m.kind, grp: m.grp, unit: m.unit, size: m.size, size_unit: m.size_unit, sell_price: m.sell_price, active: m.active,
       formula_keys: m.formula_keys, formula_default: m.formula_default, barcode: m.barcode };
-    if (!isMgr(user)) return base;
+    // Sản phẩm bán lẻ: ai cũng thấy số còn (không có giá nhập) để biết còn hàng lúc bán cho khách
+    if (!isMgr(user)) return m.kind === 'retail' ? { ...base, stock: r2(stockOf(m.id)) } : base;
     const cost = avgCost(m.id), stock = stockOf(m.id);
     return { ...base, note: m.note, ref_cost: m.ref_cost, avg_cost: Math.round(cost), cost_per_size: m.size ? cost / m.size : null, stock: r2(stock), stock_value: Math.round(stock * cost) };
   });

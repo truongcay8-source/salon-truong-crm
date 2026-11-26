@@ -380,3 +380,11 @@ table.fin tr.big td{font-size:1.1em}
   .cardify td:first-child { font-weight: 600; }
   .cardify td.nowrap:last-child, .cardify td.row:last-child { justify-content: flex-end; padding-top: 8px !important; }
 }
+
+/* Bán sản phẩm: ô gõ tìm nhanh */
+.prd-box { position: relative; margin-top: 6px; }
+.prd-box input { width: 100%; }
+.prd-list { position: absolute; z-index: 30; left: 0; right: 0; top: 100%; max-height: 280px; overflow: auto; background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
+.prd-opt { display: flex; justify-content: space-between; gap: 8px; width: 100%; padding: 9px 12px; border: 0; background: none; text-align: left; cursor: pointer; font: inherit; }
+.prd-opt:hover, .prd-opt.on { background: rgba(0,0,0,.05); }
+.bad-t { color: #b3261e; } .warn-t { color: #a15c00; }
