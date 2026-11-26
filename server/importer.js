@@ -447,6 +447,29 @@ function dedupeVisits() {
   return removed;
 }
 
+// Cùng khách, cùng ngày: hóa đơn tạo từ sổ (chưa ai sửa tay) mà mọi dòng dịch vụ đều đã có trong hóa đơn khác
+// có dịch vụ hóa chất trùng → xóa mềm hóa đơn sổ (khôi phục được ở "Đã xóa"), chuyển phần trừ thẻ sang hóa đơn giữ lại
+function dedupeSameDayChem() {
+  const pairs = db.prepare(`SELECT DISTINCT a.id a_id, b.id b_id FROM visits a JOIN visits b ON b.customer_id=a.customer_id AND b.date=a.date AND b.id<>a.id AND b.status='done'
+    JOIN visit_items ia ON ia.visit_id=a.id JOIN visit_items ib ON ib.visit_id=b.id AND ib.service_id=ia.service_id
+    JOIN services s ON s.id=ia.service_id AND s.grp='Hóa chất'
+    WHERE a.status='done' AND a.customer_id IS NOT NULL AND b.import_ref LIKE 'SO:%' AND IFNULL(b.manual_edit,0)=0 ORDER BY b.id`).all();
+  const gone = new Set();
+  let n = 0;
+  for (const { a_id, b_id } of pairs) {
+    if (gone.has(a_id) || gone.has(b_id)) continue;
+    const aIds = new Set(db.prepare('SELECT service_id FROM visit_items WHERE visit_id=?').all(a_id).map((r) => r.service_id));
+    const bItems = db.prepare('SELECT service_id FROM visit_items WHERE visit_id=?').all(b_id);
+    if (!bItems.length || !bItems.every((i) => i.service_id && aIds.has(i.service_id))) continue;
+    const a = db.prepare('SELECT code FROM visits WHERE id=?').get(a_id);
+    moveCardUse(b_id, a_id);
+    L.deleteVisit(b_id, `Trùng: dịch vụ hóa chất đã có trong hóa đơn ${a.code} cùng ngày (sổ ghi 2 lần)`, { id: 1 });
+    db.prepare('UPDATE appointments SET visit_id=? WHERE visit_id=?').run(a_id, b_id);
+    gone.add(b_id); n++;
+  }
+  return n;
+}
+
 function guessName(text) {
   let s = String(text).split(/[\n(–-]| \d/)[0];
   s = s.replace(/(?:\+?84|0)[\d.\s]{8,}/g, '').replace(/\s+/g, ' ').trim();
@@ -780,7 +803,8 @@ async function importWorkbook(buffer, opts, user) {
       if (!blocks.length) continue;
       recognised = true; summary.format = summary.format || 'Sổ đặt lịch theo ngày';
       const t = L.today();
-      if (opts.bookMoney !== false) require('./expenses').importFromBook(blocks.filter((b) => b.date <= t).map((b) => ({ date: b.date, items: b.spend })), user, summary);
+      const untilM = L.isDate(getSettings().book_money_until) ? getSettings().book_money_until : '9999-12-31';
+      if (opts.bookMoney !== false) require('./expenses').importFromBook(blocks.filter((b) => b.date <= t && b.date < untilM).map((b) => ({ date: b.date, items: b.spend })), user, summary);
       if (opts.bookMoney !== false) require('./finance').importLixi(blocks.filter((b) => b.date <= t && b.lixi.length), user, summary);
       for (const b of blocks) {
         const until = L.isDate(getSettings().book_money_until) ? getSettings().book_money_until : null;
@@ -1113,6 +1137,7 @@ async function importWorkbook(buffer, opts, user) {
   if (!opts.dryRun) try { summary.clone_unmerged = unmergeCloneDupes(); } catch (e) { summary.warnings.push('Tách lượt gộp nhầm: ' + e.message); }
   if (!opts.dryRun) try { summary.clone_staff_fixed = dedupeCloneStaff(); } catch (e) { summary.warnings.push('Dọn lịch trùng do 2 tài khoản cùng tên: ' + e.message); }
   if (!opts.dryRun) try { summary.visits_deduped = dedupeVisits(); } catch (e) { summary.warnings.push('Dọn lượt trùng: ' + e.message); }
+  if (!opts.dryRun) try { summary.chem_dupes_removed = dedupeSameDayChem(); } catch (e) { summary.warnings.push('Dọn hóa đơn trùng hóa chất: ' + e.message); }
   if (!opts.dryRun) try { summary.visits_merged = mergeSameVisits(); } catch (e) { summary.warnings.push('Gộp lượt cùng khách: ' + e.message); }
   if (!opts.dryRun) try { summary.gifts_closed = closeUsedGifts(); } catch (e) { summary.warnings.push('Đóng thẻ tri ân: ' + e.message); }
   if (!opts.dryRun) try { summary.appointments_deduped = dedupeAppointments(); } catch (e) { summary.warnings.push('Dọn lịch trùng: ' + e.message); }
@@ -1163,4 +1188,4 @@ function dedupeCloneStaff() {
   if (n) closeUsedGifts();
   return n;
 }
-module.exports = { VERSION, nameKey, staffClones, dedupeCloneStaff, unmergeCloneDupes, dedupeVisits, closeUsedGifts, mergeSamePhone, mergeSameVisits, mergeOrphanCustomers, dedupeAppointments, apptKey, importWorkbook, asDate, asTime };
+module.exports = { VERSION, dedupeSameDayChem, nameKey, staffClones, dedupeCloneStaff, unmergeCloneDupes, dedupeVisits, closeUsedGifts, mergeSamePhone, mergeSameVisits, mergeOrphanCustomers, dedupeAppointments, apptKey, importWorkbook, asDate, asTime };
