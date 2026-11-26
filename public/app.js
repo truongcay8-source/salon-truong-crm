@@ -2926,7 +2926,7 @@ VIEWS.settings = async (main) => {
       <div class="table-wrap"><table><thead><tr><th>Họ tên</th><th>Đăng nhập</th><th>Vai trò</th><th>Cấp</th><th>Trạng thái</th><th>Hoa hồng</th><th></th></tr></thead><tbody>
       ${users.map((u) => `<tr style="${u.active ? '' : 'opacity:.5'}"><td><b>${esc(u.full_name)}</b>${u.aliases ? `<div class="small muted">tên khác: ${esc(u.aliases)}</div>` : ''}</td><td>${u.can_login ? esc(u.username) : '<span class="muted">không đăng nhập</span>'}</td><td>${ROLE[u.role]}</td><td>${esc(u.level || '')}</td>
       <td>${u.active ? (u.must_change_pw && u.can_login ? '<span class="badge warn">chưa đổi MK</span>' : '<span class="badge ok">đang làm</span>') : '<span class="badge">đã khóa</span>'}</td><td>${u.commission_enabled ? 'Có' : 'Không'}</td>
-      <td class="row"><button class="btn sm" data-eu="${u.id}">Sửa</button>${u.can_login ? `<button class="btn sm" data-pw="${u.id}">Đặt lại MK</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
+      <td class="row"><button class="btn sm" data-eu="${u.id}">Sửa</button>${u.can_login ? `<button class="btn sm" data-pw="${u.id}">Đặt lại MK</button>` : ''}${u.role !== 'owner' ? `<button class="btn sm" data-mu="${u.id}" title="Chuyển hết dữ liệu sang tài khoản khác rồi xóa tài khoản này">⇢ Chuyển & xóa</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
     const form = (u = {}) => {
       openModal(u.id ? 'Sửa tài khoản' : 'Tài khoản mới', `<form id="uf"><label>Họ tên (hiển thị)</label><input name="full_name" value="${esc(u.full_name || '')}" required>
         ${u.id ? '' : '<label>Tên đăng nhập (không dấu)</label><input name="username" autocapitalize="none" required><label>Mật khẩu tạm (≥6 ký tự)</label><input name="password" required minlength="6" autocapitalize="none" autocorrect="off" spellcheck="false">'}
@@ -2943,6 +2943,19 @@ VIEWS.settings = async (main) => {
     };
     $('#nu').onclick = () => form();
     $$('[data-eu]', sb).forEach((b) => (b.onclick = () => form(users.find((u) => u.id === Number(b.dataset.eu)))));
+    $$('[data-mu]', sb).forEach((b) => (b.onclick = () => {
+      const u = users.find((x) => x.id === Number(b.dataset.mu));
+      openModal('Chuyển dữ liệu & xóa tài khoản', `<form id="muf"><p>Chuyển <b>toàn bộ</b> dữ liệu của <b>${esc(u.full_name)}</b> (${esc(u.username)}): lượt làm, doanh số, hoa hồng, lịch hẹn, khách phụ trách, thẻ đã bán, chấm công, lương, tip, chat… sang:</p>
+        <select name="to" required><option value="">— Chọn tài khoản nhận —</option>${users.filter((x) => x.id !== u.id).map((x) => `<option value="${x.id}">${esc(x.full_name)} (${esc(x.username)})</option>`).join('')}</select>
+        <div class="small muted" style="margin-top:8px">Tài khoản nhận sẽ mang tên <b>${esc(u.full_name)}</b>, giữ tên đăng nhập + mật khẩu của nó. Tài khoản <b>${esc(u.username)}</b> bị xóa, không đăng nhập được nữa.</div>
+        <label style="display:flex;gap:8px;color:var(--text);margin-top:10px"><input type="checkbox" name="ok" required> Tôi đã kiểm tra, chuyển và xóa</label>
+        <div class="err"></div><div class="modal-foot"><button class="btn primary">Chuyển & xóa</button></div></form>`);
+      $('#muf').onsubmit = (e) => { e.preventDefault(); guard($('#muf button'), async () => {
+        const r = await api(`/users/${u.id}/merge`, { method: 'POST', body: { to: formData($('#muf')).to } });
+        const n = Object.values(r.moved || {}).reduce((a, x) => a + x, 0);
+        toast(`Đã chuyển ${n} mục sang ${r.username} và xóa tài khoản cũ`); closeModal(); S.staff = await api('/staff'); reload();
+      }); };
+    }));
     $$('[data-pw]', sb).forEach((b) => (b.onclick = () => {
       const u = users.find((x) => x.id === Number(b.dataset.pw));
       const sug = String(Math.floor(100000 + Math.random() * 900000));

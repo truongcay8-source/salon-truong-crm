@@ -703,3 +703,27 @@ test('tạo thêm tài khoản trùng tên ("TruongV1" tên khác "Trường") �
   assert.equal((await o.put('/users/' + truong, { full_name: 'Trường', aliases: '' })).status, 200);
   db.prepare("UPDATE users SET active=0, works=0, aliases=NULL WHERE id=?").run(clone);
 });
+
+test('chuyển hết dữ liệu tài khoản cũ sang tài khoản mới rồi xóa tài khoản cũ', async () => {
+  const L = require('../server/logic');
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const old = db.prepare("INSERT INTO users(username,full_name,role,level,password_hash) VALUES ('thoaicu','Thoại Cũ','staff','Junior','x')").run().lastInsertRowid;
+  const neo = db.prepare("INSERT INTO users(username,full_name,role,aliases,password_hash) VALUES ('thoaimoi','ThoaiV1','staff','Thoại Cũ','x')").run().lastInsertRowid;
+  const svc = db.prepare("SELECT id FROM services WHERE active=1 AND price>0 ORDER BY id LIMIT 1").get();
+  const cu = db.prepare("INSERT INTO customers(code,name,staff_id) VALUES ('TMG1','Khách chuyển',?)").run(old).lastInsertRowid;
+  const v = L.saveVisit({ customer_id: cu, date: '2026-11-21', time: '15:00', main_staff_id: old, items: [{ service_id: svc.id, price: 200000 }], payment_method: 'Tiền mặt' }, { id: 1, role: 'owner' }, null, {});
+  const vid = v.id || v;
+  db.prepare("INSERT INTO payroll_inputs(month,user_id) VALUES ('2026-11',?)").run(old);
+  db.prepare("INSERT INTO payroll_inputs(month,user_id) VALUES ('2026-11',?)").run(neo);
+  const r = await o.post(`/users/${old}/merge`, { to: neo });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(db.prepare('SELECT main_staff_id FROM visits WHERE id=?').get(vid).main_staff_id, neo);
+  assert.equal(db.prepare('SELECT staff_id FROM customers WHERE id=?').get(cu).staff_id, neo);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM payroll_inputs WHERE user_id=?').get(neo).n, 1);
+  const u = db.prepare('SELECT * FROM users WHERE id=?').get(neo);
+  assert.equal(u.full_name, 'Thoại Cũ'); assert.equal(u.level, 'Junior'); assert.equal(u.username, 'thoaimoi');
+  const list = (await o.get('/users')).data;
+  assert.ok(!list.some((x) => x.id === old)); assert.ok(!(await o.get('/staff')).data.some((x) => x.id === old));
+  assert.equal((await o.post(`/users/${neo}/merge`, { to: neo })).status, 400);
+  db.prepare('UPDATE users SET active=0, works=0 WHERE id=?').run(neo);
+});
