@@ -47,9 +47,14 @@ async function api(path, opts = {}) {
   let data = null;
   try { data = await res.json(); } catch { /* không phải JSON */ }
   if (res.status === 401 && path !== '/login') { const was = S.me; S.me = null; renderLogin(); const e = new Error(was ? 'Phiên đăng nhập hết hạn' : 'Chưa đăng nhập'); e.status = 401; throw e; }
+  // Tab khác vừa đăng nhập tài khoản khác (trình duyệt chỉ giữ 1 đăng nhập) → tải lại theo tài khoản đang đăng nhập
+  if (res.status === 403 && S.me && path !== '/me') { const m = await fetch('/api/me', { credentials: 'same-origin' }).then((r) => r.json()).catch(() => null); if (m && m.user && m.user.id !== S.me.id) { toast('Trình duyệt đang đăng nhập ' + m.user.full_name + ' (từ tab khác) – tải lại'); setTimeout(() => location.reload(), 1200); } }
   if (!res.ok) { const e = new Error((data && data.error) || 'Lỗi ' + res.status); e.status = res.status; e.data = data; throw e; }
   return data;
 }
+// Quay lại tab: kiểm tra còn đúng tài khoản không
+document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible' || !S.me) return;
+  fetch('/api/me', { credentials: 'same-origin' }).then((r) => (r.ok ? r.json() : null)).then((m) => { if (m && m.user && S.me && m.user.id !== S.me.id) location.reload(); }).catch(() => {}); });
 function toast(msg) {
   const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden');
   clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.add('hidden'), 2800);
