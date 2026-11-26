@@ -41,7 +41,7 @@ function expectedCash(date) {
 }
 
 function board(date, user) {
-  const seeMoney = user.role !== 'staff';
+  const seeMoney = user.role === 'owner'; // Vinh 26/11: tiền lượt người khác chỉ Lãnh đạo thấy
   const appts = db.prepare(`SELECT a.id, a.time, a.status, a.service, a.visit_id, a.staff_id, a.assistant_id, a.customer_id, a.pay_note,
       COALESCE(c.name, a.guest_name) name, COALESCE(c.phone, a.guest_phone) phone, c.code customer_code, u.full_name staff_name, v.id v_live, v.cash_paid v_cash, v.card_paid v_card, v.total visit_total, v.code visit_code, v.payment_method, v.main_staff_id v_main, v.assistant_id v_asst
     FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id LEFT JOIN visits v ON v.id=a.visit_id AND v.status='done'
@@ -88,8 +88,8 @@ function board(date, user) {
 
 function mount(app, { OWNER }) {
   app.get('/api/pos', (req, res) => {
-    // Nhân viên chỉ xem hôm nay; quản lý trở lên xem ngày khác
-    const date = req.user.role !== 'staff' && L.isDate(req.query.date) ? req.query.date : L.today();
+    // Thu ngân: nhân viên + quản lý chỉ xem hôm nay; Lãnh đạo xem ngày khác
+    const date = req.user.role === 'owner' && L.isDate(req.query.date) ? req.query.date : L.today();
     res.json(board(date, req.user));
   });
   // Khách đến: chuyển lịch sang "Đang phục vụ"

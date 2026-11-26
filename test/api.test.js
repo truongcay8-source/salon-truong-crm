@@ -150,7 +150,8 @@ test('luồng chính và phân quyền', async () => {
 
   // Quyền Excel, tài khoản, nhật ký
   assert.equal((await duong.get('/export')).status, 403);
-  assert.equal((await mgr.call('GET', '/export')).status, 200);
+  assert.equal((await mgr.call('GET', '/export')).status, 403, 'Vinh 26/11: xuất toàn bộ dữ liệu chỉ Lãnh đạo');
+  assert.equal((await owner.call('GET', '/export')).status, 200);
   assert.equal((await mgr.get('/users')).status, 403);
   assert.equal((await mgr.get('/audit')).status, 403);
   assert.equal((await mgr.put('/settings', { return_days: 5 })).status, 403);
@@ -225,38 +226,38 @@ test('luồng chính và phân quyền', async () => {
 
   // Kho & giá cốt: nhập hóa chất, định mức, ghi hóa chất ở phiếu thu, bán sản phẩm tên thật; nhân viên không thấy giá vốn
   assert.equal((await thu.post('/materials', { name: 'Màu X 100ml', kind: 'service' })).status, 403);
-  const color = (await mgr.post('/materials', { name: 'Màu X', kind: 'service', unit: 'Tuýp', size: 100, size_unit: 'ml' })).data.id;
-  const oxy = (await mgr.post('/materials', { name: 'Oxy 6%', kind: 'service', unit: 'Chai', size: 1000, size_unit: 'ml' })).data.id;
-  const shampoo = (await mgr.post('/materials', { name: 'Dầu gội Y 250ml', kind: 'retail', unit: 'Chai', sell_price: 450000 })).data.id;
-  await mgr.post(`/materials/${color}/move`, { kind: 'in', qty: 10, unit_cost: 200000 });
-  await mgr.post(`/materials/${color}/move`, { kind: 'in', qty: 10, unit_cost: 100000 });
-  await mgr.post(`/materials/${oxy}/move`, { kind: 'in', qty: 2, unit_cost: 300000 });
-  await mgr.post(`/materials/${shampoo}/move`, { kind: 'in', qty: 6, unit_cost: 250000 });
-  const dye = (await mgr.get('/services')).data.find((x) => x.name === 'Nhuộm');
-  assert.equal((await mgr.put('/recipes/' + dye.id, { lines: [{ material_id: color, qty: 0.6 }, { material_id: oxy, qty: 0.09 }] })).status, 200);
-  assert.equal((await mgr.get('/recipes')).data.find((x) => x.material_id === color).cost, 90000, 'giá vốn bình quân 150k × 0,6 tuýp');
+  const color = (await owner.post('/materials', { name: 'Màu X', kind: 'service', unit: 'Tuýp', size: 100, size_unit: 'ml' })).data.id;
+  const oxy = (await owner.post('/materials', { name: 'Oxy 6%', kind: 'service', unit: 'Chai', size: 1000, size_unit: 'ml' })).data.id;
+  const shampoo = (await owner.post('/materials', { name: 'Dầu gội Y 250ml', kind: 'retail', unit: 'Chai', sell_price: 450000 })).data.id;
+  await owner.post(`/materials/${color}/move`, { kind: 'in', qty: 10, unit_cost: 200000 });
+  await owner.post(`/materials/${color}/move`, { kind: 'in', qty: 10, unit_cost: 100000 });
+  await owner.post(`/materials/${oxy}/move`, { kind: 'in', qty: 2, unit_cost: 300000 });
+  await owner.post(`/materials/${shampoo}/move`, { kind: 'in', qty: 6, unit_cost: 250000 });
+  const dye = (await owner.get('/services')).data.find((x) => x.name === 'Nhuộm');
+  assert.equal((await owner.put('/recipes/' + dye.id, { lines: [{ material_id: color, qty: 0.6 }, { material_id: oxy, qty: 0.09 }] })).status, 200);
+  assert.equal((await owner.get('/recipes')).data.find((x) => x.material_id === color).cost, 90000, 'giá vốn bình quân 150k × 0,6 tuýp');
   assert.equal((await thu.get('/recipes')).data[0].cost, undefined, 'nhân viên không thấy giá cốt định mức');
-  r = await mgr.post('/visits', { customer_id: huong, date: d3, time: '15:00', main_staff_id: staff['Trường'], assistant_id: staff['Chị Thu'], payment_method: 'Tiền mặt',
+  r = await owner.post('/visits', { customer_id: huong, date: d3, time: '15:00', main_staff_id: staff['Trường'], assistant_id: staff['Chị Thu'], payment_method: 'Tiền mặt',
     items: [{ service_id: dye.id }, { material_id: shampoo, qty: 2 }], materials: [{ material_id: color, qty: 0.6 }, { material_id: oxy, qty: 0.09 }] });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   const vid = r.data.id;
   assert.equal(r.data.cost, 90000 + 27000 + 500000, 'hóa chất 117k + 2 chai × 250k');
   assert.equal(r.data.total, dye.price + 900000);
   assert.ok(r.data.items.some((i) => i.name === 'Dầu gội Y 250ml ×2' && i.grp === 'Bán sản phẩm'));
-  let mats = (await mgr.get('/materials')).data;
+  let mats = (await owner.get('/materials')).data;
   assert.equal(mats.find((m) => m.id === color).stock, 19.4); assert.equal(mats.find((m) => m.id === shampoo).stock, 4);
   const tv = (await thu.get('/visits/' + vid)).data;
   assert.equal(tv.cost, null, 'thợ phụ không thấy giá cốt'); assert.equal(tv.materials[0].unit_cost, null); assert.equal(tv.materials.length, 2);
   assert.equal((await thu.get('/materials')).data.find((m) => m.id === color).avg_cost, undefined, 'nhân viên không thấy giá vốn');
   assert.equal((await thu.get('/reports/cost')).status, 403);
-  r = await mgr.get(`/reports/cost?from=${d3}&to=${d3}`);
+  r = await owner.get(`/reports/cost?from=${d3}&to=${d3}`);
   assert.equal(r.data.summary.use_cost, 117000); assert.equal(r.data.summary.product_cost, 500000); assert.equal(r.data.summary.product_revenue, 900000);
   // Sửa lượt không gửi hóa chất → giữ nguyên; xóa lượt → trả lại kho
   await owner.put('/visits/' + vid, { customer_id: huong, date: d3, time: '15:00', main_staff_id: staff['Trường'], payment_method: 'Tiền mặt', items: [{ service_id: dye.id }] });
-  mats = (await mgr.get('/materials')).data;
+  mats = (await owner.get('/materials')).data;
   assert.equal(mats.find((m) => m.id === color).stock, 19.4); assert.equal(mats.find((m) => m.id === shampoo).stock, 6);
   await owner.del('/visits/' + vid, { reason: 'test' });
-  assert.equal((await mgr.get('/materials')).data.find((m) => m.id === color).stock, 20);
+  assert.equal((await owner.get('/materials')).data.find((m) => m.id === color).stock, 20);
 
   // Quyền kho: Thu + Dương xem tồn (không giá), Dương kiểm kho, Thu được báo hàng hết; người khác không xem được
   assert.equal((await thu.get('/me')).data.user.stock_view, true); assert.equal((await thu.get('/me')).data.user.stock_count, false);
@@ -267,7 +268,7 @@ test('luồng chính và phân quyền', async () => {
   assert.equal((await thu.post('/stock/count', { lines: [{ material_id: color, counted: 18 }] })).status, 403, 'Thu không kiểm kho');
   r = await duong.post('/stock/count', { lines: [{ material_id: color, counted: 18 }, { material_id: oxy, counted: '' }], note: 'test' });
   assert.equal(r.status, 200); assert.equal(r.data.counted, 1); assert.equal(r.data.diffs[0].diff, -2);
-  assert.equal((await mgr.get('/materials')).data.find((m) => m.id === color).stock, 18);
+  assert.equal((await owner.get('/materials')).data.find((m) => m.id === color).stock, 18);
   await thu.put(`/stock/${color}/min`, { min_qty: 18 });
   let rem = (await thu.get('/reminders')).data;
   assert.ok(rem.stock.some((m) => m.id === color && m.status === 'low')); assert.ok(rem.counts.stock >= 1);
@@ -325,8 +326,8 @@ test('luồng chính và phân quyền', async () => {
   tp = (await thu.get('/tips?month=2026-03')).data;
   assert.equal(tp.shares.find((x) => x.user_id === staff['Thoại']).paid_amount, 50000);
 
-  // Báo cáo khách phụ trách theo thợ: quản lý thấy tiền, nhân viên chỉ thấy dòng của mình, không có tiền
-  let sc = (await mgr.get(`/reports/staff-customers?from=${d3}&to=${d3}`)).data;
+  // Báo cáo khách phụ trách theo thợ: chỉ Lãnh đạo thấy tiền, nhân viên chỉ thấy dòng của mình, không có tiền
+  let sc = (await owner.get(`/reports/staff-customers?from=${d3}&to=${d3}`)).data;
   const rowT = sc.rows.find((x) => x.staff_id === staff['Trường']);
   assert.ok(rowT.customers >= 1 && rowT.active_period >= 1 && rowT.avg_spend > 0);
   assert.equal(rowT.return_rate, 1, 'C Hương đã đến nhiều lần');

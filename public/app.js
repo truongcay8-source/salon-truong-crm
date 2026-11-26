@@ -460,7 +460,7 @@ VIEWS.dashboard = async (main) => {
     <div class="kpi"><div class="l">DS dịch vụ tháng này</div><div class="v">${money(M.shop_service_sales)}</div><div class="s">bán SP ${money(M.product_sales)} · bán thẻ ${money(M.card_sales)}</div></div>
     <div class="kpi"><div class="l">Khách hàng</div><div class="v">${d.customers}</div><div class="s">trong hệ thống</div></div>`
     : `<div class="kpi"><div class="l">DS dịch vụ của bạn hôm nay</div><div class="v">${money(mine ? mine.service_sales : 0)}</div><div class="s">${mine ? mine.main_count : 0} lượt làm chính${mine && mine.product_sales ? ' · bán SP ' + money(mine.product_sales) : ''}</div></div>
-    <div class="kpi"><div class="l">① DS dịch vụ tháng (xét thưởng)</div><div class="v">${money(mineMonth ? mineMonth.bonus_sales : 0)}</div><div class="s">dịch vụ tự làm${mineMonth && (mineMonth.gift_sales || mineMonth.family_sales) ? ', đã trừ thẻ tri ân / người nhà' : ''}</div></div>
+    <div class="kpi"><div class="l">① DS dịch vụ tháng (xét thưởng)</div><div class="v">${money(mineMonth ? mineMonth.bonus_sales : 0)}</div><div class="s">dịch vụ tự làm${mineMonth && (mineMonth.gift_sales || mineMonth.family_sales) ? ', không tính thẻ tri ân / khách ưu đãi đặc biệt' : ''}</div></div>
     <div class="kpi"><div class="l">② DS bán sản phẩm tháng</div><div class="v">${money(mineMonth ? mineMonth.product_sales : 0)}</div><div class="s">riêng · chỉ tính % HH sản phẩm</div></div>
     <div class="kpi"><div class="l">② DS bán thẻ tháng</div><div class="v">${money(mineMonth ? mineMonth.cards_amount : 0)}</div><div class="s">${mineMonth ? mineMonth.cards_count : 0} thẻ · riêng · chỉ tính HH thẻ</div></div>
     <div class="kpi"><div class="l">② DS làm phụ tháng</div><div class="v">${money(mineMonth ? mineMonth.assist_sales : 0)}</div><div class="s">${mineMonth ? mineMonth.assist_count : 0} lượt · chỉ tính HH thợ phụ</div></div>
@@ -480,7 +480,7 @@ VIEWS.dashboard = async (main) => {
   $('#qVisit').onclick = () => visitForm({});
   bindApptList(main, () => VIEWS.dashboard(main));
   // Nhắc quản lý tải bản sao lưu về máy mỗi tuần
-  if (isMgr()) api('/backup-pc').then((st) => {
+  if (isOwner()) api('/backup-pc').then((st) => {
     if (!st.due || S.page !== 'dashboard') return;
     const box = document.createElement('div'); box.className = 'card bk-due'; box.innerHTML = backupBox(st);
     const h = main.querySelector('.top') || main.firstElementChild; h.after(box);
@@ -598,7 +598,7 @@ async function familyDay(apptId, after) {
 const fold = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
 const payIcon = (m) => (/mặt/i.test(m) ? '💵' : /khoản|ck/i.test(m) ? '🏦' : /thẻ|quẹt|pos/i.test(m) ? '💳' : '💰');
 VIEWS.pos = async (main) => {
-  const date = isMgr() && S.params.date ? S.params.date : S.today;
+  const date = isOwner() && S.params.date ? S.params.date : S.today;
   const r = await api('/pos' + (date !== S.today ? '?date=' + date : ''));
   const who = (a) => `${a.staff_name ? esc(a.staff_name) : '<span class="muted">chưa gán thợ</span>'}`;
   const key = (a) => esc(fold([a.name, a.phone, a.staff_name, a.service, a.visit_code].filter(Boolean).join(' ')));
@@ -620,7 +620,7 @@ VIEWS.pos = async (main) => {
       ${T.unpaid ? `<div class="kpi"><div class="l">Khách chưa trả</div><div class="v" style="color:var(--bad,#c0392b)">${money(T.unpaid)}</div></div>` : ''}</div></div>` : '';
   main.innerHTML = header('🧾 Thu ngân', 'Ai cũng làm thu ngân được: khách đến bấm ✓, làm xong bấm 💰 Thanh toán. Sửa hóa đơn đã lưu vẫn chỉ Lãnh đạo.',
     `<button class="btn primary" id="walk">💰 Khách vãng lai</button><button class="btn" id="close">🔒 Kết ca</button>`) +
-    `${isMgr() ? `<div class="card"><div class="row"><input type="date" id="pd" value="${date}" style="width:auto">${date !== S.today ? '<button class="btn sm" id="tdy">Hôm nay</button>' : ''}<span class="small muted">${dmy(date)}</span></div></div>` : ''}
+    `${isOwner() ? `<div class="card"><div class="row"><input type="date" id="pd" value="${date}" style="width:auto">${date !== S.today ? '<button class="btn sm" id="tdy">Hôm nay</button>' : ''}<span class="small muted">${dmy(date)}</span></div></div>` : ''}
     ${tot}
     ${r.debts && r.debts.length ? `<div class="card"><h3>📝 Khách còn nợ <span class="badge bad">${money(r.debts.reduce((s, d) => s + d.debt, 0))}</span></h3>
       ${r.debts.map((d) => `<div class="stat-line debt-line"><span><b>${esc(d.name)}</b> <span class="small muted">${dmy(d.date)} · ${esc(d.visit_code)}${d.staff_name ? ' · ' + esc(d.staff_name) : ''}</span></span>
@@ -1256,13 +1256,13 @@ VIEWS.customers = async (main) => {
   const canMove = isMgr() && sf && sf !== 'mine' && r.total > 0;
   const rowsHtml = () => r.rows.length ? r.rows.map((c) => `<tr class="click" data-c="${c.id}"><td class="muted">${esc(c.code)}</td><td><b>${esc(c.name)}</b>${c.fam ? ` <span class="badge" title="Có người nhà / người đi cùng">👨‍👩‍👧 ${c.fam + 1}</span>` : ''}${c.relation ? `<div class="small muted">${esc(c.relation)}</div>` : ''}</td><td>${esc(c.phone || '')}</td>
       <td class="num">${c.visits}</td><td>${dmy(c.last_visit)}</td><td>${c.staff_id ? esc(staffName(c.staff_id)) : '<span class="muted small">—</span>'}</td>
-      <td class="small formula-cell" title="${esc(c.formula || '')}">${c.formula ? esc(c.formula.length > 40 ? c.formula.slice(0, 40) + '…' : c.formula) : ''}</td>${isMgr() ? `<td class="num">${money(c.spend)}</td>` : ''}</tr>`).join('')
+      <td class="small formula-cell" title="${esc(c.formula || '')}">${c.formula ? esc(c.formula.length > 40 ? c.formula.slice(0, 40) + '…' : c.formula) : ''}</td>${isOwner() ? `<td class="num">${money(c.spend)}</td>` : ''}</tr>`).join('')
     : `<tr><td colspan="8" class="muted">Không thấy khách nào. Thử gõ ít chữ hơn, không cần dấu (vd: “huyen”) hoặc 4 số cuối SĐT.</td></tr>`;
   const moreHtml = () => r.total > r.rows.length ? `Đang hiện ${r.rows.length}/${r.total} — gõ tìm kiếm để lọc.` : '';
   main.innerHTML = header('Khách hàng', `<span id="cTotal">${r.total}</span> khách`, `${isMgr() ? '<button class="btn" id="famSug">👨‍👩‍👧 Gợi ý người nhà</button>' : ''}${canMove ? '<button class="btn" id="moveC">🔄 Bàn giao khách</button>' : ''}<button class="btn primary" id="newC">+ Khách mới</button>`) +
     `<div class="card"><div class="row"><input id="q" placeholder="🔍 Tìm tên (không cần dấu), SĐT, mã khách, công thức…" value="${esc(q)}" type="search" autocomplete="off" autocorrect="off" style="flex:1;min-width:220px">
       <select id="sf" style="width:auto"><option value="">Tất cả thợ</option><option value="mine" ${sf === 'mine' ? 'selected' : ''}>⭐ Khách của tôi</option>${activeStaff().map((u) => `<option value="${u.id}" ${String(u.id) === sf ? 'selected' : ''}>Khách của ${esc(u.full_name)}</option>`).join('')}<option value="none" ${sf === 'none' ? 'selected' : ''}>Chưa giao thợ</option></select></div></div>
-    <div class="card"><div class="table-wrap cardify"><table><thead><tr><th>Mã</th><th>Tên khách</th><th>SĐT</th><th class="num">Lượt</th><th>Lần gần nhất</th><th>Thợ phụ trách</th><th>Công thức</th>${isMgr() ? '<th class="num">Tổng chi</th>' : ''}</tr></thead>
+    <div class="card"><div class="table-wrap cardify"><table><thead><tr><th>Mã</th><th>Tên khách</th><th>SĐT</th><th class="num">Lượt</th><th>Lần gần nhất</th><th>Thợ phụ trách</th><th>Công thức</th>${isOwner() ? '<th class="num">Tổng chi</th>' : ''}</tr></thead>
     <tbody id="cBody">${rowsHtml()}</tbody></table></div>
     <div class="muted small" id="cMore" style="margin-top:8px">${moreHtml()}</div></div>`;
   const params = (over) => { const p = { q: $('#q').value.trim(), staff: $('#sf').value, ...over }; return Object.fromEntries(Object.entries(p).filter(([, v]) => v)); };
@@ -1332,7 +1332,7 @@ function customerForm(c = {}, after) {
     <div><label>🔁 Khách định kỳ: bao nhiêu ngày làm 1 lần</label><input type="number" name="cycle_days" min="0" max="365" placeholder="vd 14 = 2 tuần" value="${c.cycle_days || ''}"></div>
     <div><label>&nbsp;</label><label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="cycle_call" style="width:auto" ${c.cycle_call ? 'checked' : ''}> Gọi điện trước hỏi khách muốn mấy giờ</label></div>
     <div class="full"><label>Ghi chú khi gọi (giờ hay đặt, cách gọi…)</label><input name="cycle_note" value="${esc(c.cycle_note || '')}" placeholder="vd: hay đặt chiều thứ 7, gọi sau 10h"></div>
-    ${isOwner() ? `<div class="full"><label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="owner_family" style="width:auto" ${c.owner_family ? 'checked' : ''}> 👪 Người nhà chủ: tự giảm 50%, không tính vào doanh số tổng xét thưởng của thợ</label></div>` : ''}</div>
+    ${isOwner() ? `<div class="full"><label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="owner_family" style="width:auto" ${c.owner_family ? 'checked' : ''}> ⭐ Khách ưu đãi đặc biệt: tự giảm 50%, không tính vào doanh số xét thưởng của thợ</label></div>` : ''}</div>
     ${c.birthday && c.birthday.length === 5 ? `<div class="small muted">Sinh nhật đang lưu: ${c.birthday.split('-').reverse().join('/')} (không có năm). Để trống ô trên nếu không đổi.</div>` : ''}
     <div class="err"></div><div class="modal-foot">${isEdit && isOwner() ? '<button type="button" class="btn danger" id="delC">Xóa khách</button><span class="spacer"></span>' : ''}<button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Lưu</button></div></form>`);
   $('#cf').onsubmit = (e) => {
@@ -1543,7 +1543,7 @@ async function visitForm(v = {}, after) {
       <div class="row" style="gap:4px;margin-top:4px">${[10, 15, 20, 30, 50].map((p) => `<button type="button" class="btn sm" data-dpct="${p}">${p}%</button>`).join('')}<button type="button" class="btn sm" data-dpct="0">Bỏ</button></div>
       <div class="small muted" id="discTxt"></div></div>
     <div class="full" id="discRW" style="${v.discount ? '' : 'display:none'}"><label>Lý do giảm (bắt buộc khi có giảm)</label><input name="discount_reason" list="reasons" value="${esc(v.discount_reason || '')}">
-      <datalist id="reasons"><option value="Khách quen"><option value="Khách giới thiệu"><option value="Khuyến mãi"><option value="Bù lỗi dịch vụ"><option value="Người nhà / nhân viên"><option value="Trẻ em dưới 13 tuổi (giảm 50%)"></datalist></div>
+      <datalist id="reasons"><option value="Khách quen"><option value="Khách giới thiệu"><option value="Khuyến mãi"><option value="Bù lỗi dịch vụ"><option value="Ưu đãi đặc biệt"><option value="Trẻ em dưới 13 tuổi (giảm 50%)"></datalist></div>
     <div id="cardBox" class="full"></div>
     <div class="full"><div class="totals" id="tot"></div></div>
     <div class="full pay-box"><label>Khách trả bằng</label><div class="row pay-quick">${methods.map((m) => `<button type="button" class="btn ${v.payment_method === m ? 'primary' : ''}" data-pm="${esc(m)}">${payIcon(m)} ${esc(m)}</button>`).join('')}
@@ -1652,10 +1652,10 @@ async function visitForm(v = {}, after) {
       ${Number(f.surcharge.value) > 0 ? (() => { const sc = Number(f.surcharge.value), r = S.settings.surcharge_salon_rate ?? 0.33, st = sc - Math.round(sc * r), as = f.assistant_id.value ? Math.floor(st / 2) : 0;
         return `<div class="row small muted"><span>Phụ thu chia: cửa hàng ${money(sc - st)} (${Math.round(r * 100)}%) · thợ chính ${money(st - as)}${as ? ' · người phụ ' + money(as) : ''}</span></div>`; })() : ''}
       ${f.time.value >= '19:00' && sub && !Number(f.surcharge.value) ? `<div class="row small" style="color:var(--warn)"><span>Lịch sau 19:00: phụ thu 10% theo bảng giá</span><button type="button" class="btn sm" id="eveSur">+ ${money(Math.round(sub * 0.1 / 1000) * 1000)}</button></div>` : ''}
-      ${isMgr() && (used.length || items.some((i) => i.material_id)) ? (() => {
+      ${isOwner() && (used.length || items.some((i) => i.material_id)) ? (() => {
         const cost = Math.round(used.reduce((t, u) => { const m = matById(u.material_id); return t + (m ? toUnits(m, u.amt || 0) * (m.avg_cost || 0) : 0); }, 0)
           + items.reduce((t, i) => { const m = i.material_id && matById(i.material_id); return t + (m ? (i.qty || 1) * (m.avg_cost || 0) : 0); }, 0));
-        return `<div class="row small muted"><span>Giá cốt (hóa chất + giá vốn SP) · chỉ quản lý thấy</span><span class="num">${money(cost)} · lãi gộp ${money(total - cost)}${total ? ' (' + Math.round((total - cost) / total * 100) + '%)' : ''}</span></div>`;
+        return `<div class="row small muted"><span>Giá cốt (hóa chất + giá vốn SP) · chỉ Lãnh đạo thấy</span><span class="num">${money(cost)} · lãi gộp ${money(total - cost)}${total ? ' (' + Math.round((total - cost) / total * 100) + '%)' : ''}</span></div>`;
       })() : ''}`;
     const es = $('#eveSur'); if (es) es.onclick = () => { f.surcharge.value = Math.round(sub * 0.1 / 1000) * 1000; calc(); };
   };
@@ -2169,7 +2169,7 @@ VIEWS.cards = async (main) => {
   const act = cards.filter((c) => c.status === 'active');
   const total = act.filter((c) => c.sale_type !== 'gift').reduce((s, c) => s + c.balance, 0);
   const gifts = act.filter((c) => c.sale_type === 'gift');
-  main.innerHTML = header('Thẻ trả trước', isMgr() ? `Số dư thẻ khách đã trả tiền: <b>${money(total)}</b> (tiệm còn nợ dịch vụ khách)<br>Thẻ tri ân 1Tr chưa dùng: <b>${gifts.length} thẻ</b> = ${money(gifts.reduce((s, c) => s + c.balance, 0))} (chỉ dùng 1 lần, không có tiền vào)` : '', `<button class="btn primary" id="sell">+ Bán thẻ</button>`) +
+  main.innerHTML = header('Thẻ trả trước', isOwner() ? `Số dư thẻ khách đã trả tiền: <b>${money(total)}</b> (tiệm còn nợ dịch vụ khách)<br>Thẻ tri ân 1Tr chưa dùng: <b>${gifts.length} thẻ</b> = ${money(gifts.reduce((s, c) => s + c.balance, 0))} (chỉ dùng 1 lần, không có tiền vào)` : '', `<button class="btn primary" id="sell">+ Bán thẻ</button>`) +
     `<div class="card"><div class="row"><select id="stf" style="width:auto"><option value="active" ${status === 'active' ? 'selected' : ''}>Đang dùng</option><option value="" ${status === '' ? 'selected' : ''}>Tất cả</option><option value="closed" ${status === 'closed' ? 'selected' : ''}>Đã đóng</option><option value="refunded" ${status === 'refunded' ? 'selected' : ''}>Đã hoàn</option></select></div></div>
     <div class="card">${cardTable(cards)}</div>`;
   $('#stf').onchange = (e) => go('cards', { status: e.target.value });
@@ -2211,8 +2211,8 @@ function stockScanItem(m, rows, reload) {
     ${m.kind === 'retail' && m.sell_price ? `<div class="stat-line"><span class="muted">Giá bán</span><b>${money(m.sell_price)}</b></div>` : ''}
     ${canCount ? `<form id="scc" style="margin-top:10px"><label>🧮 Kiểm kho: số đếm thực tế (${esc(m.unit || 'đơn vị')})</label><div class="row"><input type="number" name="counted" step="0.01" min="0" inputmode="decimal" style="flex:1"><button class="btn sm primary">Lưu số đếm</button></div></form>
     <form id="sci" style="margin-top:10px"><label>📦 Nhập thêm hàng mới về</label><div class="row"><input type="number" name="qty" step="any" min="0" placeholder="Số lượng" inputmode="decimal" style="flex:1">
-      ${isMgr() ? '<input type="number" name="unit_cost" min="0" step="1000" placeholder="Giá nhập/đv" style="flex:1">' : ''}<button class="btn sm primary">Nhập kho</button></div>
-      <input name="supplier" placeholder="Nhà cung cấp / ghi chú" style="margin-top:6px">${isMgr() ? '' : '<div class="small muted">Giá nhập quản lý sẽ cập nhật sau.</div>'}</form>` : '<div class="small muted" style="margin-top:8px">Bạn chỉ có quyền xem tồn. Kiểm kho / nhập hàng do người được giao.</div>'}
+      ${isOwner() ? '<input type="number" name="unit_cost" min="0" step="1000" placeholder="Giá nhập/đv" style="flex:1">' : ''}<button class="btn sm primary">Nhập kho</button></div>
+      <input name="supplier" placeholder="Nhà cung cấp / ghi chú" style="margin-top:6px">${isOwner() ? '' : '<div class="small muted">Giá nhập Lãnh đạo sẽ cập nhật sau.</div>'}</form>` : '<div class="small muted" style="margin-top:8px">Bạn chỉ có quyền xem tồn. Kiểm kho / nhập hàng do người được giao.</div>'}
     <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Đóng</button><button type="button" class="btn" id="scNext">📷 Quét tiếp</button></div>`);
   $('#scNext').onclick = () => { closeModal(); stockScan(rows, reload); };
   const fc = $('#scc');
@@ -2299,7 +2299,7 @@ async function stockLevelsView(main, reload) {
   if (sp) sp.onclick = async () => {
     const p = await api('/stock/perm');
     const staffOnly = activeStaff().filter((u) => u.role === 'staff');
-    openModal('Phân quyền kho cho nhân viên', `<form id="spf"><div class="small muted">Lãnh đạo / Quản lý luôn có đủ quyền. Nhân viên KHÔNG thấy giá nhập, giá cốt.</div>
+    openModal('Phân quyền kho cho nhân viên', `<form id="spf"><div class="small muted">Lãnh đạo / Quản lý luôn có đủ quyền. Chỉ Lãnh đạo thấy giá nhập, giá cốt.</div>
       <table style="margin-top:8px"><thead><tr><th>Nhân viên</th><th>Xem tồn + báo hết hàng</th><th>Kiểm kho, đếm hàng</th></tr></thead><tbody>
       ${staffOnly.map((u) => `<tr><td>${esc(u.full_name)}</td><td><input type="checkbox" data-pv="${u.id}" ${p.viewers.includes(u.id) ? 'checked' : ''} style="width:auto"></td><td><input type="checkbox" data-pc="${u.id}" ${p.counters.includes(u.id) ? 'checked' : ''} style="width:auto"></td></tr>`).join('')}</tbody></table>
       <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu</button></div></form>`);
@@ -2310,15 +2310,15 @@ async function stockLevelsView(main, reload) {
 }
 const perUnit = (m) => (m.size ? `${money(Math.round(m.avg_cost / m.size))}/${m.size_unit}` : '');
 VIEWS.stock = async (main) => {
-  if (!isMgr()) {
-    if (!S.me.stock_view) { main.innerHTML = '<div class="empty">Bạn chưa được giao quyền xem kho</div>'; return; }
+  if (!isOwner()) {
+    if (!S.me.stock_view && !isMgr()) { main.innerHTML = '<div class="empty">Bạn chưa được giao quyền xem kho</div>'; return; }
     main.innerHTML = header('Kho hàng', S.me.stock_count ? 'Xem tồn, kiểm kho đếm hàng, báo hàng cần gọi thêm' : 'Xem tồn kho, báo hàng hết cần gọi thêm');
     return stockLevelsView(main, () => VIEWS.stock(main));
   }
   const tab = S.params.tab || 'report';
   const reload = () => VIEWS.stock(main);
   const tabs = [['report', 'Giá cốt & lãi gộp'], ['levels', 'Tồn kho & kiểm kho'], ['items', 'Hóa chất & sản phẩm'], ['recipes', 'Định mức dịch vụ']];
-  const top = header('Kho & giá cốt', 'Chỉ Lãnh đạo / Quản lý thấy giá nhập, giá cốt, lãi gộp') +
+  const top = header('Kho & giá cốt', 'Chỉ Lãnh đạo thấy giá nhập, giá cốt, lãi gộp') +
     `<div class="card"><div class="row">${tabs.map(([k, l]) => `<button class="btn sm ${k === tab ? 'primary' : ''}" data-tab="${k}">${l}</button>`).join('')}
     <span class="spacer"></span><button class="btn sm" data-goto="excel">📥 Tải file sổ nhập hàng</button></div></div>`;
   const bindTop = () => { $$('[data-tab]', main).forEach((b) => (b.onclick = () => go('stock', { tab: b.dataset.tab }))); $$('[data-goto]', main).forEach((b) => (b.onclick = () => go(b.dataset.goto))); };
@@ -2464,7 +2464,7 @@ VIEWS.sales = async (main) => {
       box.closest('tr').style.opacity = 0.55; toast('Đã ghi khách đã trả: ' + b.dataset.m); VIEWS.sales(main);
     })));
   };
-  main.innerHTML = header('Doanh số & hoa hồng', isMgr() ? 'Toàn tiệm' : 'Chỉ hiển thị số liệu của bạn') +
+  main.innerHTML = header('Doanh số & hoa hồng', isOwner() ? 'Toàn tiệm' : 'Chỉ hiển thị số liệu của bạn') +
     `<div class="card"><div class="row"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="t" value="${to}" style="width:auto">
       <button class="btn sm" data-p="today">Hôm nay</button><button class="btn sm" data-p="month">Tháng này</button><button class="btn sm" data-p="last">Tháng trước</button><button class="btn sm" data-p="all">Từ khai trương</button></div></div>
     ${s ? (() => {
@@ -2488,13 +2488,13 @@ VIEWS.sales = async (main) => {
           ${Object.entries(s.by_method).filter(([, v]) => v).map(([k, v]) => line(esc(k), money(v))).join('') || '<div class="empty">—</div>'}
         </div></div></details>`;
     })() : ''}
-    ${!isMgr() ? r.rows.map((x) => `<div class="card"><h3>${esc(x.name)}</h3>
+    ${!isOwner() ? r.rows.map((x) => `<div class="card"><h3>${esc(x.name)}</h3>
       <div class="stat-line"><span class="muted">Lượt làm chính / phụ</span><b>${x.main_count} / ${x.assist_count}</b></div>
       <div class="small" style="margin-top:6px"><b>① Doanh số dịch vụ</b> (xét thưởng)</div>
       ${GS.map((g) => `<div class="stat-line"><span class="muted">DS ${esc(g)}</span><b>${money(x.by_group[g])}</b></div>`).join('')}
       ${x.other_sales ? `<div class="stat-line"><span class="muted">DS khác + phụ thu</span><b>${money(x.other_sales)}</b></div>` : ''}
       ${x.gift_sales ? `<div class="stat-line"><span class="muted">− khách trả bằng thẻ tri ân</span><b>${money(x.gift_sales)}</b></div>` : ''}
-      ${x.family_sales ? `<div class="stat-line"><span class="muted">− người nhà chủ</span><b>${money(x.family_sales)}</b></div>` : ''}
+      ${x.family_sales ? `<div class="stat-line"><span class="muted">Khách ưu đãi đặc biệt</span><b>${money(x.family_sales)}</b></div>` : ''}
       <div class="stat-line"><span>DS tính thưởng</span><b>${money(x.bonus_sales)}</b></div>
       <div class="small" style="margin-top:6px"><b>② Doanh số riêng</b> (không cộng vào ①)</div>
       <div class="stat-line"><span class="muted">Bán sản phẩm</span><b>${money(x.product_sales)}</b></div>
@@ -2508,9 +2508,9 @@ VIEWS.sales = async (main) => {
       ${x.surcharge_share ? `<div class="stat-line"><span class="muted">Phần phụ thu được chia</span><b>${money(x.surcharge_share)}</b></div>` : ''}
       <div class="stat-line"><span>Tổng hoa hồng (tạm tính)</span><b>${money(x.total_commission)}</b></div>
       <div class="stat-line"><span class="muted">Tip khách ghi ở lượt</span><b>${money(x.tip)}</b></div></div>`).join('') : ''}
-    <div class="card ${!isMgr() ? 'hidden' : ''}"><h3>Theo nhân viên</h3><div class="table-wrap"><table class="sales-split"><thead>
+    <div class="card ${!isOwner() ? 'hidden' : ''}"><h3>Theo nhân viên</h3><div class="table-wrap"><table class="sales-split"><thead>
       <tr><th rowspan="2">Nhân viên</th><th class="grp-svc" colspan="${GS.length + 5}">① DOANH SỐ DỊCH VỤ tự làm → xét thưởng / nhân hệ số</th><th class="grp-own" colspan="3">② DOANH SỐ RIÊNG – KHÔNG cộng vào ①</th><th class="grp-hh" colspan="6">③ HOA HỒNG</th><th rowspan="2" class="num">Tip</th></tr>
-      <tr>${GS.map((g) => `<th class="num grp-svc">${esc(g)}</th>`).join('')}<th class="num grp-svc">Khác + phụ thu</th><th class="num grp-svc">DS dịch vụ</th><th class="num grp-svc">− Tri ân</th><th class="num grp-svc">− Người nhà</th><th class="num grp-svc">DS tính thưởng</th>
+      <tr>${GS.map((g) => `<th class="num grp-svc">${esc(g)}</th>`).join('')}<th class="num grp-svc">Khác + phụ thu</th><th class="num grp-svc">DS dịch vụ</th><th class="num grp-svc">− Tri ân</th><th class="num grp-svc">⭐ Ưu đãi ĐB</th><th class="num grp-svc">DS tính thưởng</th>
         <th class="num grp-own">Bán sản phẩm</th><th class="num grp-own">Bán thẻ</th><th class="num grp-own">Làm phụ (${'lượt'})</th>
         <th class="num grp-hh">HH dịch vụ</th><th class="num grp-hh">HH phụ</th><th class="num grp-hh">HH thẻ</th><th class="num grp-hh">HH SP</th><th class="num grp-hh">Phụ thu</th><th class="num grp-hh">Tổng HH</th></tr></thead>
       <tbody>${r.rows.map((x) => `<tr><td><a href="#" data-sl="${x.user_id}" data-g=""><b>${esc(x.name)}</b></a><div class="small muted">${x.main_count} lượt chính</div></td>
@@ -2518,7 +2518,7 @@ VIEWS.sales = async (main) => {
         <td class="num">${x.other_sales ? `<a href="#" data-sl="${x.user_id}" data-g="Khác">${money(x.other_sales)}</a>` : '–'}</td><td class="num">${money(x.service_sales)}</td><td class="num">${x.gift_sales ? '−' + money(x.gift_sales) : '–'}</td><td class="num">${x.family_sales ? '−' + money(x.family_sales) : '–'}</td><td class="num grp-key"><b>${money(x.bonus_sales)}</b></td>
         <td class="num">${x.product_sales ? `<a href="#" data-sl="${x.user_id}" data-g="Bán sản phẩm">${money(x.product_sales)}</a>` : '–'}</td><td class="num">${x.cards_count ? `${money(x.cards_amount)}<div class="small muted">${x.cards_count} thẻ</div>` : '–'}</td><td class="num">${x.assist_sales ? `${money(x.assist_sales)}<div class="small muted">${x.assist_count} lượt</div>` : '–'}</td>
         <td class="num">${money(x.service_commission)}</td><td class="num">${money(x.assistant_commission)}</td><td class="num">${money(x.card_commission)}</td><td class="num">${money(x.product_commission)}</td><td class="num">${money(x.surcharge_share)}</td><td class="num"><b>${money(x.total_commission)}</b></td><td class="num">${money(x.tip)}</td></tr>`).join('')}</tbody></table></div>
-      <div class="small muted" style="margin-top:8px">Hoa hồng tạm tính theo % từng dịch vụ (Cài đặt › Dịch vụ) và % người phụ, bán thẻ (Cài đặt › Tham số). Phụ thu: cửa hàng giữ ${Math.round((S.settings.surcharge_salon_rate ?? 0.33) * 100)}%, còn lại chia thợ chính / người phụ của lượt đó. Chưa gồm lương cứng, thưởng mốc doanh số. <b>DS tính thưởng</b> = chỉ doanh số DỊCH VỤ tự làm, trừ phần khách trả bằng thẻ tri ân (chi phí cửa hàng) và lượt của người nhà chủ. <b>Bán sản phẩm, bán thẻ, làm phụ là doanh số riêng</b>: chỉ hưởng % hoa hồng của từng loại, KHÔNG cộng vào DS tính thưởng. Tip được chia chung ở trang <a href="#tips">Chia tip</a>.</div></div>
+      <div class="small muted" style="margin-top:8px">Hoa hồng tạm tính theo % từng dịch vụ (Cài đặt › Dịch vụ) và % người phụ, bán thẻ (Cài đặt › Tham số). Phụ thu: cửa hàng giữ ${Math.round((S.settings.surcharge_salon_rate ?? 0.33) * 100)}%, còn lại chia thợ chính / người phụ của lượt đó. Chưa gồm lương cứng, thưởng mốc doanh số. <b>DS tính thưởng</b> = chỉ doanh số DỊCH VỤ tự làm, không tính phần khách trả bằng thẻ tri ân (chi phí cửa hàng) và lượt khách ưu đãi đặc biệt. <b>Bán sản phẩm, bán thẻ, làm phụ là doanh số riêng</b>: chỉ hưởng % hoa hồng của từng loại, KHÔNG cộng vào DS tính thưởng. Tip được chia chung ở trang <a href="#tips">Chia tip</a>.</div></div>
     ${staffCustomerCard(sc)}`;
   const set = (a, b) => go('sales', { from: a, to: b });
   $$('[data-sl]', main).forEach((a) => (a.onclick = (e) => { e.preventDefault(); salesLines(from, to, Number(a.dataset.sl), a.dataset.g, () => VIEWS.sales(main)); }));
@@ -2730,7 +2730,7 @@ VIEWS.payroll = async (main) => {
         <td class="num">${money(x.base)}</td><td class="num">${money(x.allowance)}</td><td class="num">${money(x.commission)}</td><td class="num">${money(x.bonus)}</td><td class="num">${money(x.kpi)}</td>
         <td class="num">${x.floor_topup ? money(x.floor_topup) : ''}</td><td class="num">${money(x.tip_shared + x.tip_private)}</td><td class="num">${x.advance + x.minus - x.plus ? money(-(x.advance + x.minus - x.plus)) : ''}</td><td class="num"><b>${money(x.net)}</b></td></tr>`).join('') || '<tr><td colspan="11" class="empty">Chưa có nhân viên</td></tr>'}</tbody>
       <tfoot><tr><td>Tổng</td><td></td><td class="num">${money(T.base)}</td><td class="num">${money(T.allowance)}</td><td class="num">${money(T.commission)}</td><td class="num">${money(T.bonus)}</td><td class="num">${money(T.kpi)}</td><td class="num">${money(T.floor_topup)}</td><td class="num">${money(T.tips)}</td><td></td><td class="num"><b>${money(T.net)}</b></td></tr></tfoot></table></div>
-      <div class="small muted" style="margin-top:8px">Hoa hồng = HH dịch vụ tự làm + HH phụ + HH bán thẻ + phần phụ thu. Thưởng DS tính trên <b>DS tính thưởng</b> (đã bỏ thẻ tri ân và người nhà). Ngày công lấy theo trang Chấm công; chưa chấm thì lấy công chuẩn trừ ngày off đã duyệt; bạn sửa tay được ở phiếu.</div></div>`;
+      <div class="small muted" style="margin-top:8px">Hoa hồng = HH dịch vụ tự làm + HH phụ + HH bán thẻ + phần phụ thu. Thưởng DS tính trên <b>DS tính thưởng</b> (không tính thẻ tri ân, khách ưu đãi đặc biệt). Ngày công lấy theo trang Chấm công; chưa chấm thì lấy công chuẩn trừ ngày off đã duyệt; bạn sửa tay được ở phiếu.</div></div>`;
   const go2 = (m) => go('payroll', { month: m });
   $('#pm').onclick = () => go2(shift(-1)); $('#nm').onclick = () => go2(shift(1)); $('#mo').onchange = (e) => e.target.value && go2(e.target.value);
   $('#pxl').onclick = () => guard($('#pxl'), async () => {
@@ -2756,7 +2756,7 @@ function payslip(r, uid, after) {
     ${line('(D) HH làm phụ', money(c.assist), x.assist_count + ' lượt phụ')}
     ${c.card ? line('(E) HH bán thẻ', money(c.card)) : ''}
     ${c.surcharge ? line('(F) Phần phụ thu', money(c.surcharge)) : ''}
-    ${line('(G) Thưởng DS theo bậc', money(x.bonus), `DS tính thưởng ${money(x.bonus_sales)}${x.bonus_pct ? ' × ' + pct(x.bonus_pct) : P.bonus_tiers.length ? ' · chưa đạt bậc' : ' · chưa cài bậc'}${x.gift_sales || x.family_sales ? ` (đã bỏ tri ân ${money(x.gift_sales)}, người nhà ${money(x.family_sales)})` : ''}`)}
+    ${line('(G) Thưởng DS theo bậc', money(x.bonus), `DS tính thưởng ${money(x.bonus_sales)}${x.bonus_pct ? ' × ' + pct(x.bonus_pct) : P.bonus_tiers.length ? ' · chưa đạt bậc' : ' · chưa cài bậc'}${x.gift_sales || x.family_sales ? ` (không tính tri ân ${money(x.gift_sales)}, ưu đãi ĐB ${money(x.family_sales)})` : ''}`)}
     ${P.kpi_max ? line('(H) Thưởng KPI', money(x.kpi), `${money(P.kpi_max)} × ${pct(x.kpi_pct)}`) : ''}
     ${line('Tổng theo cơ chế', money(x.subtotal))}
     ${x.floor_topup ? line('Bù sàn chuyển tiếp', money(x.floor_topup), `sàn ${money(P.floor_amount)}${P.floor_until ? ' đến ' + dmy(P.floor_until) : ''}`) : ''}
@@ -2856,7 +2856,7 @@ VIEWS.tips = async (main) => {
 // Khách phụ trách theo thợ: giữ khách, khách quay lại, chi tiêu TB (dùng cho KPI/3P)
 function staffCustomerCard(sc) {
   const pct = (x) => (x == null ? '—' : Math.round(x * 100) + '%');
-  const mgr = isMgr();
+  const mgr = isOwner();
   return `<div class="card"><h3>👥 Khách phụ trách theo thợ</h3>
     <div class="table-wrap"><table><thead><tr><th>Thợ</th><th class="num">Khách phụ trách</th><th class="num">Đến trong kỳ</th><th class="num">Khách mới</th><th class="num">Lượt trong kỳ</th>
       <th class="num" title="Lượt của khách mình do chính mình làm chính">Tự làm</th><th class="num" title="Khách đã đến từ 2 lần ÷ khách đã từng đến">Tỷ lệ quay lại</th>
@@ -2974,7 +2974,7 @@ VIEWS.excel = async (main) => {
 // ---------- Cài đặt ----------
 VIEWS.settings = async (main) => {
   const tabs = [['me', 'Tài khoản của tôi', true], ['services', 'Dịch vụ & giá', isMgr()], ['cardtypes', 'Gói thẻ', isMgr()], ['users', 'Nhân viên & mật khẩu', isOwner()],
-    ['params', 'Tham số', isOwner()], ['audit', 'Lịch sử chỉnh sửa', isOwner()], ['backup', 'Sao lưu', isMgr()]].filter((t) => t[2]);
+    ['params', 'Tham số', isOwner()], ['audit', 'Lịch sử chỉnh sửa', isOwner()], ['backup', 'Sao lưu', isOwner()]].filter((t) => t[2]);
   const tab = S.params.tab || tabs[0][0];
   main.innerHTML = header('Cài đặt') + `<div class="card"><div class="tabs">${tabs.map(([k, l]) => `<button data-st="${k}" class="${k === tab ? 'active' : ''}">${l}</button>`).join('')}</div><div id="sb"></div></div>`;
   $$('[data-st]').forEach((b) => (b.onclick = () => go('settings', { tab: b.dataset.st })));

@@ -301,7 +301,7 @@ app.get('/api/customers', (req, res) => {
     ,c.family_id, c.relation, (SELECT COUNT(*) FROM customers m WHERE c.family_id IS NOT NULL AND m.family_id=c.family_id AND m.id<>c.id AND m.deleted=0) fam
     FROM customers c WHERE ${where} ORDER BY ${q ? "CASE WHEN cust_rank(c.name, c.code, c.phone, COALESCE(c.formula,'') || ' ' || COALESCE(c.hair_notes,''), ?) < 0 THEN 999 ELSE cust_rank(c.name, c.code, c.phone, COALESCE(c.formula,'') || ' ' || COALESCE(c.hair_notes,''), ?) END, " : ''}(last_visit IS NULL), last_visit DESC, c.id DESC LIMIT ? OFFSET ?`).all(...params, ...(q ? [q, q] : []), limit, offset);
   const total = db.prepare(`SELECT COUNT(*) n FROM customers c WHERE ${where}`).get(...params).n;
-  if (req.user.role === 'staff') for (const r of rows) r.spend = null;
+  if (req.user.role !== 'owner') for (const r of rows) r.spend = null;
   res.json({ rows, total });
 });
 function customerInput(b) {
@@ -342,12 +342,12 @@ app.get('/api/customers/:id', (req, res) => {
       (SELECT GROUP_CONCAT(name, ' + ') FROM visit_items WHERE visit_id=v.id) visit_services
     FROM appointments a LEFT JOIN users u ON u.id=a.staff_id LEFT JOIN visits v ON v.id=a.visit_id AND v.status='done'
     WHERE a.customer_id=? ORDER BY a.date DESC, a.time DESC LIMIT 30`).all(id);
-  if (req.user.role === 'staff') for (const a of c.appointments) if (![a.v_main, a.v_asst, a.staff_id].includes(req.user.id)) a.visit_total = null;
+  if (req.user.role !== 'owner') for (const a of c.appointments) if (![a.v_main, a.v_asst, a.staff_id].includes(req.user.id)) a.visit_total = null;
   c.family = family.members(id);
   c.hair_log = visits.filter((v) => v.hair_before || v.result || v.formula).slice(0, 20)
     .map((v) => ({ id: v.id, date: v.date, staff: v.main_staff_name, services: v.items.map((i) => i.name).join(' + '), hair_before: v.hair_before, result: v.result, formula: v.formula }));
   c.debt = db.prepare("SELECT COALESCE(SUM(debt),0) s FROM visits WHERE customer_id=? AND status='done' AND debt>0 AND debt_paid_at IS NULL").get(c.id).s;
-  c.stats = { visits: visits.length, spend: req.user.role === 'staff' ? null : visits.reduce((s, v) => s + (v.total || 0), 0), last_visit: visits[0] ? visits[0].date : null };
+  c.stats = { visits: visits.length, spend: req.user.role !== 'owner' ? null : visits.reduce((s, v) => s + (v.total || 0), 0), last_visit: visits[0] ? visits[0].date : null };
   res.json(c);
 });
 // Khung khách nhanh: đủ để thu ngân / lễ tân quyết định ngay (không tải cả lịch sử)
@@ -357,7 +357,7 @@ app.get('/api/customers/:id/quick', (req, res) => {
   if (!c) throw new HttpError(404, 'Không tìm thấy khách');
   const last = db.prepare(`SELECT v.id, v.date, v.code, v.total, v.main_staff_id, u.full_name staff_name, (SELECT GROUP_CONCAT(name, ' + ') FROM visit_items WHERE visit_id=v.id) services
     FROM visits v LEFT JOIN users u ON u.id=v.main_staff_id WHERE v.customer_id=? AND v.status='done' ORDER BY v.date DESC, v.id DESC LIMIT 3`).all(id);
-  if (req.user.role === 'staff') for (const v of last) if (v.main_staff_id !== req.user.id) v.total = null;
+  if (req.user.role !== 'owner') for (const v of last) if (v.main_staff_id !== req.user.id) v.total = null;
   c.last = last;
   c.visit_count = db.prepare("SELECT COUNT(*) n FROM visits WHERE customer_id=? AND status='done'").get(id).n;
   c.cards = db.prepare("SELECT * FROM cards WHERE customer_id=? AND status='active' ORDER BY id DESC").all(id).map(L.cardRow)
@@ -504,7 +504,7 @@ app.get('/api/appointments', (req, res) => {
     LEFT JOIN visits v ON v.id=a.visit_id AND v.status='done'
     WHERE a.date BETWEEN ? AND ?${extra} ORDER BY a.date, a.time`).all(...params);
   if (!req.query.staff_id) require('./famgroup').tag(rows);
-  res.json(rows.map(({ v_main, v_asst, ...a }) => (u.role === 'staff' && v_main !== u.id && v_asst !== u.id ? { ...a, visit_total: null } : a)));
+  res.json(rows.map(({ v_main, v_asst, ...a }) => (u.role !== 'owner' && v_main !== u.id && v_asst !== u.id ? { ...a, visit_total: null } : a)));
 });
 function offWarning(a) {
   const o = staffMod.offAt(a.staff_id, a.date, a.time, a.duration);
@@ -808,7 +808,7 @@ app.get('/api/cards', (req, res) => {
   const rows = db.prepare(`SELECT cd.*, c.name customer_name, c.code customer_code, c.phone, u.full_name seller_name, k.full_name consultant_name
     FROM cards cd JOIN customers c ON c.id=cd.customer_id LEFT JOIN users u ON u.id=cd.seller_id LEFT JOIN users k ON k.id=cd.consultant_id WHERE ${where} ORDER BY cd.id DESC`).all(...params);
   // Nhân viên chỉ thấy phần hoa hồng của chính mình
-  res.json(rows.map(L.cardRow).map((c) => (req.user.role === 'staff'
+  res.json(rows.map(L.cardRow).map((c) => (req.user.role !== 'owner'
     ? { ...c, commission: c.seller_id === req.user.id ? c.commission : null, consultant_commission: c.consultant_id === req.user.id ? c.consultant_commission : null } : c)));
 });
 app.post('/api/cards', (req, res) => res.json(L.sellCard(req.body, req.user)));
@@ -887,7 +887,7 @@ app.get('/api/reports/sales-lines', (req, res) => {
   const t = today();
   const from = L.isDate(req.query.from) ? req.query.from : t.slice(0, 8) + '01';
   const to = L.isDate(req.query.to) ? req.query.to : t;
-  const staff = req.user.role === 'staff' ? req.user.id : int(req.query.staff_id);
+  const staff = req.user.role !== 'owner' ? req.user.id : int(req.query.staff_id);
   if (!staff) throw bad('Chọn nhân viên');
   const grp = str(req.query.grp);
   const groups = new Set(require('./db').GROUPS);
@@ -915,7 +915,7 @@ app.get('/api/reminders', (req, res) => {
   const r = L.reminders();
   if (stockMod.perm(req.user).stock_view) { r.stock = stockMod.stockAlerts(); r.counts.stock = r.stock.filter((m) => !m.ordered_at).length; }
   if (req.user.role !== 'staff') { const f = require('./expenses').fundState(); r.counts.expenses = f.pending_count; r.expenses = f; }
-  if (req.user.role !== 'staff') { r.backup = pcBackupState(); r.counts.backup = r.backup.due ? 1 : 0; }
+  if (req.user.role === 'owner') { r.backup = pcBackupState(); r.counts.backup = r.backup.due ? 1 : 0; }
   if (req.user.role !== 'staff') {
     r.unpaid = db.prepare(`SELECT a.id, a.date, a.time, a.note, a.customer_id, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, u.full_name staff_name, v.total amount
       FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id LEFT JOIN visits v ON v.id=a.visit_id AND v.status='done' WHERE a.pay_note='Chưa thanh toán' AND a.status<>'cancelled' ORDER BY a.date, a.time`).all();
@@ -932,7 +932,7 @@ app.get('/api/reports/staff-customers', (req, res) => {
   const from = L.isDate(req.query.from) ? req.query.from : t.slice(0, 8) + '01';
   const to = L.isDate(req.query.to) ? req.query.to : t;
   const r = L.staffCustomerReport(from, to);
-  if (!['owner', 'manager'].includes(req.user.role)) {
+  if (req.user.role !== 'owner') {
     r.rows = r.rows.filter((x) => x.staff_id === req.user.id).map((x) => ({ ...x, spend_period: null, avg_spend: null }));
   }
   res.json(r);
@@ -1019,8 +1019,8 @@ function pcBackupState() {
   const days = last ? Math.floor((Date.now() - new Date(last.replace(' ', 'T')).getTime()) / 86400000) : null;
   return { last_at: last, last_by: s.pc_backup_by || null, days, due: !last || days >= BACKUP_EVERY_DAYS, every: BACKUP_EVERY_DAYS };
 }
-app.get('/api/backup-pc', MGR, (req, res) => res.json(pcBackupState()));
-app.get('/api/backup-pc/download', MGR, async (req, res) => {
+app.get('/api/backup-pc', OWNER, (req, res) => res.json(pcBackupState()));
+app.get('/api/backup-pc/download', OWNER, async (req, res) => {
   const t = today();
   const buf = await exportWorkbook({ from: '2000-01-01', to: t, full: true });
   const now = db.prepare("SELECT datetime('now','localtime') t").get().t;
@@ -1031,7 +1031,7 @@ app.get('/api/backup-pc/download', MGR, async (req, res) => {
   res.set('Content-Disposition', `attachment; filename="SaoLuu-Salon-Nep-${t}.xlsx"`);
   res.send(Buffer.from(buf));
 });
-app.get('/api/export', MGR, async (req, res) => {
+app.get('/api/export', OWNER, async (req, res) => {
   const t = today();
   const from = L.isDate(req.query.from) ? req.query.from : '2000-01-01';
   const to = L.isDate(req.query.to) ? req.query.to : t;
