@@ -229,6 +229,55 @@ function mount(app, { MGR, OWNER }) {
     audit(req.user.id, 'manual_attendance', 'attendance', id, b);
     res.json({ id });
   });
+  // ===== Chấm đủ hàng loạt: mọi người mọi ngày trong khoảng, bỏ ngày OFF (đơn đã duyệt) và lần đã có =====
+  // Nghỉ vài giờ: giờ nghỉ phủ giờ vào → vào = hết giờ nghỉ; phủ giờ ra → ra = đầu giờ nghỉ.
+  app.post('/api/attendance/fill', MGR, (req, res) => {
+    const b = req.body, t = today();
+    if (!isDate(b.from) || !isDate(b.to) || b.from > b.to) throw bad('Chọn từ ngày – đến ngày');
+    const to = b.to > t ? t : b.to;
+    const tin = str(b.in_time) || '09:00', tout = str(b.out_time) || '20:00';
+    if (hm(tin) == null || hm(tout) == null || hm(tout) <= hm(tin)) throw bad('Giờ vào / ra không hợp lệ');
+    const ids = (Array.isArray(b.user_ids) ? b.user_ids : String(b.user_ids || '').split(',')).map(int).filter(Boolean);
+    let staff = db.prepare("SELECT id, full_name FROM users WHERE active=1 AND IFNULL(works,1)=1 AND merged_into IS NULL AND role<>'owner' ORDER BY id").all();
+    if (ids.length) staff = staff.filter((u) => ids.includes(u.id));
+    const offs = db.prepare("SELECT user_id, date, from_time, to_time FROM staff_off WHERE status='approved' AND date BETWEEN ? AND ?").all(b.from, to);
+    const has = db.prepare('SELECT 1 FROM attendance WHERE user_id=? AND date=? AND kind=?');
+    const ins = db.prepare("INSERT INTO attendance(user_id,date,kind,time,method,note,created_by) VALUES (?,?,?,?,'manual','Chấm đủ hàng loạt',?)");
+    const dry = b.dry_run === true || b.dry_run === '1';
+    const st = { added: 0, days_off: 0, existed: 0, people: staff.length, from: b.from, to };
+    db.transaction(() => {
+      for (const d of days(b.from, to)) for (const u of staff) {
+        const o = offs.filter((x) => x.user_id === u.id && x.date === d);
+        if (o.some((x) => !x.from_time)) { st.days_off++; continue; }
+        let a = tin, z = tout;
+        for (const x of o) { if (hm(x.from_time) <= hm(a) && hm(x.to_time) > hm(a)) a = x.to_time; if (hm(x.from_time) < hm(z) && hm(x.to_time) >= hm(z)) z = x.from_time; }
+        if (hm(z) <= hm(a)) { st.days_off++; continue; }
+        for (const [kind, time] of [['in', a], ['out', z]]) {
+          if (d === t && kind === 'out') continue; // hôm nay chưa hết ca → chưa chấm ra
+          if (has.get(u.id, d, kind)) { st.existed++; continue; }
+          if (!dry) ins.run(u.id, d, kind, time, req.user.id);
+          st.added++;
+        }
+      }
+    })();
+    if (!dry) audit(req.user.id, 'fill_attendance', 'attendance', null, { from: b.from, to, in: tin, out: tout, users: staff.map((u) => u.id), added: st.added });
+    res.json({ ...st, dry_run: dry });
+  });
+  // OFF nhanh từ ô bảng công: 1 người hoặc cả tiệm nghỉ (đơn duyệt luôn)
+  app.post('/api/attendance/off', MGR, (req, res) => {
+    const b = req.body;
+    if (!isDate(b.date)) throw bad('Chọn ngày');
+    const all = b.all === true || b.all === 1 || b.all === '1';
+    const users = all ? db.prepare("SELECT id FROM users WHERE active=1 AND IFNULL(works,1)=1 AND merged_into IS NULL AND role<>'owner'").all().map((u) => u.id) : [int(b.user_id)].filter(Boolean);
+    if (!users.length) throw bad('Chọn nhân viên');
+    const reason = str(b.reason) || (all ? 'Cả tiệm nghỉ' : 'OFF (chấm công hộ)');
+    const has = db.prepare("SELECT 1 FROM staff_off WHERE user_id=? AND date=? AND status='approved' AND from_time IS NULL");
+    const ins = db.prepare("INSERT INTO staff_off(user_id,date,from_time,to_time,reason,status,created_by,decided_by) VALUES (?,?,NULL,NULL,?,'approved',?,?)");
+    let n = 0;
+    db.transaction(() => { for (const u of users) if (!has.get(u, b.date)) { ins.run(u, b.date, reason, req.user.id, req.user.id); n++; } })();
+    audit(req.user.id, 'quick_off', 'staff_off', null, { date: b.date, users, all, reason });
+    res.json({ added: n, users: users.length });
+  });
   // ===== Excel chấm công: xuất mẫu (đã có giờ + ô trống từng người từng ngày) → điền → nhập lại hàng loạt =====
   const fold = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/\s+/g, ' ').trim();
   const days = (from, to) => { const out = []; for (let d = new Date(from + 'T00:00:00Z'); d.toISOString().slice(0, 10) <= to && out.length < 62; d.setUTCDate(d.getUTCDate() + 1)) out.push(d.toISOString().slice(0, 10)); return out; };

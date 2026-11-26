@@ -915,3 +915,23 @@ test('Excel chấm công: xuất mẫu → điền giờ → nhập hàng loạt
   r = await send(false); assert.equal(r.added, 0); assert.equal(r.skipped, 3, 'nhập lại không ghi trùng');
   assert.equal(db.prepare("SELECT COUNT(*) n FROM attendance WHERE date='2026-09-01' AND method='manual'").get().n >= 2, true);
 });
+
+test('Chấm đủ hàng loạt: bỏ ngày OFF, lùi giờ khi nghỉ vài giờ, không ghi trùng; OFF cả tiệm', async () => {
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const staff = db.prepare("SELECT id FROM users WHERE active=1 AND IFNULL(works,1)=1 AND merged_into IS NULL AND role<>'owner' ORDER BY id").all().map((u) => u.id);
+  const r0 = await o.post('/attendance/off', { date: '2026-08-01', all: 1 });
+  assert.equal(r0.status, 200); assert.equal(r0.data.added, staff.length);
+  assert.equal((await o.post('/attendance/off', { date: '2026-08-01', all: 1 })).data.added, 0, 'đánh OFF lần 2 không nhân đôi');
+  db.prepare("INSERT INTO staff_off(user_id,date,from_time,to_time,status) VALUES (?,'2026-08-02','08:00','13:00','approved')").run(staff[0]);
+  db.prepare("INSERT INTO staff_off(user_id,date,status) VALUES (?,'2026-08-03','approved')").run(staff[1]);
+  const body = { from: '2026-08-01', to: '2026-08-03', in_time: '09:00', out_time: '20:00', dry_run: true };
+  let r = await o.post('/attendance/fill', body);
+  assert.equal(r.status, 200);
+  assert.equal(r.data.added, (2 * staff.length - 1) * 2);
+  assert.equal(r.data.days_off, staff.length + 1);
+  r = await o.post('/attendance/fill', { ...body, dry_run: false });
+  assert.equal(db.prepare("SELECT time FROM attendance WHERE user_id=? AND date='2026-08-02' AND kind='in'").get(staff[0]).time, '13:00');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM attendance WHERE date='2026-08-01'").get().n, 0);
+  r = await o.post('/attendance/fill', { ...body, dry_run: false });
+  assert.equal(r.data.added, 0, 'chạy lại không ghi trùng');
+});
