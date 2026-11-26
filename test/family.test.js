@@ -677,3 +677,29 @@ test('tháng khai trương: chi phí cố định mặc định tính theo ngày
   assert.equal(dec.fixed.total, 15500000 + 3100000);
   await o.put('/finance/config', { open_date: '' });
 });
+
+test('tạo thêm tài khoản trùng tên ("TruongV1" tên khác "Trường") → sổ không nhân đôi lịch/lượt; dọn bản thừa; chặn tạo mới', async () => {
+  const L = require('../server/logic'); const I = require('../server/importer');
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const truong = db.prepare("SELECT id FROM users WHERE username='truong'").get().id;
+  const r = await o.post('/users', { username: 'truongv1', full_name: 'TruongV1', aliases: 'Trường', password: '123456', role: 'manager' });
+  assert.equal(r.status, 400); assert.match(r.data.error, /Đặt lại MK/);
+  // tình trạng trên máy thật (tạo trước bản sửa)
+  const clone = db.prepare("INSERT INTO users(username,full_name,role,aliases) VALUES ('truongv1','TruongV1','manager','Trường')").run().lastInsertRowid;
+  const svc = db.prepare("SELECT id FROM services WHERE active=1 AND price>0 ORDER BY id LIMIT 1").get();
+  const cu = db.prepare("INSERT INTO customers(code,name) VALUES ('TCL1','B Chí Mỗ test')").run().lastInsertRowid;
+  const sys = { id: 1, role: 'owner' };
+  const mkv = (staff, ref) => L.saveVisit({ customer_id: cu, date: '2026-11-20', time: '10:00', main_staff_id: staff, items: [{ service_id: svc.id, price: 300000 }], payment_method: 'Tiền mặt', import_ref: ref, note: 'Sổ đặt lịch: B Chí Mỗ 300' }, sys, null, { imported: true });
+  const keep = mkv(truong, 'SO:cl1'), dup = mkv(clone, 'SO:cl2');
+  const d = L.addDays(L.today(), 1);
+  const ins = db.prepare("INSERT INTO appointments(customer_id,staff_id,date,time,status,note) VALUES (?,?,?,?,'booked',?)");
+  const a1 = ins.run(cu, truong, d, '10:00', 'B Chí Mỗ').lastInsertRowid; ins.run(cu, clone, d, '10:00', 'B Chí Mỗ');
+  assert.ok(I.dedupeCloneStaff() >= 2);
+  assert.equal(db.prepare('SELECT status FROM visits WHERE id=?').get(dup.id || dup).status, 'deleted');
+  assert.equal(db.prepare('SELECT status FROM visits WHERE id=?').get(keep.id || keep).status, 'done');
+  const left = db.prepare('SELECT id FROM appointments WHERE date=? AND time=? AND customer_id=?').all(d, '10:00', cu);
+  assert.deepEqual(left.map((x) => x.id), [a1]);
+  // sửa tài khoản Trường gốc (không đổi tên) vẫn được
+  assert.equal((await o.put('/users/' + truong, { full_name: 'Trường', aliases: '' })).status, 200);
+  db.prepare("UPDATE users SET active=0, works=0, aliases=NULL WHERE id=?").run(clone);
+});

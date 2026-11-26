@@ -132,11 +132,23 @@ function userInput(b) {
   if (b.level != null) { const l = str(b.level); if (l && !LEVELS.includes(l)) throw bad('Cấp bậc không hợp lệ'); r.level = l || null; }
   return r;
 }
+// Tên / tên khác trùng với nhân viên khác → sổ đặt lịch không biết ghi cho ai (tạo lịch trùng)
+function checkNameClash(r, selfId) {
+  const { nameKey } = require('./importer');
+  const mine = [r.full_name, ...String(r.aliases || '').split(',')].map(nameKey).filter(Boolean);
+  if (!mine.length) return;
+  for (const u of db.prepare('SELECT id, full_name, aliases FROM users WHERE id<>?').all(selfId || 0)) {
+    const theirs = new Set([u.full_name, ...String(u.aliases || '').split(',')].map(nameKey).filter(Boolean));
+    const hit = mine.find((k) => theirs.has(k));
+    if (hit) throw bad(`Tên "${hit}" đã là của tài khoản ${u.full_name}. Muốn ${u.full_name} vào được app thì bấm "Đặt lại MK" ở dòng ${u.full_name}, không tạo tài khoản mới.`);
+  }
+}
 app.post('/api/users', OWNER, (req, res) => {
   const username = String(req.body.username || '').trim().toLowerCase();
   if (!/^[a-z0-9._]{3,30}$/.test(username)) throw bad('Tên đăng nhập 3–30 ký tự, chỉ chữ thường không dấu, số, dấu chấm');
   if (db.prepare('SELECT 1 FROM users WHERE username=?').get(username)) throw bad('Tên đăng nhập đã tồn tại');
   const r = userInput({ role: 'staff', ...req.body });
+  checkNameClash(r, 0);
   const pw = String(req.body.password || '');
   if (pw.length < 6) throw bad('Mật khẩu tối thiểu 6 ký tự');
   const id = db.prepare('INSERT INTO users(username,full_name,role,password_hash,commission_enabled,aliases,level) VALUES (?,?,?,?,?,?,?)')
@@ -149,6 +161,7 @@ app.put('/api/users/:id', OWNER, (req, res) => {
   const target = db.prepare('SELECT * FROM users WHERE id=?').get(id);
   if (!target) throw new HttpError(404, 'Không tìm thấy');
   const r = userInput(req.body);
+  if ((r.full_name != null && r.full_name !== target.full_name) || (r.aliases != null && (r.aliases || '') !== (target.aliases || ''))) checkNameClash({ full_name: r.full_name ?? target.full_name, aliases: r.aliases ?? target.aliases }, id);
   if (id === req.user.id && ((r.role && r.role !== 'owner') || r.active === 0)) throw bad('Không thể tự hạ quyền hoặc khóa chính mình');
   const keys = Object.keys(r);
   if (keys.length) db.prepare(`UPDATE users SET ${keys.map((k) => k + '=?').join(',')} WHERE id=?`).run(...keys.map((k) => r[k]), id);
@@ -968,6 +981,7 @@ if (require.main === module) {
   } catch (e) { console.error('Gắn lịch theo SĐT lỗi:', e.message); }
   try { const n = require('./importer').mergeSameVisits(); if (n) console.log(`Đã gộp ${n} lượt cùng khách làm cùng lúc / trùng lượt ghi tay`); } catch (e) { console.error('Gộp lượt lỗi:', e.message); }
   try { const n = require('./importer').closeUsedGifts(); if (n) console.log(`Đã đóng ${n} thẻ tri ân đã dùng 1 lần`); } catch (e) { console.error('Đóng thẻ tri ân lỗi:', e.message); }
+  try { const n = require('./importer').dedupeCloneStaff(); if (n) console.log(`Đã dọn ${n} lịch/lượt trùng do 2 tài khoản cùng tên`); } catch (e) { console.error('Dọn trùng tài khoản lỗi:', e.message); }
   try { const n = require('./importer').dedupeVisits(); if (n) console.log(`Đã dọn ${n} lượt làm trùng do sổ sửa chữ`); } catch (e) { console.error('Dọn lượt trùng lỗi:', e.message); }
   try { const n = require('./importer').dedupeAppointments(); if (n) console.log(`Đã dọn ${n} lịch hẹn trùng`); } catch (e) { console.error('Dọn lịch trùng lỗi:', e.message); }
 }
