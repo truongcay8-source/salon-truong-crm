@@ -896,3 +896,22 @@ test('chia tip: nghỉ vài giờ / nửa ngày → tip của khách đến tron
   assert.deepEqual(d.list.find((t) => t.code === 'LTP1').away, [off]);
   assert.equal(d.share, null);
 });
+
+test('Excel chấm công: xuất mẫu → điền giờ → nhập hàng loạt, không ghi trùng', async () => {
+  const ExcelJS = require('exceljs');
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const res = await fetch(base + '/attendance/export?from=2026-09-01&to=2026-09-02', { headers: { Cookie: o.cookie() } });
+  assert.equal(res.status, 200);
+  const wb = new ExcelJS.Workbook(); await wb.xlsx.load(Buffer.from(await res.arrayBuffer()));
+  const ws = wb.getWorksheet('Chấm công');
+  assert.ok(ws.rowCount > 2);
+  const r2 = ws.getRow(2); r2.getCell(3).value = '09:00'; r2.getCell(4).value = '19:30';
+  const r3 = ws.getRow(3); r3.getCell(3).value = '9h15';
+  const buf = await wb.xlsx.writeBuffer();
+  const send = async (dry) => { const fd = new FormData(); fd.append('file', new Blob([buf]), 'cc.xlsx'); fd.append('dry_run', dry ? '1' : '0');
+    return (await fetch(base + '/attendance/import', { method: 'POST', body: fd, headers: { Cookie: o.cookie() } })).json(); };
+  let r = await send(true); assert.equal(r.added, 3); assert.equal(r.errors.length, 0);
+  r = await send(false); assert.equal(r.added, 3);
+  r = await send(false); assert.equal(r.added, 0); assert.equal(r.skipped, 3, 'nhập lại không ghi trùng');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM attendance WHERE date='2026-09-01' AND method='manual'").get().n >= 2, true);
+});

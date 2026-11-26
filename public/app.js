@@ -3219,7 +3219,7 @@ VIEWS.attendance = async (main) => {
       <div class="small muted">${me.on_shop_wifi ? '📶 Bạn đang dùng wifi tiệm' : me.has_gps ? `📍 Sẽ kiểm tra định vị (trong bán kính ${me.radius}m quanh tiệm)` : ''}</div>
       ${me.records.map((r) => `<div class="stat-line"><span>${r.kind === 'in' ? 'Vào' : 'Ra'} · ${M[r.method] || r.method}${r.distance != null ? ' · cách ' + r.distance + 'm' : ''}</span><b>${esc(r.time)}</b></div>`).join('')}</div>
     <div class="card"><div class="row"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="tt" value="${to}" style="width:auto">
-      ${isMgr() ? `<select id="u" style="width:auto">${staffOptions(Number(uid), 'Tất cả')}</select><button class="btn sm" id="man">+ Chấm công hộ</button>` : ''}</div>
+      ${isMgr() ? `<select id="u" style="width:auto">${staffOptions(Number(uid), 'Tất cả')}</select><button class="btn sm" id="man">+ Chấm công hộ</button><button class="btn sm" id="attX">📥 Xuất Excel</button><button class="btn sm" id="attI">📤 Nhập Excel</button>` : ''}</div>
       <h3 style="margin-top:12px">Tổng hợp</h3><div class="table-wrap"><table><thead><tr><th>Nhân viên</th><th class="num">Ngày công</th><th class="num">Tổng giờ</th><th class="num">Đi muộn</th><th class="num">Quên chấm ra</th><th class="num">Nghỉ (ngày)</th></tr></thead>
       <tbody>${rep.summary.map((p) => `<tr><td>${esc(p.staff_name)}</td><td class="num">${p.days}</td><td class="num">${mins2h(p.minutes)}</td><td class="num">${p.late_days ? `${p.late_days} lần · ${p.late_minutes}′` : '0'}</td><td class="num">${p.missing_out || 0}</td><td class="num">${p.off_days || 0}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">Chưa có dữ liệu</td></tr>'}</tbody></table></div>
       <h3 style="margin-top:12px">Chi tiết từng ngày</h3><div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Nhân viên</th><th>Vào</th><th>Ra</th><th class="num">Giờ làm</th><th></th></tr></thead>
@@ -3254,6 +3254,24 @@ VIEWS.attendance = async (main) => {
         <div><label>Loại</label><select name="kind"><option value="in">Vào ca</option><option value="out">Ra ca</option></select></div>
         <div class="full"><label>Lý do (bắt buộc)</label><input name="note" placeholder="VD: quên chấm, điện thoại hết pin"></div></div><div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu</button></div></form>`);
       $('#mf').onsubmit = (e) => { e.preventDefault(); guard($('#mf button.primary'), async () => { await api('/attendance/manual', { method: 'POST', body: formData($('#mf')) }); closeModal(); reload(); }); };
+    };
+    $('#attX').onclick = () => guard($('#attX'), async () => {
+      const res = await api(`/attendance/export?from=${from}&to=${to}`, { raw: true });
+      if (!res.ok) throw new Error('Không xuất được file');
+      const a = document.createElement('a'); a.href = URL.createObjectURL(await res.blob()); a.download = `Cham-cong-${from}_${to}.xlsx`; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    });
+    $('#attI').onclick = () => {
+      openModal('📤 Nhập Excel chấm công', `<div class="small" style="margin-bottom:8px">1. Bấm <b>📥 Xuất Excel</b> để lấy file mẫu (mỗi người mỗi ngày 1 dòng, dòng xám là đã có).<br>2. Điền giờ <b>Vào / Ra</b> (vd 09:00, 19:30) vào ô trống.<br>3. Chọn file ở đây → <b>Kiểm tra</b> → <b>Nhập</b>. Lần đã có trên app sẽ bỏ qua, không ghi trùng.</div>
+        <input type="file" id="aif" accept=".xlsx"><div id="air" class="small" style="margin-top:8px"></div>
+        <div class="modal-foot"><button class="btn" id="aiChk">Kiểm tra</button><button class="btn primary" id="aiGo" disabled>Nhập</button></div>`);
+      const send = async (dry) => { const f = $('#aif').files[0]; if (!f) throw new Error('Chọn file Excel trước');
+        const fd = new FormData(); fd.append('file', f); fd.append('dry_run', dry ? '1' : '0');
+        const r = await api('/attendance/import', { method: 'POST', body: fd });
+        $('#air').innerHTML = `${dry ? 'Kiểm tra' : '✓ Đã nhập'}: <b>${r.added}</b> lần chấm mới · bỏ qua ${r.skipped} (đã có)${r.errors.length ? `<div style="color:var(--bad,#b3261e);margin-top:6px">${r.errors.slice(0, 20).map(esc).join('<br>')}${r.errors.length > 20 ? '<br>…' : ''}</div>` : ''}`;
+        return r; };
+      $('#aiChk').onclick = () => guard($('#aiChk'), async () => { const r = await send(true); $('#aiGo').disabled = !r.added; });
+      $('#aiGo').onclick = () => guard($('#aiGo'), async () => { await send(false); $('#aiGo').disabled = true; toast('Đã nhập chấm công'); reload(); });
     };
     $$('[data-adel]', main).forEach((b) => (b.onclick = () => { if (confirm('Xóa lần chấm công này?')) guard(b, async () => { await api('/attendance/' + b.dataset.adel, { method: 'DELETE' }); reload(); }); }));
   }
