@@ -953,6 +953,11 @@ async function importWorkbook(buffer, opts, user) {
             }
             const manual = db.prepare(`SELECT 1 FROM visits WHERE date=? AND status='done' AND import_ref IS NULL AND main_staff_id=? AND (customer_id=? OR time=?)`).get(b.date, e.staffId, e.customerId, e.time);
             if (manual) { st.kept_manual++; continue; }
+            // Cùng khách, cùng ngày: dịch vụ hóa chất này đã nằm trong hóa đơn khác (vd ô 9h30 ghi cả cắt + uốn, ô 10h lại ghi uốn) → không tạo lần 2
+            if (!ex) {
+              const dupSvc = L.sameDayDupService(e.customerId, b.date, e.parsed.items);
+              if (dupSvc) { (st.dup_service = st.dup_service || []).push(`${dayLabel} ${BM.cleanName(e.text) || e.text.slice(0, 30)}: "${dupSvc.name}" đã có trong hóa đơn ${dupSvc.code} – bỏ qua ô ${e.time}, kiểm tra sổ`); continue; }
+            }
             const items = BM.fitItems(e.parsed.items.map((i) => ({ service_id: i.service_id, name: i.name, price: i.price, grp: i.grp })), e.amount);
             if (!items.length) items.push({ name: e.text.slice(0, 60), price: e.amount });
             const prodSvc = services.find((x) => x.name === 'Bán sản phẩm') || services.find((x) => /sản phẩm/i.test(x.name));
