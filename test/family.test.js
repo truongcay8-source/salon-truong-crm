@@ -727,3 +727,15 @@ test('chuyển hết dữ liệu tài khoản cũ sang tài khoản mới rồi 
   assert.equal((await o.post(`/users/${neo}/merge`, { to: neo })).status, 400);
   db.prepare('UPDATE users SET active=0, works=0 WHERE id=?').run(neo);
 });
+
+test('thứ tự: Director (Trường) luôn đầu danh sách thợ và doanh số; còn lại doanh số cao đứng trước', async () => {
+  const L = require('../server/logic');
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  db.prepare("UPDATE users SET level='Director' WHERE username='truong'").run();
+  const staff = (await o.get('/staff')).data.filter((x) => x.active);
+  assert.equal(staff[0].level, 'Director');
+  const rows = L.salesReport('2020-01-01', '2030-12-31', { role: 'owner', id: 1 }).rows;
+  assert.equal(rows[0].level, 'Director');
+  const rest = rows.slice(1).map((r) => r.sales + r.assist_sales + r.cards_amount);
+  assert.deepEqual(rest, [...rest].sort((a, b) => b - a));
+});
