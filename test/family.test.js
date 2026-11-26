@@ -974,4 +974,12 @@ test('Đánh OFF: nhiều người, nhiều ngày, nửa ngày; không trùng', 
   r = await o.post('/attendance/off', { from: '2026-07-01', to: '2026-07-03', all: 1, from_time: '14:00', to_time: '20:00' });
   assert.equal(r.data.skipped, 2 * 2 + staff.length, 'đã OFF cả ngày / cùng giờ thì bỏ qua');
   assert.equal((await o.post('/attendance/off', { from: '2026-07-05', user_ids: [staff[0]], from_time: '15:00', to_time: '14:00' })).status, 400);
+  // Đã ⚡ Chấm đủ rồi mới đánh OFF → giờ tự điền ngày đó bị xóa, bảng hiện OFF
+  db.prepare("INSERT INTO attendance(user_id,date,kind,time,method,note,created_by) VALUES (?,'2026-07-08','in','09:00','manual','Chấm đủ hàng loạt',1)").run(staff[0]);
+  db.prepare("INSERT INTO attendance(user_id,date,kind,time,method,note,created_by) VALUES (?,'2026-07-08','in','09:05','gps',NULL,?)").run(staff[1], staff[1]);
+  r = await o.post('/attendance/off', { from: '2026-07-08', all: 1 });
+  assert.equal(r.data.removed, 1, 'chỉ xóa giờ do Chấm đủ tự điền');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM attendance WHERE date='2026-07-08'").get().n, 1);
+  r = await o.post('/attendance/off', { from: '2026-07-08', all: 1 });
+  assert.equal(r.data.added, 0);
 });

@@ -3324,7 +3324,7 @@ VIEWS.attendance = async (main) => {
         const all = ids.length === ppl.length;
         const r = await api('/attendance/off', { method: 'POST', body: { from: f.from.value, to: f.to.value, all: all ? 1 : 0, user_ids: ids,
           from_time: kind === 'full' ? '' : f.from_time.value, to_time: kind === 'full' ? '' : f.to_time.value, reason: f.reason.value } });
-        closeModal(); toast(`Đã đánh OFF ${r.added} ngày-người${r.skipped ? ` · bỏ qua ${r.skipped} (đã OFF)` : ''}`); reload();
+        closeModal(); toast(`Đã đánh OFF ${r.added} ngày-người${r.skipped ? ` · ${r.skipped} đã OFF sẵn` : ''}${r.removed ? ` · xóa ${r.removed} giờ chấm tự điền` : ''}`); reload();
       }); };
     };
     $('#attO').onclick = () => offForm(Number(uid) || null, null);
