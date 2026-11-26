@@ -3229,8 +3229,8 @@ function attGrid(G) {
     return `<td class="g-c g-${c.s || 'x'}${c.late ? ' g-l' : ''}" title="${esc(tip)}" data-gc="${r.user_id}|${c.date}">${t}</td>`;
   };
   return `<h3 style="margin-top:12px">Bảng công</h3>
-    <div class="small muted" style="margin-bottom:6px"><span class="g-key g-work">giờ vào/ra</span> <span class="g-key g-l">⏰ muộn</span> <span class="g-key g-off">OFF</span> <span class="g-key g-part">½ nghỉ vài giờ</span> <span class="g-key g-absent">✗ vắng không đơn</span>${isMgr() ? ' · bấm ô để chấm công hộ' : ''}</div>
-    <div class="table-wrap g-wrap"><table class="g-tab"><thead><tr><th class="g-n">Nhân viên</th>${G.dates.map((d) => `<th class="${[0, 6].includes(new Date(d + 'T00:00:00').getDay()) ? 'g-we' : ''}">${d.slice(8, 10)}<br><span class="small muted">${wday(d)}</span></th>`).join('')}
+    <div class="small muted" style="margin-bottom:6px"><span class="g-key g-work">giờ vào/ra</span> <span class="g-key g-l">⏰ muộn</span> <span class="g-key g-off">OFF</span> <span class="g-key g-part">½ nghỉ vài giờ</span> <span class="g-key g-absent">✗ vắng không đơn</span>${isMgr() ? ' · bấm ô để chấm hộ · bấm <b>ngày</b> trên đầu cột để đánh OFF' : ''}</div>
+    <div class="table-wrap g-wrap"><table class="g-tab"><thead><tr><th class="g-n">Nhân viên</th>${G.dates.map((d) => `<th class="${[0, 6].includes(new Date(d + 'T00:00:00').getDay()) ? 'g-we' : ''}${isMgr() ? ' g-dh' : ''}" data-gd="${d}" title="${isMgr() ? 'Bấm để đánh OFF ngày này (cả tiệm / vài người)' : ''}">${d.slice(8, 10)}<br><span class="small muted">${wday(d)}</span></th>`).join('')}
       <th class="num">Công</th><th class="num">OFF</th><th class="num">½</th><th class="num">Vắng</th><th class="num">Muộn</th><th class="num">Giờ</th></tr></thead>
     <tbody>${G.rows.map((r) => `<tr><td class="g-n"><b>${esc(r.name)}</b></td>${r.cells.map((c) => cell(r, c)).join('')}
       <td class="num"><b>${r.sum.work}</b></td><td class="num">${r.sum.off || ''}</td><td class="num">${r.sum.part || ''}</td><td class="num ${r.sum.absent ? 'bad-t' : ''}">${r.sum.absent || ''}</td><td class="num">${r.sum.late || ''}</td><td class="num">${mins2h(r.sum.minutes)}</td></tr>`).join('')}</tbody></table></div>`;
@@ -3250,7 +3250,7 @@ VIEWS.attendance = async (main) => {
       <div class="small muted">${me.on_shop_wifi ? '📶 Bạn đang dùng wifi tiệm' : me.has_gps ? `📍 Sẽ kiểm tra định vị (trong bán kính ${me.radius}m quanh tiệm)` : ''}</div>
       ${me.records.map((r) => `<div class="stat-line"><span>${r.kind === 'in' ? 'Vào' : 'Ra'} · ${M[r.method] || r.method}${r.distance != null ? ' · cách ' + r.distance + 'm' : ''}</span><b>${esc(r.time)}</b></div>`).join('')}</div>
     <div class="card"><div class="row"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="tt" value="${to}" style="width:auto">
-      ${isMgr() ? `<select id="u" style="width:auto">${staffOptions(Number(uid), 'Tất cả')}</select><button class="btn sm" id="man">+ Chấm công hộ</button><button class="btn sm primary" id="attF">⚡ Chấm đủ</button><button class="btn sm" id="attX">📥 Xuất Excel (bảng công + mẫu nhập)</button><button class="btn sm" id="attI">📤 Nhập Excel</button>` : ''}</div>
+      ${isMgr() ? `<select id="u" style="width:auto">${staffOptions(Number(uid), 'Tất cả')}</select><button class="btn sm" id="man">+ Chấm công hộ</button><button class="btn sm" id="attO">🌴 Đánh OFF</button><button class="btn sm primary" id="attF">⚡ Chấm đủ</button><button class="btn sm" id="attX">📥 Xuất Excel (bảng công + mẫu nhập)</button><button class="btn sm" id="attI">📤 Nhập Excel</button>` : ''}</div>
       ${attGrid(rep.grid)}
       <details${uid ? ' open' : ''}><summary class="small muted" style="margin-top:10px">Tổng hợp & chi tiết từng lần chấm</summary>
       <h3 style="margin-top:12px">Tổng hợp</h3><div class="table-wrap"><table><thead><tr><th>Nhân viên</th><th class="num">Ngày công</th><th class="num">Tổng giờ</th><th class="num">Đi muộn</th><th class="num">Quên chấm ra</th><th class="num">Nghỉ (ngày)</th></tr></thead>
@@ -3287,24 +3287,54 @@ VIEWS.attendance = async (main) => {
         <div><label>Ngày</label><input type="date" name="date" value="${S.today}"></div><div><label>Giờ</label><input type="time" name="time" value="09:00"></div>
         <div><label>Loại</label><select name="kind"><option value="in">Vào ca</option><option value="out">Ra ca</option></select></div>
         <div class="full"><label>Lý do (bắt buộc khi lưu giờ)</label><input name="note" placeholder="VD: quên chấm, điện thoại hết pin"></div></div><div class="err"></div>
-        <div class="off-box"><b>🌴 Ngày này nghỉ?</b><label class="chk"><input type="checkbox" id="offAll"> Cả tiệm nghỉ (tất cả nhân viên)</label>
-        <button type="button" class="btn sm" id="offGo">🌴 Đánh OFF</button></div>
-        <div class="modal-foot"><button class="btn primary">Lưu giờ chấm</button></div></form>`);
+        <div class="modal-foot"><button type="button" class="btn" id="toOff">🌴 Ngày này nghỉ → Đánh OFF</button><button class="btn primary">Lưu giờ chấm</button></div></form>`);
       $('#mf').onsubmit = (e) => { e.preventDefault(); guard($('#mf button.primary'), async () => { await api('/attendance/manual', { method: 'POST', body: formData($('#mf')) }); closeModal(); reload(); }); };
-      $('#offGo').onclick = () => guard($('#offGo'), async () => {
-        const f = $('#mf'), all = $('#offAll').checked;
-        if (!f.date.value) throw new Error('Chọn ngày');
-        if (!all && !f.user_id.value) throw new Error('Chọn nhân viên hoặc tích Cả tiệm nghỉ');
-        const r = await api('/attendance/off', { method: 'POST', body: { date: f.date.value, user_id: f.user_id.value, all: all ? 1 : 0, reason: f.note.value } });
-        toast(all ? `Cả tiệm nghỉ ${f.date.value.split('-').reverse().join('/')} (${r.added} người)` : 'Đã đánh OFF'); closeModal(); reload();
-      });
+      $('#toOff').onclick = () => { const f = $('#mf'); offForm(f.user_id.value, f.date.value); };
     };
+    // 🌴 Đánh OFF: chọn Tất cả hoặc từng người · 1 ngày hoặc nhiều ngày · cả ngày / nửa ngày sáng / nửa ngày chiều / theo giờ
+    const offForm = (u, d) => {
+      const ws = (S.settings && S.settings.work_start) || '09:00';
+      const lsGet = (k, v) => { try { return localStorage.getItem(k) || v; } catch { return v; } };
+      const close = lsGet('fill_out', '20:00'), mid = '14:00';
+      const ppl = activeStaff().filter((s) => s.role !== 'owner');
+      openModal('🌴 Đánh OFF', `<form id="of2"><div class="form-grid">
+        <div class="full"><label>Ai nghỉ?</label><div class="chk-row"><label class="chk"><input type="checkbox" id="oAll" ${u ? '' : 'checked'}> <b>Tất cả (cả tiệm nghỉ)</b></label>
+          ${ppl.map((s) => `<label class="chk"><input type="checkbox" name="u" value="${s.id}" ${!u || Number(u) === s.id ? 'checked' : ''}> ${esc(s.full_name)}</label>`).join('')}</div></div>
+        <div><label>Từ ngày</label><input type="date" name="from" value="${d || S.today}"></div><div><label>Đến ngày</label><input type="date" name="to" value="${d || S.today}"></div>
+        <div class="full"><label>Nghỉ</label><div class="chips" id="oK">
+          <button type="button" class="chip on" data-k="full">Cả ngày</button><button type="button" class="chip" data-k="am">Nửa ngày sáng</button>
+          <button type="button" class="chip" data-k="pm">Nửa ngày chiều</button><button type="button" class="chip" data-k="h">Theo giờ</button></div></div>
+        <div id="oH" style="display:none" class="full"><div class="row"><input type="time" name="from_time" style="width:auto"> → <input type="time" name="to_time" style="width:auto"></div></div>
+        <div class="full"><label>Lý do</label><input name="reason" placeholder="VD: cả tiệm nghỉ, việc riêng"></div></div>
+        <div id="oSum" class="small" style="margin-top:6px"></div><div class="err"></div>
+        <div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">🌴 Lưu OFF</button></div></form>`);
+      const f = $('#of2'); let kind = 'full';
+      const boxes = () => [...f.querySelectorAll('input[name=u]')];
+      const sum = () => { const n = boxes().filter((x) => x.checked).length; const t = { full: 'cả ngày', am: `sáng ${ws}–13:00`, pm: `chiều ${mid}–${close}`, h: `${f.from_time.value || '?'}–${f.to_time.value || '?'}` }[kind];
+        $('#oSum').innerHTML = `→ <b>${n === ppl.length ? 'Cả tiệm' : n + ' người'}</b> nghỉ <b>${t}</b>, ${f.from.value === f.to.value ? dmy(f.from.value) : dmy(f.from.value) + ' → ' + dmy(f.to.value)}`; };
+      $('#oAll').onchange = () => { boxes().forEach((x) => (x.checked = $('#oAll').checked)); sum(); };
+      boxes().forEach((x) => (x.onchange = () => { $('#oAll').checked = boxes().every((y) => y.checked); sum(); }));
+      $$('[data-k]', f).forEach((c) => (c.onclick = () => { kind = c.dataset.k; $$('[data-k]', f).forEach((y) => y.classList.toggle('on', y === c)); $('#oH').style.display = kind === 'h' ? '' : 'none';
+        if (kind === 'am') { f.from_time.value = ws; f.to_time.value = '13:00'; } if (kind === 'pm') { f.from_time.value = mid; f.to_time.value = close; } sum(); }));
+      f.from.onchange = () => { if (f.to.value < f.from.value) f.to.value = f.from.value; sum(); }; f.to.onchange = sum; f.from_time.oninput = sum; f.to_time.oninput = sum; sum();
+      f.onsubmit = (e) => { e.preventDefault(); guard($('button.primary', f), async () => {
+        const ids = boxes().filter((x) => x.checked).map((x) => Number(x.value));
+        if (!ids.length) throw new Error('Chọn người nghỉ');
+        if (kind === 'h' && !(f.from_time.value && f.to_time.value)) throw new Error('Nhập giờ nghỉ');
+        const all = ids.length === ppl.length;
+        const r = await api('/attendance/off', { method: 'POST', body: { from: f.from.value, to: f.to.value, all: all ? 1 : 0, user_ids: ids,
+          from_time: kind === 'full' ? '' : f.from_time.value, to_time: kind === 'full' ? '' : f.to_time.value, reason: f.reason.value } });
+        closeModal(); toast(`Đã đánh OFF ${r.added} ngày-người${r.skipped ? ` · bỏ qua ${r.skipped} (đã OFF)` : ''}`); reload();
+      }); };
+    };
+    $('#attO').onclick = () => offForm(Number(uid) || null, null);
+    $$('[data-gd]', main).forEach((th) => (th.onclick = () => offForm(null, th.dataset.gd)));
     $('#attF').onclick = () => {
       const lsGet = (k, d) => { try { return localStorage.getItem(k) || d; } catch { return d; } };
-      openModal('⚡ Chấm đủ hàng loạt', `<form id="ff"><div class="small" style="margin-bottom:8px">Chấm vào/ra cho mọi người mọi ngày trong khoảng. <b>Tự bỏ qua</b> ngày OFF đã duyệt và lần đã chấm; nghỉ vài giờ thì tự lùi giờ vào/ra. Ngày cả tiệm nghỉ: đánh OFF trước (bấm ô ngày đó trong bảng công → 🌴).</div>
+      openModal('⚡ Chấm đủ hàng loạt', `<form id="ff"><div class="small" style="margin-bottom:8px">Chấm vào/ra cho mọi người mọi ngày trong khoảng. <b>Tự bỏ qua</b> ngày OFF đã duyệt và lần đã chấm; nghỉ vài giờ thì tự lùi giờ vào/ra. Ngày nghỉ: bấm <b>🌴 Đánh OFF</b> trước (chọn Tất cả nếu cả tiệm nghỉ).</div>
         <div class="form-grid"><div><label>Từ ngày</label><input type="date" name="from" value="${from}"></div><div><label>Đến ngày</label><input type="date" name="to" value="${to > S.today ? S.today : to}"></div>
         <div><label>Giờ vào</label><input type="time" name="in_time" value="${lsGet('fill_in', '09:00')}"></div><div><label>Giờ ra</label><input type="time" name="out_time" value="${lsGet('fill_out', '20:00')}"></div>
-        <div class="full"><label>Nhân viên</label><div class="chk-row">${activeStaff().filter((s) => s.role !== 'owner').map((s) => `<label class="chk"><input type="checkbox" name="u" value="${s.id}" checked> ${esc(s.full_name)}</label>`).join('')}</div></div></div>
+        <div class="full"><label>Nhân viên</label><div class="chk-row"><label class="chk"><input type="checkbox" id="fAll" checked> <b>Tất cả</b></label>${activeStaff().filter((s) => s.role !== 'owner').map((s) => `<label class="chk"><input type="checkbox" name="u" value="${s.id}" checked> ${esc(s.full_name)}</label>`).join('')}</div></div></div>
         <div id="ffr" class="small" style="margin-top:8px"></div>
         <div class="modal-foot"><button type="button" class="btn" id="ffChk">Kiểm tra</button><button type="button" class="btn primary" id="ffGo" disabled>Chấm</button></div></form>`);
       const f = $('#ff');
@@ -3317,6 +3347,8 @@ VIEWS.attendance = async (main) => {
         return r;
       };
       f.oninput = () => { $('#ffGo').disabled = true; };
+      $('#fAll').onchange = () => f.querySelectorAll('input[name=u]').forEach((x) => (x.checked = $('#fAll').checked));
+      f.querySelectorAll('input[name=u]').forEach((x) => x.addEventListener('change', () => ($('#fAll').checked = [...f.querySelectorAll('input[name=u]')].every((y) => y.checked))));
       $('#ffChk').onclick = () => guard($('#ffChk'), async () => { const r = await send(true); $('#ffGo').disabled = !r.added; });
       $('#ffGo').onclick = () => guard($('#ffGo'), async () => { await send(false); toast('Đã chấm đủ'); closeModal(); reload(); });
     };

@@ -264,19 +264,33 @@ function mount(app, { MGR, OWNER }) {
     res.json({ ...st, dry_run: dry });
   });
   // OFF nhanh từ ô bảng công: 1 người hoặc cả tiệm nghỉ (đơn duyệt luôn)
+  // Nhiều người × nhiều ngày; cả ngày hoặc theo giờ (nửa ngày). Đơn duyệt luôn, không ghi trùng.
   app.post('/api/attendance/off', MGR, (req, res) => {
     const b = req.body;
-    if (!isDate(b.date)) throw bad('Chọn ngày');
+    const d1 = isDate(b.from) ? b.from : b.date, d2 = isDate(b.to) ? b.to : d1;
+    if (!isDate(d1) || !isDate(d2) || d2 < d1) throw bad('Chọn ngày');
     const all = b.all === true || b.all === 1 || b.all === '1';
-    const users = all ? db.prepare("SELECT id FROM users WHERE active=1 AND IFNULL(works,1)=1 AND merged_into IS NULL AND role<>'owner'").all().map((u) => u.id) : [int(b.user_id)].filter(Boolean);
+    const ids = (Array.isArray(b.user_ids) ? b.user_ids : [b.user_id]).map(int).filter(Boolean);
+    const users = all ? db.prepare("SELECT id FROM users WHERE active=1 AND IFNULL(works,1)=1 AND merged_into IS NULL AND role<>'owner'").all().map((u) => u.id) : ids;
     if (!users.length) throw bad('Chọn nhân viên');
-    const reason = str(b.reason) || (all ? 'Cả tiệm nghỉ' : 'OFF (chấm công hộ)');
-    const has = db.prepare("SELECT 1 FROM staff_off WHERE user_id=? AND date=? AND status='approved' AND from_time IS NULL");
-    const ins = db.prepare("INSERT INTO staff_off(user_id,date,from_time,to_time,reason,status,created_by,decided_by) VALUES (?,?,NULL,NULL,?,'approved',?,?)");
-    let n = 0;
-    db.transaction(() => { for (const u of users) if (!has.get(u, b.date)) { ins.run(u, b.date, reason, req.user.id, req.user.id); n++; } })();
-    audit(req.user.id, 'quick_off', 'staff_off', null, { date: b.date, users, all, reason });
-    res.json({ added: n, users: users.length });
+    const fromT = str(b.from_time), toT = str(b.to_time);
+    if ((fromT || toT) && !(hm(fromT) != null && hm(toT) != null && hm(fromT) < hm(toT))) throw bad('Giờ nghỉ không hợp lệ (từ giờ phải trước đến giờ)');
+    const reason = str(b.reason) || (all ? 'Cả tiệm nghỉ' : 'OFF (quản lý ghi)');
+    const hasFull = db.prepare("SELECT 1 FROM staff_off WHERE user_id=? AND date=? AND status='approved' AND from_time IS NULL");
+    const hasSame = db.prepare("SELECT 1 FROM staff_off WHERE user_id=? AND date=? AND status='approved' AND from_time=? AND to_time=?");
+    const ins = db.prepare("INSERT INTO staff_off(user_id,date,from_time,to_time,reason,status,created_by,decided_by) VALUES (?,?,?,?,?,'approved',?,?)");
+    let n = 0, skipped = 0;
+    db.transaction(() => {
+      for (let d = new Date(d1 + 'T00:00:00Z'), k = 0; d.toISOString().slice(0, 10) <= d2 && k < 62; d.setUTCDate(d.getUTCDate() + 1), k++) {
+        const date = d.toISOString().slice(0, 10);
+        for (const u of users) {
+          if (hasFull.get(u, date) || (fromT && hasSame.get(u, date, fromT, toT))) { skipped++; continue; }
+          ins.run(u, date, fromT || null, toT || null, reason, req.user.id, req.user.id); n++;
+        }
+      }
+    })();
+    audit(req.user.id, 'quick_off', 'staff_off', null, { from: d1, to: d2, users, all, from_time: fromT, to_time: toT, reason });
+    res.json({ added: n, skipped, users: users.length });
   });
   // ===== Excel chấm công: xuất mẫu (đã có giờ + ô trống từng người từng ngày) → điền → nhập lại hàng loạt =====
   const fold = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/\s+/g, ' ').trim();

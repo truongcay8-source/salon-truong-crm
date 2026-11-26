@@ -963,3 +963,15 @@ test('1 két: kết ca trừ chi lấy từ két, để lại quỹ, phần vư�
   const r = await o.post('/pos/close', { counted: String(after.total) });
   assert.equal(r.data.diff, 0); assert.equal(r.data.keep, Math.min(after.total, 1000000)); assert.equal(r.data.handover, after.total - r.data.keep);
 });
+
+test('Đánh OFF: nhiều người, nhiều ngày, nửa ngày; không trùng', async () => {
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const staff = db.prepare("SELECT id FROM users WHERE active=1 AND IFNULL(works,1)=1 AND merged_into IS NULL AND role<>'owner' ORDER BY id").all().map((u) => u.id);
+  let r = await o.post('/attendance/off', { from: '2026-07-01', to: '2026-07-02', user_ids: staff.slice(0, 2) });
+  assert.equal(r.data.added, 4);
+  r = await o.post('/attendance/off', { from: '2026-07-03', to: '2026-07-03', all: 1, from_time: '14:00', to_time: '20:00' });
+  assert.equal(r.data.added, staff.length);
+  r = await o.post('/attendance/off', { from: '2026-07-01', to: '2026-07-03', all: 1, from_time: '14:00', to_time: '20:00' });
+  assert.equal(r.data.skipped, 2 * 2 + staff.length, 'đã OFF cả ngày / cùng giờ thì bỏ qua');
+  assert.equal((await o.post('/attendance/off', { from: '2026-07-05', user_ids: [staff[0]], from_time: '15:00', to_time: '14:00' })).status, 400);
+});
