@@ -158,10 +158,14 @@ app.put('/api/users/:id', OWNER, (req, res) => {
 });
 app.post('/api/users/:id/reset-password', OWNER, (req, res) => {
   const id = int(req.params.id);
-  const pw = String(req.body.password || '');
+  const pw = String(req.body.password || '').trim();
   if (pw.length < 6) throw bad('Mật khẩu tối thiểu 6 ký tự');
-  db.prepare('UPDATE users SET password_hash=?, must_change_pw=1 WHERE id=?').run(bcrypt.hashSync(pw, 10), id);
+  const target = db.prepare('SELECT username FROM users WHERE id=?').get(id);
+  if (!target) throw bad('Không tìm thấy tài khoản');
+  // mở khóa luôn: bật đăng nhập + đang làm, xóa đếm sai mật khẩu
+  db.prepare('UPDATE users SET password_hash=?, must_change_pw=1, active=1, can_login=1 WHERE id=?').run(bcrypt.hashSync(pw, 10), id);
   db.prepare('DELETE FROM sessions WHERE user_id=?').run(id);
+  for (const k of [...failed.keys()]) if (k.startsWith(target.username + '|')) failed.delete(k);
   audit(req.user.id, 'reset_password', 'user', id);
   res.json({ ok: true });
 });

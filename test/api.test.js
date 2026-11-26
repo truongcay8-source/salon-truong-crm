@@ -529,3 +529,14 @@ test('sao lưu Excel về máy: nhắc mỗi tuần, nhân viên không tải đ
   db.prepare("UPDATE settings SET value=datetime('now','localtime','-8 days') WHERE key='pc_backup_at'").run();
   assert.equal((await vinh.get('/reminders')).data.counts.backup, 1);
 });
+
+test('đặt lại MK: mở khóa sai 5 lần, bỏ khoảng trắng, bắt đổi MK', async () => {
+  const vinh = client(); assert.equal((await vinh.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const t = (await vinh.get('/users')).data.find((u) => u.username === 'thoai');
+  assert.equal((await client().post('/login', { username: 'thoai', password: 'tam12345' })).status, 429);
+  assert.equal((await vinh.post(`/users/${t.id}/reset-password`, { password: ' 482913 ' })).status, 200);
+  const c = client();
+  assert.equal((await c.post('/login', { username: 'Thoai', password: '482913' })).status, 200);
+  assert.equal((await c.get('/customers')).status, 403);
+  assert.equal((await c.post('/me/password', { old_password: '482913', new_password: 'thoai-moi' })).status, 200);
+});

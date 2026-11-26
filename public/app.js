@@ -2929,7 +2929,7 @@ VIEWS.settings = async (main) => {
       <td class="row"><button class="btn sm" data-eu="${u.id}">Sửa</button>${u.can_login ? `<button class="btn sm" data-pw="${u.id}">Đặt lại MK</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
     const form = (u = {}) => {
       openModal(u.id ? 'Sửa tài khoản' : 'Tài khoản mới', `<form id="uf"><label>Họ tên (hiển thị)</label><input name="full_name" value="${esc(u.full_name || '')}" required>
-        ${u.id ? '' : '<label>Tên đăng nhập (không dấu)</label><input name="username" autocapitalize="none" required><label>Mật khẩu tạm (≥6 ký tự)</label><input name="password" required minlength="6">'}
+        ${u.id ? '' : '<label>Tên đăng nhập (không dấu)</label><input name="username" autocapitalize="none" required><label>Mật khẩu tạm (≥6 ký tự)</label><input name="password" required minlength="6" autocapitalize="none" autocorrect="off" spellcheck="false">'}
         <label>Vai trò</label><select name="role">${Object.entries(ROLE).map(([k, l]) => `<option value="${k}" ${u.role === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
         <label>Cấp thợ (theo bảng giá cắt)</label><select name="level"><option value="">— Không áp dụng —</option>${LEVELS.map((l) => `<option ${u.level === l ? 'selected' : ''}>${l}</option>`).join('')}</select>
         <label>Tên khác trong sổ Excel (cách nhau dấu phẩy)</label><input name="aliases" value="${esc(u.aliases || '')}">
@@ -2943,10 +2943,19 @@ VIEWS.settings = async (main) => {
     };
     $('#nu').onclick = () => form();
     $$('[data-eu]', sb).forEach((b) => (b.onclick = () => form(users.find((u) => u.id === Number(b.dataset.eu)))));
-    $$('[data-pw]', sb).forEach((b) => (b.onclick = async () => {
-      const pw = prompt('Mật khẩu tạm mới (≥6 ký tự). Người dùng sẽ phải đổi khi đăng nhập:');
-      if (!pw) return;
-      try { await api(`/users/${b.dataset.pw}/reset-password`, { method: 'POST', body: { password: pw } }); toast('Đã đặt lại mật khẩu'); reload(); } catch (e) { toast(e.message); }
+    $$('[data-pw]', sb).forEach((b) => (b.onclick = () => {
+      const u = users.find((x) => x.id === Number(b.dataset.pw));
+      const sug = String(Math.floor(100000 + Math.random() * 900000));
+      openModal('Đặt lại mật khẩu – ' + esc(u.full_name), `<form id="rpf"><div class="small muted">Tên đăng nhập: <b style="font-size:16px;color:var(--text)">${esc(u.username)}</b></div>
+        <label>Mật khẩu tạm (≥6 ký tự, nên dùng toàn số)</label><input name="password" value="${sug}" required minlength="6" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="off" inputmode="numeric" style="font-size:18px;letter-spacing:2px">
+        <div class="small muted">Sau khi lưu, tài khoản được mở khóa. Lần đầu vào, ${esc(u.full_name)} gõ mật khẩu tạm này ở ô "Mật khẩu hiện tại" rồi đặt mật khẩu riêng.</div>
+        <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu mật khẩu</button></div></form>`);
+      $('#rpf').onsubmit = (e) => { e.preventDefault(); guard($('#rpf button'), async () => {
+        const pw = String(formData($('#rpf')).password || '').trim();
+        await api(`/users/${u.id}/reset-password`, { method: 'POST', body: { password: pw } });
+        openModal('Đã đặt lại mật khẩu', `<p>Gửi cho ${esc(u.full_name)}:</p><div class="card" style="font-size:17px">Tên đăng nhập: <b>${esc(u.username)}</b><br>Mật khẩu tạm: <b>${esc(pw)}</b></div><div class="modal-foot"><button class="btn primary" id="rpok">Xong</button></div>`);
+        $('#rpok').onclick = () => { closeModal(); reload(); };
+      }); };
     }));
   }
   if (tab === 'params') {
