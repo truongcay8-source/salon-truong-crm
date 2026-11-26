@@ -193,6 +193,97 @@ function mount(app, { MGR, OWNER }) {
     audit(req.user.id, 'manual_attendance', 'attendance', id, b);
     res.json({ id });
   });
+  // ===== Excel chấm công: xuất mẫu (đã có giờ + ô trống từng người từng ngày) → điền → nhập lại hàng loạt =====
+  const fold = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/\s+/g, ' ').trim();
+  const days = (from, to) => { const out = []; for (let d = new Date(from + 'T00:00:00Z'); d.toISOString().slice(0, 10) <= to && out.length < 62; d.setUTCDate(d.getUTCDate() + 1)) out.push(d.toISOString().slice(0, 10)); return out; };
+  app.get('/api/attendance/export', MGR, async (req, res) => {
+    const ExcelJS = require('exceljs');
+    const t = today();
+    const from = isDate(req.query.from) ? req.query.from : t.slice(0, 8) + '01';
+    const to = isDate(req.query.to) ? req.query.to : t;
+    const staff = db.prepare("SELECT id, full_name FROM users WHERE active=1 AND IFNULL(works,1)=1 AND merged_into IS NULL ORDER BY id").all();
+    const rec = db.prepare('SELECT user_id, date, kind, MIN(time) first, MAX(time) last FROM attendance WHERE date BETWEEN ? AND ? GROUP BY user_id, date, kind').all(from, to);
+    const get = (u, d, k) => rec.find((r) => r.user_id === u && r.date === d && r.kind === k);
+    const offs = db.prepare("SELECT user_id, date, from_time, to_time FROM staff_off WHERE status='approved' AND date BETWEEN ? AND ?").all(from, to);
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Chấm công', { views: [{ state: 'frozen', ySplit: 1 }] });
+    ws.columns = [{ header: 'Ngày', key: 'd', width: 12 }, { header: 'Nhân viên', key: 'n', width: 16 }, { header: 'Vào', key: 'i', width: 8 }, { header: 'Ra', key: 'o', width: 8 }, { header: 'Ghi chú', key: 'g', width: 36 }];
+    ws.getRow(1).font = { bold: true }; ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3E6D8' } };
+    for (const d of days(from, to)) for (const u of staff) {
+      const i = get(u.id, d, 'in'), o = get(u.id, d, 'out');
+      const off = offs.filter((x) => x.user_id === u.id && x.date === d);
+      const note = off.length ? off.map((x) => (x.from_time ? `Nghỉ ${x.from_time}–${x.to_time}` : 'Nghỉ cả ngày')).join(', ') : (i || o) ? 'đã có trên app' : '';
+      const row = ws.addRow({ d: d.split('-').reverse().join('/'), n: u.full_name, i: i ? i.first : '', o: o ? o.last : '', g: note });
+      if (i || o) row.font = { color: { argb: 'FF888888' } };
+    }
+    const h = wb.addWorksheet('Hướng dẫn');
+    ['Điền giờ VÀO / RA dạng 09:00, 19:30 vào các ô còn trống.', 'Dòng chữ xám = đã có trên app, nhập lại sẽ bỏ qua (không ghi trùng).', 'Để trống cả Vào lẫn Ra = không chấm ngày đó.',
+      'Tên nhân viên phải giống trong app. Ngày dạng dd/mm/yyyy.', 'Xong: trang Chấm công › 📤 Nhập Excel chấm công.'].forEach((x) => h.addRow([x]));
+    h.getColumn(1).width = 80;
+    audit(req.user.id, 'export_attendance', 'attendance', null, { from, to });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="cham-cong-${from}_${to}.xlsx"`);
+    await wb.xlsx.write(res); res.end();
+  });
+  const attUpload = require('multer')({ storage: require('multer').memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+  const cellText = (v) => {
+    if (v == null) return '';
+    if (v instanceof Date) return v;
+    if (typeof v === 'object') return v.result != null ? v.result : v.text != null ? v.text : v.richText ? v.richText.map((x) => x.text).join('') : '';
+    return v;
+  };
+  const toDate = (v) => {
+    v = cellText(v);
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    if (typeof v === 'number') return new Date(Math.round((v - 25569) * 86400000)).toISOString().slice(0, 10);
+    const m = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/.exec(String(v).trim()); if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    return isDate(String(v).trim()) ? String(v).trim() : null;
+  };
+  const toTime = (v) => {
+    v = cellText(v);
+    if (v === '' || v == null) return null;
+    if (v instanceof Date) return v.toISOString().slice(11, 16);
+    if (typeof v === 'number') { const m = Math.round((v % 1) * 1440); return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; }
+    const m = /^(\d{1,2})\s*[:hg.]\s*(\d{0,2})/i.exec(String(v).trim());
+    if (!m || Number(m[1]) > 23 || Number(m[2] || 0) > 59) return undefined;
+    return `${m[1].padStart(2, '0')}:${(m[2] || '00').padStart(2, '0')}`;
+  };
+  app.post('/api/attendance/import', MGR, attUpload.single('file'), async (req, res) => {
+    if (!req.file) throw bad('Chưa chọn file Excel');
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook();
+    try { await wb.xlsx.load(req.file.buffer); } catch { throw bad('Không đọc được file. Lưu file dạng .xlsx rồi thử lại.'); }
+    const ws = wb.getWorksheet('Chấm công') || wb.worksheets[0];
+    const users = db.prepare('SELECT id, full_name, username, aliases FROM users WHERE merged_into IS NULL').all();
+    const findU = (name) => { const k = fold(name); if (!k) return null;
+      return users.find((u) => fold(u.full_name) === k || fold(u.username) === k || fold(u.aliases).split(',').map((x) => x.trim()).includes(k)) || users.find((u) => fold(u.full_name).replace(/^chi /, '') === k.replace(/^chi /, '')) || null; };
+    const dry = req.body.dry_run === '1';
+    const has = db.prepare('SELECT 1 FROM attendance WHERE user_id=? AND date=? AND kind=?');
+    const ins = db.prepare("INSERT INTO attendance(user_id,date,kind,time,method,note,created_by) VALUES (?,?,?,?,'manual',?,?)");
+    const st = { added: 0, skipped: 0, errors: [] };
+    db.transaction(() => {
+      ws.eachRow((row, i) => {
+        if (i === 1) return;
+        const date = toDate(row.getCell(1).value), name = String(cellText(row.getCell(2).value) || '').trim();
+        const tin = toTime(row.getCell(3).value), tout = toTime(row.getCell(4).value);
+        if (!name && !tin && !tout) return;
+        if (!tin && !tout) return;
+        if (!date) return st.errors.push(`Dòng ${i}: ngày không đọc được`);
+        if (date > today()) return st.errors.push(`Dòng ${i}: ngày ${date} chưa tới`);
+        const u = findU(name); if (!u) return st.errors.push(`Dòng ${i}: không thấy nhân viên "${name}"`);
+        if (tin === undefined || tout === undefined) return st.errors.push(`Dòng ${i}: giờ không đọc được (ghi dạng 09:00)`);
+        if (tin && tout && tout <= tin) return st.errors.push(`Dòng ${i}: giờ ra ${tout} không sau giờ vào ${tin}`);
+        for (const [kind, time] of [['in', tin], ['out', tout]]) {
+          if (!time) continue;
+          if (has.get(u.id, date, kind)) { st.skipped++; continue; }
+          if (!dry) ins.run(u.id, date, kind, time, 'Nhập Excel chấm công' + (cellText(row.getCell(5).value) && !/đã có trên app|^Nghỉ/.test(String(cellText(row.getCell(5).value))) ? ': ' + String(cellText(row.getCell(5).value)).slice(0, 80) : ''), req.user.id);
+          st.added++;
+        }
+      });
+    })();
+    if (!dry) audit(req.user.id, 'import_attendance', 'attendance', null, { file: req.file.originalname, added: st.added, skipped: st.skipped, errors: st.errors.length });
+    res.json({ ...st, dry_run: dry });
+  });
   app.delete('/api/attendance/:id', MGR, (req, res) => {
     const r = db.prepare('SELECT * FROM attendance WHERE id=?').get(int(req.params.id));
     if (!r) throw new HttpError(404, 'Không tìm thấy');
