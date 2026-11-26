@@ -1533,7 +1533,8 @@ async function visitForm(v = {}, after) {
     <div><label>Giờ</label><input type="time" name="time" value="${v.time || new Date().toTimeString().slice(0, 5)}"></div>
     <div><label>Thợ chính (người làm) *</label><select name="main_staff_id" required>${staffOptions(v.main_staff_id || (!isMgr() ? S.me.id : null))}</select></div>
     <div><label>Người phụ (cả phiếu)</label><select name="assistant_id">${staffOptions(v.assistant_id, 'Không có')}</select></div>
-    <div class="full"><label>Dịch vụ / sản phẩm bán (giá sửa được)</label><div id="items"></div><div class="row"><div style="flex:1;min-width:200px" id="vSvcS"></div><button type="button" class="btn sm" id="addItem">+ Thêm dòng</button><button type="button" class="btn sm" id="scanItem">📷 Quét SP bán</button></div></div>
+    <div class="full"><label>Dịch vụ / sản phẩm bán (giá sửa được)</label><div id="items"></div><div class="row"><div style="flex:1;min-width:200px" id="vSvcS"></div><button type="button" class="btn sm" id="addItem">+ Thêm dòng</button><button type="button" class="btn sm" id="scanItem">📷 Quét SP bán</button></div>
+      ${S.materials.some((m) => m.kind === 'retail') ? `<div class="prd-box"><input id="vPrdQ" placeholder="🛍 Bán sản phẩm: gõ tên / mã (vd: reuzel, sáp, gel…)" autocomplete="off"><div id="vPrdL" class="prd-list hidden"></div></div>` : ''}</div>
     ${S.materials.some((m) => m.kind === 'service') ? `<div class="full"><label>🧪 Hóa chất đã dùng (ghi để tính giá cốt, trừ kho)</label><div id="used"></div>
       <div class="row"><button type="button" class="btn sm" id="addUsed">+ Thêm hóa chất</button><button type="button" class="btn sm" id="recipeFill">↻ Lấy theo định mức dịch vụ</button><button type="button" class="btn sm" id="formulaFill">🧪 Tính từ công thức</button></div></div>` : ''}
     <div><label>Phụ thu</label><input type="number" name="surcharge" min="0" step="1000" value="${v.surcharge || ''}"></div>
@@ -1607,7 +1608,7 @@ async function visitForm(v = {}, after) {
   f.pay2_method.onchange = qrSync; f.pay2_amount.oninput = qrSync;
   const renderItems = () => {
     $('#items').innerHTML = items.map((it, i) => `<div class="item-row"><select data-i="${i}" class="isvc">${svcOpts(it.service_id).replace(it.material_id ? `value="m${it.material_id}"` : '\u0000', `value="m${it.material_id}" selected`)}${!it.service_id && !it.material_id && it.name ? `<option selected value="">${esc(it.name)}</option>` : ''}</select>
-      ${it.material_id ? `<input type="number" data-i="${i}" class="iqty" min="1" step="1" value="${it.qty || 1}" title="Số lượng" style="width:64px">` : ''}
+      ${it.material_id ? `<input type="number" data-i="${i}" class="iqty" min="1" step="1" value="${it.qty || 1}" title="Số lượng" style="width:64px">${(() => { const m = matById(it.material_id); return m && m.stock != null ? `<span class="small nowrap ${m.stock - (it.qty || 1) < 0 ? 'bad-t' : 'muted'}" title="Số còn trong kho">còn ${m.stock}</span>` : ''; })()}` : ''}
       <select data-i="${i}" class="istaff" title="Thợ làm dòng này (hoa hồng dịch vụ tính cho người này)"><option value="">Chính: ${esc(hdrName(f.main_staff_id.value) || 'thợ chính')}</option>${activeStaff().filter((s) => String(s.id) !== String(f.main_staff_id.value)).map((s) => `<option value="${s.id}" ${Number(it.staff_id) === s.id ? 'selected' : ''}>Chính: ${esc(s.full_name)}</option>`).join('')}</select>
       <select data-i="${i}" class="iasst" title="Người phụ của dòng này (hoa hồng phụ tính cho người này)"><option value="">Phụ: ${esc(hdrName(f.assistant_id.value) || 'không có')}</option>${f.assistant_id.value ? `<option value="0" ${it.assistant_id === 0 || it.assistant_id === '0' ? 'selected' : ''}>Phụ: không có</option>` : ''}${activeStaff().filter((s) => String(s.id) !== String(f.assistant_id.value)).map((s) => `<option value="${s.id}" ${Number(it.assistant_id) === s.id ? 'selected' : ''}>Phụ: ${esc(s.full_name)}</option>`).join('')}</select>
       <input type="number" data-i="${i}" class="iprice" min="0" step="1000" value="${it.price ?? ''}" placeholder="Giá"><button type="button" class="icon-btn" data-rm="${i}">×</button></div>`).join('');
@@ -1771,11 +1772,7 @@ async function visitForm(v = {}, after) {
   showBrief(custSel && custSel.id);
   $('#addItem').onclick = () => { items.push({ service_id: '', price: '' }); renderItems(); };
   // Quét mã sản phẩm bán lẻ → thêm dòng (quét lại cùng SP = tăng số lượng)
-  $('#scanItem').onclick = () => scanBarcode({ title: 'Quét sản phẩm bán cho khách', continuous: true, hint: 'Quét từng sản phẩm khách mua, xong bấm “Xong”.', onCode: async (code) => {
-    let m = S.materials.find((x) => x.active && hasCode(x, code));
-    if (!m) { const r = await api('/stock/barcode/' + encodeURIComponent(code)); if (r.found) m = matById(r.id) || r; }
-    if (!m) return `⚠ Mã <b>${esc(code)}</b> chưa gắn sản phẩm. Người giữ kho gắn mã ở trang Kho › 📷 Quét mã vạch.`;
-    if (m.kind !== 'retail') return `⚠ <b>${esc(m.name)}</b> là hóa chất làm dịch vụ, không bán lẻ.`;
+  const addProd = (m) => {
     const blank = items.findIndex((i) => !i.service_id && !i.material_id && !i.name);
     const ex = items.find((i) => i.material_id === m.id);
     if (ex) { ex.qty = (ex.qty || 1) + 1; if (m.sell_price) ex.price = m.sell_price * ex.qty; }
@@ -1784,8 +1781,30 @@ async function visitForm(v = {}, after) {
       if (blank >= 0) items[blank] = row; else items.push(row);
     }
     renderItems();
-    return `✓ <b>${esc(m.name)}</b>${ex ? ' × ' + ex.qty : ''}${m.sell_price ? ' · ' + money(m.sell_price) : ' · chưa có giá bán, nhập tay'}`;
+    const left = m.stock != null ? m.stock - (ex ? ex.qty : 1) : null;
+    return `✓ <b>${esc(m.name)}</b>${ex ? ' × ' + ex.qty : ''}${m.sell_price ? ' · ' + money(m.sell_price) : ' · chưa có giá bán, nhập tay'}${left != null && left < 0 ? ' · <b class="bad-t">⚠ kho báo hết hàng</b>' : ''}`;
+  };
+  $('#scanItem').onclick = () => scanBarcode({ title: 'Quét sản phẩm bán cho khách', continuous: true, hint: 'Quét từng sản phẩm khách mua, xong bấm “Xong”.', onCode: async (code) => {
+    let m = S.materials.find((x) => x.active && hasCode(x, code));
+    if (!m) { const r = await api('/stock/barcode/' + encodeURIComponent(code)); if (r.found) m = matById(r.id) || r; }
+    if (!m) return `⚠ Mã <b>${esc(code)}</b> chưa gắn sản phẩm. Người giữ kho gắn mã ở trang Kho › 📷 Quét mã vạch.`;
+    if (m.kind !== 'retail') return `⚠ <b>${esc(m.name)}</b> là hóa chất làm dịch vụ, không bán lẻ.`;
+    return addProd(m);
   } });
+  // Gõ nhanh tên / mã sản phẩm → danh sách có giá bán + số còn, bấm (hoặc Enter) là thêm vào đơn
+  if ($('#vPrdQ')) {
+    const q = $('#vPrdQ'), box = $('#vPrdL');
+    const list = () => { const t = fold(q.value.trim());
+      return S.materials.filter((m) => m.kind === 'retail' && m.active && (!t || t.split(/\s+/).every((w) => fold([m.name, m.code, m.grp, m.barcode].filter(Boolean).join(' ')).includes(w)))).slice(0, 40); };
+    const draw = () => { const L = list();
+      box.innerHTML = L.length ? L.map((m, k) => `<button type="button" class="prd-opt ${k === 0 ? 'on' : ''}" data-pm="${m.id}"><span>${esc(m.name)}</span><span class="nowrap">${m.sell_price ? '<b>' + money(m.sell_price) + '</b>' : '<span class="muted">chưa có giá</span>'}${m.stock != null ? ` · <span class="${m.stock <= 0 ? 'bad-t' : m.stock <= 1 ? 'warn-t' : 'muted'}">còn ${m.stock}</span>` : ''}</span></button>`).join('')
+        : '<div class="small muted" style="padding:8px">Không thấy sản phẩm. Quản lý thêm ở Kho hàng.</div>';
+      box.classList.remove('hidden');
+      $$('[data-pm]', box).forEach((b) => (b.onmousedown = (e) => { e.preventDefault(); const m = matById(Number(b.dataset.pm)); if (m) { toast(addProd(m).replace(/<[^>]+>/g, '')); q.value = ''; draw(); } })); };
+    q.onfocus = draw; q.oninput = draw;
+    q.onblur = () => setTimeout(() => box.classList.add('hidden'), 150);
+    q.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); const m = list()[0]; if (m) { toast(addProd(m).replace(/<[^>]+>/g, '')); q.value = ''; draw(); } } if (e.key === 'Escape') box.classList.add('hidden'); };
+  }
   if ($('#used')) {
     $('#used').addEventListener('input', () => { usedTouched = true; fromFormula = false; });
     $('#used').addEventListener('change', () => { usedTouched = true; fromFormula = false; });
