@@ -424,12 +424,13 @@ function chemText(r) {
 
 // ---------- Nhân viên ----------
 function staffResolver(summary) {
-  const users = db.prepare('SELECT id, full_name, aliases FROM users').all();
+  const users = db.prepare('SELECT id, full_name, aliases FROM users ORDER BY IFNULL(works,1) DESC, id').all();
   const key = (s) => stripAccents(s).replace(/^(chi|anh|em|c|a|e)\s+/, '');
   const map = new Map();
+  // 2 tài khoản cùng tên/tên khác (vd tạo thêm "TruongV1" có tên khác "Trường") → giữ tài khoản cũ, không đổi thợ của lịch/lượt đã nhập
   for (const u of users) {
-    map.set(key(u.full_name), u.id);
-    for (const a of String(u.aliases || '').split(',')) if (a.trim()) map.set(key(a), u.id);
+    if (!map.has(key(u.full_name))) map.set(key(u.full_name), u.id);
+    for (const a of String(u.aliases || '').split(',')) if (a.trim() && !map.has(key(a))) map.set(key(a), u.id);
   }
   return (name) => {
     const n = asText(name);
@@ -948,7 +949,7 @@ async function importWorkbook(buffer, opts, user) {
       }
       // Chỉ nhận đúng tên nhân viên đang có (không tự tạo người mới từ chữ trong ngoặc)
       function assistantIn(text, mainId) {
-        const staff = db.prepare('SELECT id, full_name, aliases FROM users').all();
+        const staff = db.prepare('SELECT id, full_name, aliases FROM users ORDER BY IFNULL(works,1) DESC, id').all();
         const key = (x) => stripAccents(x).replace(/^(chi|anh|em|c|a|e)\s+/, '').trim();
         const names = (x) => [x.full_name, ...String(x.aliases || '').split(',')].map((a) => a.trim() && key(a)).filter(Boolean);
         // "(Thu)", "(Thoại phụ)", cả ngoặc quên đóng "Vợ Hạnh 785(Thu"
@@ -1056,6 +1057,7 @@ async function importWorkbook(buffer, opts, user) {
   } catch (e) {
     if (e !== ROLLBACK) throw e;
   }
+  if (!opts.dryRun) try { summary.clone_staff_fixed = dedupeCloneStaff(); } catch (e) { summary.warnings.push('Dọn lịch trùng do 2 tài khoản cùng tên: ' + e.message); }
   if (!opts.dryRun) try { summary.visits_deduped = dedupeVisits(); } catch (e) { summary.warnings.push('Dọn lượt trùng: ' + e.message); }
   if (!opts.dryRun) try { summary.visits_merged = mergeSameVisits(); } catch (e) { summary.warnings.push('Gộp lượt cùng khách: ' + e.message); }
   if (!opts.dryRun) try { summary.gifts_closed = closeUsedGifts(); } catch (e) { summary.warnings.push('Đóng thẻ tri ân: ' + e.message); }
@@ -1065,5 +1067,46 @@ async function importWorkbook(buffer, opts, user) {
   return { dry_run: opts.dryRun, summary };
 }
 
-const VERSION = 3; // 2: không ghép "E Quang" vào "Quang Anh"
-module.exports = { VERSION, dedupeVisits, closeUsedGifts, mergeSamePhone, mergeSameVisits, mergeOrphanCustomers, dedupeAppointments, apptKey, importWorkbook, asDate, asTime };
+const VERSION = 4; // 2: không ghép "E Quang" vào "Quang Anh"; 4: 2 tài khoản trùng tên
+const nameKey = (s) => stripAccents(String(s || '')).replace(/^(chi|anh|em|c|a|e)\s+/, '').trim();
+// Cặp tài khoản trùng tên/tên khác: [tài khoản gốc, tài khoản thêm sau]
+function staffClones() {
+  const users = db.prepare('SELECT id, full_name, aliases, works FROM users ORDER BY IFNULL(works,1) DESC, id').all();
+  const owner = new Map(); const pairs = new Map();
+  for (const u of users) for (const n of [u.full_name, ...String(u.aliases || '').split(',')]) {
+    const k = nameKey(n); if (!k) continue;
+    const o = owner.get(k);
+    if (o == null) owner.set(k, u.id); else if (o !== u.id) pairs.set(o + '|' + u.id, [o, u.id]);
+  }
+  return [...pairs.values()];
+}
+// Đồng bộ sổ lúc tên thợ bị nhận nhầm sang tài khoản mới → tạo lịch/lượt thứ 2 → bỏ bản thừa (chỉ bản nhập từ sổ, chưa sửa tay)
+function dedupeCloneStaff() {
+  let n = 0;
+  const cellText = (v) => String(v.note || '').replace(/^Sổ đặt lịch: /, '').split(' · ')[0];
+  for (const [keep, clone] of staffClones()) {
+    for (const v of db.prepare("SELECT * FROM visits WHERE main_staff_id=? AND status='done' AND import_ref LIKE 'SO:%' AND IFNULL(manual_edit,0)=0").all(clone)) {
+      const k = apptKey(cellText(v));
+      const twin = db.prepare("SELECT * FROM visits WHERE main_staff_id=? AND date=? AND IFNULL(time,'')=IFNULL(?,'') AND import_ref LIKE 'SO:%' ORDER BY (status='done') DESC, id").all(keep, v.date, v.time)
+        .find((x) => (v.customer_id && x.customer_id === v.customer_id) || (k && apptKey(cellText(x)) === k));
+      if (!twin) continue;
+      L.deleteVisit(v.id, 'Trùng: lượt sổ đặt lịch bị gán nhầm sang tài khoản trùng tên (đã có lượt ' + (twin.code || twin.id) + ')', { id: 1 });
+      if (twin.status === 'done') db.prepare('UPDATE appointments SET visit_id=? WHERE visit_id=?').run(twin.id, v.id);
+      n++;
+    }
+    for (const a of db.prepare('SELECT * FROM appointments WHERE staff_id=?').all(clone)) {
+      if (a.manual_edit) continue;
+      if (a.visit_id && db.prepare("SELECT 1 FROM visits WHERE id=? AND status='done' AND main_staff_id<>?").get(a.visit_id, keep)) continue;
+      const k = apptKey(a.note || a.guest_name || '');
+      const twin = db.prepare('SELECT * FROM appointments WHERE staff_id=? AND date=? AND time=?').all(keep, a.date, a.time)
+        .find((x) => (a.note && x.note === a.note) || (a.customer_id && x.customer_id === a.customer_id) || (k && apptKey(x.note || x.guest_name || '') === k));
+      if (!twin) continue;
+      if (a.visit_id && !twin.visit_id && db.prepare("SELECT 1 FROM visits WHERE id=? AND status='done'").get(a.visit_id)) db.prepare('UPDATE appointments SET visit_id=? WHERE id=?').run(a.visit_id, twin.id);
+      db.prepare('DELETE FROM appointments WHERE id=?').run(a.id);
+      n++;
+    }
+  }
+  if (n) closeUsedGifts();
+  return n;
+}
+module.exports = { VERSION, nameKey, staffClones, dedupeCloneStaff, dedupeVisits, closeUsedGifts, mergeSamePhone, mergeSameVisits, mergeOrphanCustomers, dedupeAppointments, apptKey, importWorkbook, asDate, asTime };
