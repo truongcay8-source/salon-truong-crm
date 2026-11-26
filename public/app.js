@@ -167,6 +167,7 @@ function shell() {
       <div class="nav-groups">${navHtml(pages)}</div>
       <div class="me"><b>${esc(S.me.full_name)}</b> · ${ROLE[S.me.role]}<div class="row" style="margin-top:8px"><button class="btn sm" id="pwBtn">Đổi mật khẩu</button><button class="btn sm" id="outBtn">Đăng xuất</button></div></div>
     </aside>
+    <div class="mtop"><div class="logo">N</div><b>${esc(S.settings.salon_name)}</b><span class="spacer"></span><button class="mtop-s" data-search aria-label="Tìm kiếm">🔍 Tìm</button></div>
     <main class="main" id="main"></main>
     <nav class="bottom-nav">${MOBILE.map((k) => {
       if (k === 'more') return '<button data-page="more"><span class="ico">☰</span>Thêm</button>';
@@ -329,6 +330,15 @@ function route() {
   const fn = VIEWS[page] || VIEWS.dashboard;
   Promise.resolve(fn(main)).catch((e) => { main.innerHTML = `<div class="card err">${esc(e.message)}</div>`; });
 }
+// Điện thoại: bảng dài (khách hàng, hóa đơn) → mỗi dòng thành 1 thẻ, nhãn cột hiện cạnh giá trị
+function cardify(root) {
+  $$('.table-wrap.cardify table', root).forEach((t) => {
+    const heads = $$('thead th', t).map((th) => th.textContent.trim());
+    $$('tbody tr, tfoot tr', t).forEach((tr) => [...tr.children].forEach((td, i) => { if (!td.hasAttribute('data-label')) td.setAttribute('data-label', td.colSpan > 1 ? '' : heads[i] || ''); }));
+  });
+}
+new MutationObserver(() => { clearTimeout(cardify.t); cardify.t = setTimeout(() => { const m = $('#main'); if (m) cardify(m); }, 30); })
+  .observe(document.getElementById('root') || document.body, { childList: true, subtree: true });
 function header(title, sub, actions = '') {
   return `<div class="top"><div><h2>${esc(title)}</h2>${sub ? `<div class="sub">${sub}</div>` : ''}</div><div class="row">${actions}</div></div>`;
 }
@@ -1221,7 +1231,7 @@ VIEWS.customers = async (main) => {
   main.innerHTML = header('Khách hàng', `<span id="cTotal">${r.total}</span> khách`, `${isMgr() ? '<button class="btn" id="famSug">👨‍👩‍👧 Gợi ý người nhà</button>' : ''}${canMove ? '<button class="btn" id="moveC">🔄 Bàn giao khách</button>' : ''}<button class="btn primary" id="newC">+ Khách mới</button>`) +
     `<div class="card"><div class="row"><input id="q" placeholder="🔍 Tìm tên (không cần dấu), SĐT, mã khách, công thức…" value="${esc(q)}" type="search" autocomplete="off" autocorrect="off" style="flex:1;min-width:220px">
       <select id="sf" style="width:auto"><option value="">Tất cả thợ</option><option value="mine" ${sf === 'mine' ? 'selected' : ''}>⭐ Khách của tôi</option>${activeStaff().map((u) => `<option value="${u.id}" ${String(u.id) === sf ? 'selected' : ''}>Khách của ${esc(u.full_name)}</option>`).join('')}<option value="none" ${sf === 'none' ? 'selected' : ''}>Chưa giao thợ</option></select></div></div>
-    <div class="card"><div class="table-wrap"><table><thead><tr><th>Mã</th><th>Tên khách</th><th>SĐT</th><th class="num">Lượt</th><th>Lần gần nhất</th><th>Thợ phụ trách</th><th>Công thức</th>${isMgr() ? '<th class="num">Tổng chi</th>' : ''}</tr></thead>
+    <div class="card"><div class="table-wrap cardify"><table><thead><tr><th>Mã</th><th>Tên khách</th><th>SĐT</th><th class="num">Lượt</th><th>Lần gần nhất</th><th>Thợ phụ trách</th><th>Công thức</th>${isMgr() ? '<th class="num">Tổng chi</th>' : ''}</tr></thead>
     <tbody id="cBody">${rowsHtml()}</tbody></table></div>
     <div class="muted small" id="cMore" style="margin-top:8px">${moreHtml()}</div></div>`;
   const params = (over) => { const p = { q: $('#q').value.trim(), staff: $('#sf').value, ...over }; return Object.fromEntries(Object.entries(p).filter(([, v]) => v)); };
@@ -1813,7 +1823,7 @@ VIEWS.visits = async (main) => {
     `<div class="card"><div class="chips" style="margin-bottom:8px">${rng.map(([l, a, b]) => `<button class="chip ${from === a && to === b ? 'on' : ''}" data-rng="${a}|${b}">${l}</button>`).join('')}</div>
       <div class="row" style="flex-wrap:wrap;gap:6px"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="t" value="${to}" style="width:auto">
       <select id="st" style="width:auto">${staffOptions(Number(staffId), 'Tất cả thợ')}</select><input id="vq" placeholder="🔍 Tìm khách, mã HĐ, dịch vụ…" value="${esc(S.params.q || '')}" style="flex:1;min-width:180px"></div></div>
-    <div class="card"><div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Khách</th><th>Dịch vụ</th><th>Thợ</th><th class="num">Doanh số</th><th class="num">Trừ thẻ</th><th class="num">Thu</th><th>TT</th><th class="num">Tip</th><th></th></tr></thead>
+    <div class="card"><div class="table-wrap cardify"><table><thead><tr><th>Ngày</th><th>Khách</th><th>Dịch vụ</th><th>Thợ</th><th class="num">Doanh số</th><th class="num">Trừ thẻ</th><th class="num">Thu</th><th>TT</th><th class="num">Tip</th><th></th></tr></thead>
     <tbody>${rows.map((v) => `<tr><td class="nowrap">${dmy(v.date).slice(0, 5)} ${esc(v.time || '')}<div class="small muted">${esc(v.code || '')}</div></td><td><a href="#customer?id=${v.customer_id}">${esc(v.customer_name)}</a></td>
       <td>${v.items.map((i) => esc(i.name)).join(' + ')}</td><td>${esc(v.main_staff_name)}${v.assistant_name ? ' <span class="muted small">+' + esc(v.assistant_name) + '</span>' : ''}</td>
       <td class="num">${money(v.total)}</td><td class="num">${v.card_paid ? money(v.card_paid) : ''}</td><td class="num">${money(v.cash_paid)}</td><td class="small">${esc(v.payment_method || '')}</td><td class="num">${v.tip ? money(v.tip) : ''}${v.tip_private ? `<div class="small muted">riêng ${money(v.tip_private)}</div>` : ''}</td>
