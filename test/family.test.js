@@ -995,3 +995,45 @@ test('Bảng công xem đến hôm nay → hiện luôn OFF sắp tới trong th
   const c = row.cells.find((x) => x.date === end);
   assert.equal(c.s, 'off'); assert.equal(c.future, true);
 });
+
+test('Khách nợ: phần chưa trả treo, chưa tính DS/HH; trả tháng sau → cộng vào tháng trả', () => {
+  const L = require('../server/logic');
+  const s = db.prepare("SELECT id FROM users WHERE role='staff' AND active=1 ORDER BY id").get().id;
+  const c = db.prepare('SELECT id FROM customers ORDER BY id').get().id;
+  const row = (a, b) => L.salesReport(a, b, { role: 'owner' }).rows.find((x) => x.user_id === s) || { sales: 0, main_commission: 0, hold_sales: 0, late_sales: 0 };
+  const m0 = row('2024-03-01', '2024-03-31'), a0 = row('2024-04-01', '2024-04-30');
+  const id = db.prepare("INSERT INTO visits(code,customer_id,date,time,main_staff_id,subtotal,surcharge,discount,total,card_paid,cash_paid,payment_method,debt,main_commission,assistant_commission,tip,status) VALUES ('HOLD1',?,'2024-03-10','10:00',?,1000000,0,0,1000000,0,400000,'Tiền mặt',600000,100000,0,0,'done')").run(c, s).lastInsertRowid;
+  let r = row('2024-03-01', '2024-03-31');
+  assert.equal(r.sales - m0.sales, 400000); assert.equal(r.main_commission - m0.main_commission, 40000); assert.equal(r.hold_sales - m0.hold_sales, 600000);
+  assert.ok(r.hold_list.some((x) => x.code === 'HOLD1'));
+  db.prepare("UPDATE visits SET debt_paid_at='2024-04-05', debt_paid_method='Tiền mặt' WHERE id=?").run(id);
+  r = row('2024-03-01', '2024-03-31');
+  assert.equal(r.sales - m0.sales, 400000, 'trả sang tháng sau: tháng gốc vẫn treo phần nợ');
+  const a = row('2024-04-01', '2024-04-30');
+  assert.equal(a.late_sales - a0.late_sales, 600000); assert.equal(a.main_commission - a0.main_commission, 60000);
+  db.prepare("UPDATE visits SET debt_paid_at='2024-03-20' WHERE id=?").run(id);
+  r = row('2024-03-01', '2024-03-31');
+  assert.equal(r.sales - m0.sales, 1000000); assert.equal(r.hold_sales - m0.hold_sales, 0);
+  db.prepare("UPDATE visits SET status='deleted' WHERE id=?").run(id);
+});
+
+test('Làm lại bảo hành (PA C): thợ chịu giá cốt, phụ chịu %, không phụ thì chính chịu hết; trừ lương', async () => {
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const st = db.prepare("SELECT id FROM users WHERE role='staff' AND active=1 AND merged_into IS NULL ORDER BY id").all().map((u) => u.id);
+  const c = db.prepare('SELECT id FROM customers WHERE deleted=0 ORDER BY id').get().id;
+  const vid = db.prepare("INSERT INTO visits(code,customer_id,date,time,main_staff_id,assistant_id,subtotal,surcharge,discount,total,card_paid,cash_paid,payment_method,main_commission,assistant_commission,tip,status) VALUES ('WJ1',?,'2026-08-01','10:00',?,?,800000,0,0,800000,0,800000,'Tiền mặt',0,0,0,'done')").run(c, st[0], st[1]).lastInsertRowid;
+  db.prepare("INSERT INTO visit_items(visit_id,name,grp,price,qty) VALUES (?,'Nhuộm','Hóa chất',800000,1)").run(vid);
+  const p = (await o.get('/warranty-jobs/preview?visit_id=' + vid)).data;
+  assert.equal(p.chem_cost, 200000, 'chưa ghi kho → ước 25%'); assert.equal(p.fee, 50000); assert.equal(p.assistant_id, st[1]);
+  let r = await o.post('/warranty-jobs', { visit_id: vid, date: '2026-08-10', chem_cost: 200000, fee: 50000, main_staff_id: st[0], assistant_id: st[1], asst_pct: 30 });
+  assert.equal(r.status, 200); assert.equal(r.data.main_penalty, 175000); assert.equal(r.data.asst_penalty, 75000);
+  r = await o.post('/warranty-jobs', { visit_id: vid, date: '2026-08-11', chem_cost: 100000, fee: 50000, main_staff_id: st[0], assistant_id: null });
+  assert.equal(r.data.main_penalty, 150000); assert.equal(r.data.asst_penalty, 0, 'không có phụ → thợ chính chịu hết');
+  const pay = (await o.get('/payroll?month=2026-08')).data.rows;
+  assert.equal(pay.find((x) => x.user_id === st[0]).warranty, 325000);
+  assert.equal(pay.find((x) => x.user_id === st[1]).warranty, 75000);
+  const x0 = pay.find((x) => x.user_id === st[0]); assert.equal(x0.warranty_list.length, 2);
+  assert.equal((await o.del('/warranty-jobs/' + r.data.id)).status, 200);
+  assert.equal((await o.get('/payroll?month=2026-08')).data.rows.find((x) => x.user_id === st[0]).warranty, 175000);
+  db.prepare("UPDATE visits SET status='deleted' WHERE id=?").run(vid);
+});

@@ -386,18 +386,34 @@ function maskVisitMoney(v, user) {
 }
 
 // ---------- Báo cáo doanh số ----------
+// Vinh 26/11: khách còn nợ / chưa trả → phần chưa trả TREO, chưa tính doanh số + hoa hồng cho thợ.
+// Khách trả trong kỳ → tính; trả sang kỳ sau → cộng vào kỳ trả (dòng "thu nợ kỳ trước").
+const PINK = /CHƯA THANH TOÁN/;
+function heldAmount(v, asOf) {
+  if (!(v.total > 0)) return 0;
+  const pink = !v.payment_method && PINK.test(v.note || '') ? v.cash_paid || 0 : 0;
+  const debt = v.debt > 0 && (!v.debt_paid_at || v.debt_paid_at > asOf) ? v.debt : 0;
+  return Math.min(v.total, pink + debt);
+}
 function salesReport(from, to, user) {
   const visits = db.prepare("SELECT * FROM visits WHERE status='done' AND date BETWEEN ? AND ?").all(from, to);
+  // Lượt kỳ trước, khách trả nợ trong kỳ này → cộng phần nợ đó vào kỳ này
+  const late = db.prepare("SELECT * FROM visits WHERE status='done' AND date<? AND debt>0 AND debt_paid_at BETWEEN ? AND ?").all(from, from, to);
   const items = db.prepare(`SELECT vi.*, v.main_staff_id FROM visit_items vi JOIN visits v ON v.id=vi.visit_id
-    WHERE v.status='done' AND v.date BETWEEN ? AND ?`).all(from, to);
+    WHERE v.status='done' AND (v.date BETWEEN ? AND ? OR (v.date<? AND v.debt>0 AND v.debt_paid_at BETWEEN ? AND ?))`).all(from, to, from, from, to);
+  const fOf = new Map();
+  for (const v of visits) fOf.set(v.id, v.total > 0 ? 1 - heldAmount(v, to) / v.total : 1);
+  for (const v of late) fOf.set(v.id, v.total > 0 ? Math.min(1, v.debt / v.total) : 0);
+  const inRange = new Set(visits.map((v) => v.id));
+  const cnameH = db.prepare('SELECT name, phone FROM customers WHERE id=?');
   const users = db.prepare('SELECT id, full_name, role, active, level FROM users ORDER BY id').all();
   const per = new Map(users.map((u) => [u.id, {
     user_id: u.id, name: u.full_name, level: u.level, active: u.active, main_count: 0, assist_count: 0, surcharge_share: 0,
     by_group: { 'Cắt': 0, 'Gội & chăm sóc': 0, 'Hóa chất': 0, 'Bán sản phẩm': 0, 'Khác': 0 },
     sales: 0, gift_sales: 0, family_sales: 0, prod_net: 0, prod_excl: 0, product_commission: 0, assist_sales: 0, main_commission: 0, assistant_commission: 0, tip: 0,
-    cards_count: 0, cards_amount: 0, card_commission: 0, total_commission: 0,
+    cards_count: 0, cards_amount: 0, card_commission: 0, total_commission: 0, hold_sales: 0, hold_list: [], late_sales: 0, late_list: [],
   }]));
-  const vById = new Map(visits.map((v) => [v.id, v]));
+  const vById = new Map(visits.concat(late).map((v) => [v.id, v]));
   // Thẻ tri ân 1tr (chi phí cửa hàng): vẫn tính % hoa hồng từng dịch vụ, nhưng KHÔNG tính vào doanh số tổng để xét thưởng/hệ số
   const giftIds = new Set(db.prepare("SELECT id FROM cards WHERE sale_type='gift'").all().map((c) => c.id));
   const worksIds = new Set(db.prepare('SELECT id FROM users WHERE works<>0').all().map((u) => u.id));
@@ -409,26 +425,35 @@ function salesReport(from, to, user) {
   let productTotal = 0; // tiền bán sản phẩm (dòng nhóm "Bán sản phẩm") – tách khỏi DS dịch vụ tại tiệm
   // Thợ chính trên phiếu có thể chỉ là người nhận khách: chỉ tính 1 lượt cho họ nếu có làm ít nhất 1 dòng
   const mainDid = new Set(items.filter((i) => !i.staff_id || i.staff_id === i.main_staff_id).map((i) => i.visit_id));
-  for (const v of visits) {
+  for (const v of visits.concat(late)) {
+    const f = fOf.get(v.id), cur = inRange.has(v.id);
     const m = per.get(v.main_staff_id);
-    if (m) { if (mainDid.has(v.id)) m.main_count++; m.sales += v.total; m.gift_sales += v.total * giftRate(v); m.family_sales += v.total * famRate(v); m.main_commission += v.main_commission; m.tip += v.tip; m.surcharge_share += v.surcharge_main || 0; }
-    const tp = v.tip_private ? per.get(v.tip_private_to) : null;
+    if (m) {
+      if (cur && mainDid.has(v.id)) m.main_count++;
+      m.sales += v.total * f; m.gift_sales += v.total * giftRate(v) * f; m.family_sales += v.total * famRate(v) * f; m.main_commission += (v.main_commission || 0) * f; m.surcharge_share += (v.surcharge_main || 0) * f;
+      if (cur) m.tip += v.tip;
+      const c = (cur && f < 1) || !cur ? cnameH.get(v.customer_id) || {} : null;
+      if (cur && f < 1) { const amt = Math.round(v.total * (1 - f)); m.hold_sales += amt; m.hold_list.push({ id: v.id, code: v.code, date: v.date, customer_id: v.customer_id, name: c.name, phone: c.phone, amount: amt }); }
+      if (!cur) { const amt = Math.round(v.total * f); m.late_sales += amt; m.late_list.push({ id: v.id, code: v.code, date: v.date, paid_at: v.debt_paid_at, customer_id: v.customer_id, name: c.name, amount: amt }); }
+    }
+    const tp = cur && v.tip_private ? per.get(v.tip_private_to) : null;
     if (tp) tp.tip += v.tip_private;
     const a = per.get(v.assistant_id);
-    if (a) { a.assist_count++; a.assist_sales += v.total; a.assistant_commission += v.assistant_commission; a.surcharge_share += v.surcharge_assist || 0; }
+    if (a) { if (cur) a.assist_count++; a.assist_sales += v.total * f; a.assistant_commission += (v.assistant_commission || 0) * f; a.surcharge_share += (v.surcharge_assist || 0) * f; }
   }
   const helped = new Set();
   for (const i of items) {
     const v = vById.get(i.visit_id);
     const m = per.get(i.staff_id || i.main_staff_id);
     if (!m || !v) continue;
+    const kf = fOf.get(v.id) ?? 1;
     const f = v.subtotal > 0 ? Math.max(0, v.total - v.surcharge) / v.subtotal : 0;
-    const net = Math.round(i.price * f);
+    const net = Math.round(i.price * f * kf);
     const g = m.by_group[i.grp] != null ? i.grp : 'Khác';
     m.by_group[g] += net;
     // Bán sản phẩm: doanh số riêng, KHÔNG tính vào DS dịch vụ / DS tính thưởng (chỉ hưởng % HH sản phẩm)
     if (g === 'Bán sản phẩm') productTotal += net;
-    if (g === 'Bán sản phẩm') { m.prod_net += net; m.prod_excl += net * (giftRate(v) + famRate(v)); m.product_commission += i.commission || 0; }
+    if (g === 'Bán sản phẩm') { m.prod_net += net; m.prod_excl += net * (giftRate(v) + famRate(v)); m.product_commission += (i.commission || 0) * kf; }
     const gr = giftRate(v);
     if (gr) giftByGroup[g] = (giftByGroup[g] || 0) + Math.round(net * gr);
     // Dòng do người khác (không phải thợ chính) làm: doanh số + hoa hồng dòng đó chuyển sang người làm
@@ -436,14 +461,14 @@ function salesReport(from, to, user) {
       const main = per.get(i.main_staff_id);
       const fr = famRate(v);
       if (main) { main.sales -= net; main.gift_sales -= net * gr; main.family_sales -= net * fr; }
-      m.sales += net; m.gift_sales += net * gr; m.family_sales += net * fr; m.main_commission += i.commission || 0;
-      if (!helped.has(v.id + ':' + i.staff_id)) { helped.add(v.id + ':' + i.staff_id); m.main_count++; }
+      m.sales += net; m.gift_sales += net * gr; m.family_sales += net * fr; m.main_commission += (i.commission || 0) * kf;
+      if (!helped.has(v.id + ':' + i.staff_id)) { helped.add(v.id + ':' + i.staff_id); if (inRange.has(v.id)) m.main_count++; }
     }
     // Người phụ riêng của dòng
     const la = i.assistant_id > 0 && per.get(i.assistant_id);
     if (la) {
-      la.assist_sales += net; la.assistant_commission += i.asst_commission || 0;
-      if (!helped.has(v.id + ':a' + i.assistant_id)) { helped.add(v.id + ':a' + i.assistant_id); if (i.assistant_id !== v.assistant_id) la.assist_count++; }
+      la.assist_sales += net; la.assistant_commission += (i.asst_commission || 0) * kf;
+      if (!helped.has(v.id + ':a' + i.assistant_id)) { helped.add(v.id + ':a' + i.assistant_id); if (i.assistant_id !== v.assistant_id && inRange.has(v.id)) la.assist_count++; }
     }
   }
   const cards = db.prepare("SELECT * FROM cards WHERE status!='refunded' AND sold_at BETWEEN ? AND ?").all(from, to);
@@ -454,9 +479,12 @@ function salesReport(from, to, user) {
     const k = c.consultant_id && per.get(c.consultant_id);
     if (k) { if (c.price > 0) k.cards_count++; k.cards_amount += c.price - Math.round((c.price * sh) / 100); k.card_commission += c.consultant_commission; }
   }
-  let rows = [...per.values()].map((r) => ({ ...r, gift_sales: Math.round(r.gift_sales), family_sales: Math.round(r.family_sales), product_sales: r.prod_net, service_sales: r.sales - r.prod_net,
+  let rows = [...per.values()].map((r) => ({ ...r, sales: Math.round(r.sales), assist_sales: Math.round(r.assist_sales), main_commission: Math.round(r.main_commission), assistant_commission: Math.round(r.assistant_commission),
+      surcharge_share: Math.round(r.surcharge_share), product_commission: Math.round(r.product_commission),
+      gift_sales: Math.round(r.gift_sales), family_sales: Math.round(r.family_sales), product_sales: r.prod_net, service_sales: Math.round(r.sales) - r.prod_net,
       // DS tính thưởng (nhân hệ số) = chỉ DS DỊCH VỤ tự làm − thẻ tri ân − người nhà. Không gồm: bán sản phẩm, bán thẻ, DS làm phụ
-      bonus_sales: r.sales - r.prod_net - Math.round(r.gift_sales) - Math.round(r.family_sales) + Math.round(r.prod_excl), total_commission: r.main_commission + r.assistant_commission + r.card_commission + r.surcharge_share }))
+      bonus_sales: Math.round(r.sales) - r.prod_net - Math.round(r.gift_sales) - Math.round(r.family_sales) + Math.round(r.prod_excl),
+      total_commission: Math.round(r.main_commission) + Math.round(r.assistant_commission) + r.card_commission + Math.round(r.surcharge_share) }))
     .filter((r) => (r.active && worksIds.has(r.user_id)) || r.main_count || r.assist_count || r.cards_count)
     // Vinh 26/11: Trường (Director) luôn đứng đầu, còn lại ai doanh số cao đứng trước
     .sort((a, b) => (b.level === 'Director') - (a.level === 'Director') || (b.sales + b.assist_sales + b.cards_amount) - (a.sales + a.assist_sales + a.cards_amount) || a.user_id - b.user_id);
@@ -504,6 +532,8 @@ function salesReport(from, to, user) {
   // Tách 3 loại doanh số (chỉ Lãnh đạo xem): dịch vụ làm tại tiệm / bán sản phẩm / bán thẻ
   summary.product_sales = productTotal;
   summary.shop_service_sales = summary.service_sales - productTotal;
+  const wp = require('./warranty').penalties(from, to);
+  rows = rows.map((r) => { const w = wp.get(r.user_id); return w ? { ...r, warranty_penalty: w.amount, warranty_list: w.list } : r; });
   if (user.role !== 'owner') return { from, to, rows: rows.filter((r) => r.user_id === user.id), summary: null };
   return { from, to, rows, summary };
 }

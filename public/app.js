@@ -32,6 +32,60 @@ function levelSwap(it, staffId) {
   it.service_id = alt.id; it.price = alt.price; return true;
 }
 const WARRANTY_EXCLUDE = 'Không bảo hành khi tóc đã chỉnh sửa ở nơi khác, không chăm sóc đúng hướng dẫn, hoặc do tác động bên ngoài.';
+// Vinh 26/11: doanh số treo do khách chưa trả – thợ phụ trách thấy để nhắc khách thanh toán
+function holdHtml(x, withName) {
+  if (!x || (!x.hold_sales && !x.late_sales)) return '';
+  return `<div class="hold-box">${x.hold_sales ? `<div class="stat-line"><span><b>⏳ Treo – khách chưa trả</b>${withName ? ' · ' + esc(x.name) : ''}</span><b class="warn-t">${money(x.hold_sales)}</b></div>
+    <div class="small muted">Chưa tính vào doanh số &amp; hoa hồng. Khách trả xong tự cộng lại (trả sang tháng sau thì cộng vào tháng trả). Nhắc khách thanh toán:</div>
+    ${x.hold_list.map((h) => `<div class="stat-line small"><span>${dmy(h.date)} · ${h.customer_id ? `<a href="#customer?id=${h.customer_id}">${esc(h.name || '')}</a>` : esc(h.name || '')}${h.phone ? ` · <a href="tel:${esc(h.phone)}">${esc(h.phone)}</a>` : ''} <span class="muted">${esc(h.code || '')}</span></span><b>${money(h.amount)}</b></div>`).join('')}` : ''}
+    ${x.late_sales ? `<div class="stat-line"><span>✅ Khách trả nợ tháng trước → cộng vào kỳ này${withName && !x.hold_sales ? ' · ' + esc(x.name) : ''}</span><b>${money(x.late_sales)}</b></div>` : ''}</div>`;
+}
+// Vinh 26/11 (phương án C): làm lại bảo hành do lỗi kỹ thuật → thợ chịu giá cốt (hóa chất + phí/đầu), có phụ thì phụ chịu X%
+async function warrantyJobForm(visitId, after) {
+  const p = await api('/warranty-jobs/preview?visit_id=' + visitId);
+  const v = p.visit;
+  const opt = (sel) => staffOptions(sel, '');
+  openModal('🛡 Làm lại bảo hành – lỗi kỹ thuật', `<form id="wjF">
+    <div class="small" style="margin-bottom:8px">Lượt gốc <b>${esc(v.code)}</b> ngày ${dmy(v.date)} · <b>${esc(v.customer_name || '')}</b> · ${esc(v.services || '')}</div>
+    <div class="grid2">
+      <label>Ngày làm lại<input type="date" name="date" value="${S.today}"></label>
+      <label>Hóa chất dùng (đ)<input name="chem_cost" inputmode="numeric" value="${p.chem_cost}"><span class="small muted">${esc(p.chem_source)}</span></label>
+      <label>Phí vận hành/đầu (đ)<input name="fee" inputmode="numeric" value="${p.fee}"></label>
+      <label>Thợ chịu (% giá cốt)<input name="staff_pct" inputmode="numeric" value="${p.staff_pct}"></label>
+      <label>Thợ chính chịu trách nhiệm<select name="main_staff_id">${opt(p.main_staff_id)}</select></label>
+      <label>Người phụ<select name="assistant_id"><option value="">— Không có phụ (thợ chính chịu hết) —</option>${activeStaff().map((s) => `<option value="${s.id}" ${s.id === p.assistant_id ? 'selected' : ''}>${esc(s.full_name)}</option>`).join('')}</select></label>
+      <label id="wjAP">Người phụ chịu (%)<input name="asst_pct" inputmode="numeric" value="${p.asst_pct}"></label>
+    </div>
+    <label>Ghi chú<input name="note" placeholder="Lỗi gì, khách báo ngày nào…"></label>
+    <div class="totals" id="wjSum"></div>
+    <label class="small"><input type="checkbox" name="def"> Lưu phí/đầu và % người phụ làm mặc định</label>
+    <div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Ghi bảo hành → trừ lương</button></div></form>`);
+  const f = $('#wjF');
+  const n = (x) => Math.max(0, Number(String(x).replace(/[^\d.]/g, '')) || 0);
+  const calc = () => {
+    const total = n(f.chem_cost.value) + n(f.fee.value), owe = Math.round(total * Math.min(100, n(f.staff_pct.value)) / 100);
+    const hasA = !!f.assistant_id.value; $('#wjAP').style.display = hasA ? '' : 'none';
+    const a = hasA ? Math.round(owe * Math.min(100, n(f.asst_pct.value)) / 100) : 0;
+    $('#wjSum').innerHTML = `<div class="stat-line"><span>Giá cốt đầu bảo hành</span><b>${money(total)}</b></div>
+      <div class="stat-line"><span>${esc(staffName(Number(f.main_staff_id.value)) || 'Thợ chính')} chịu</span><b class="warn-t">−${money(owe - a)}</b></div>
+      ${hasA ? `<div class="stat-line"><span>${esc(staffName(Number(f.assistant_id.value)))} (phụ) chịu</span><b class="warn-t">−${money(a)}</b></div>` : ''}
+      ${owe < total ? `<div class="stat-line small muted"><span>Cửa hàng chịu</span><span>${money(total - owe)}</span></div>` : ''}
+      <div class="small muted">Trừ vào Bảng lương tháng ${f.date.value.slice(5, 7)}/${f.date.value.slice(0, 4)}.</div>`;
+  };
+  f.oninput = calc; f.onchange = calc; calc();
+  f.onsubmit = (e) => { e.preventDefault(); guard(f.querySelector('.primary'), async () => {
+    const b = { visit_id: v.id, date: f.date.value, chem_cost: n(f.chem_cost.value), fee: n(f.fee.value), staff_pct: n(f.staff_pct.value), main_staff_id: Number(f.main_staff_id.value) || null,
+      assistant_id: Number(f.assistant_id.value) || null, asst_pct: n(f.asst_pct.value), note: f.note.value };
+    if (b.assistant_id && b.assistant_id === b.main_staff_id) return toast('Người phụ phải khác thợ chính');
+    const r = await api('/warranty-jobs', { method: 'POST', body: b });
+    if (f.def.checked) S.settings = await api('/settings', { method: 'PUT', body: { warranty_fee: b.fee, warranty_asst_pct: b.asst_pct } });
+    closeModal(); toast(`Đã ghi bảo hành: trừ lương ${money(r.main_penalty + r.asst_penalty)}`); if (after) after();
+  }); };
+}
+function warrantyJobsHtml(list, del) {
+  return list.map((j) => `<div class="stat-line small"><span>${dmy(j.date).slice(0, 5)} · ${esc(j.customer_name || '')} <span class="muted">${esc(j.orig_code || '')}</span> · ${esc(j.main_name || '')}${j.main_penalty ? ' −' + money(j.main_penalty) : ''}${j.asst_name ? ` · ${esc(j.asst_name)} (phụ ${Math.round(j.asst_pct * 100)}%) −${money(j.asst_penalty)}` : ''}${j.note ? ` <span class="muted">· ${esc(j.note)}</span>` : ''}</span>
+    <span class="nowrap"><b>${money(j.chem_cost + j.fee)}</b>${del ? ` <button class="btn sm" data-wjdel="${j.id}" title="Xóa">✕</button>` : ''}</span></div>`).join('');
+}
 function warrantyLines(ws) { return (ws || []).map((w) => `🛡 ${w.label}: đến ${dmy(w.until)}. ${w.note}`); }
 function telLinks(phone) {
   if (!phone) return '<span class="muted small">Chưa có SĐT</span>';
@@ -461,6 +515,7 @@ VIEWS.dashboard = async (main) => {
     <div class="kpi"><div class="l">Khách hàng</div><div class="v">${d.customers}</div><div class="s">trong hệ thống</div></div>`
     : `<div class="kpi"><div class="l">DS dịch vụ của bạn hôm nay</div><div class="v">${money(mine ? mine.service_sales : 0)}</div><div class="s">${mine ? mine.main_count : 0} lượt làm chính${mine && mine.product_sales ? ' · bán SP ' + money(mine.product_sales) : ''}</div></div>
     <div class="kpi"><div class="l">① DS dịch vụ tháng (xét thưởng)</div><div class="v">${money(mineMonth ? mineMonth.bonus_sales : 0)}</div><div class="s">dịch vụ tự làm${mineMonth && (mineMonth.gift_sales || mineMonth.family_sales) ? ', không tính thẻ tri ân / khách ưu đãi đặc biệt' : ''}</div></div>
+    ${mineMonth && mineMonth.hold_sales ? `<div class="kpi"><div class="l">⏳ Treo – khách chưa trả</div><div class="v warn-t">${money(mineMonth.hold_sales)}</div><div class="s">${mineMonth.hold_list.length} khách · chưa tính DS/HH, nhắc khách trả · <a href="#sales">xem</a></div></div>` : ''}
     <div class="kpi"><div class="l">② DS bán sản phẩm tháng</div><div class="v">${money(mineMonth ? mineMonth.product_sales : 0)}</div><div class="s">riêng · chỉ tính % HH sản phẩm</div></div>
     <div class="kpi"><div class="l">② DS bán thẻ tháng</div><div class="v">${money(mineMonth ? mineMonth.cards_amount : 0)}</div><div class="s">${mineMonth ? mineMonth.cards_count : 0} thẻ · riêng · chỉ tính HH thẻ</div></div>
     <div class="kpi"><div class="l">② DS làm phụ tháng</div><div class="v">${money(mineMonth ? mineMonth.assist_sales : 0)}</div><div class="s">${mineMonth ? mineMonth.assist_count : 0} lượt · chỉ tính HH thợ phụ</div></div>
@@ -1771,7 +1826,7 @@ async function visitForm(v = {}, after) {
     let b; try { b = await api(`/customers/${cid}/brief`); } catch { return; }
     if (!isEdit && !f.main_staff_id.value && b.staff_id) f.main_staff_id.value = b.staff_id;
     const wb = (b.warranties || []).map((x) => `<div class="totals small" style="margin-bottom:6px;border-left:3px solid var(--warn)"><b>🛡 Khách đang trong hạn bảo hành</b> · lượt ${esc(x.code)} ngày ${dmy(x.date)}${x.staff_name ? ' (' + esc(x.staff_name) + ')' : ''}
-      ${warrantyLines(x.warranties).map((l) => `<div>${esc(l)}</div>`).join('')}<div class="muted">Nếu làm lại do lỗi kỹ thuật: ghi giảm giá với lý do "Bảo hành lượt ${esc(x.code)}".</div></div>`).join('');
+      ${warrantyLines(x.warranties).map((l) => `<div>${esc(l)}</div>`).join('')}<div class="muted">Nếu làm lại do lỗi kỹ thuật: ghi giảm giá với lý do "Bảo hành lượt ${esc(x.code)}"${isOwner() ? ', rồi bấm 🛠 Làm lại BH ở trang Nhắc nhở (thợ chịu giá cốt, trừ lương)' : ''}.</div></div>`).join('');
     const fam = (b.family || []).length ? `<div><span class="muted">👨‍👩‍👧 Người nhà:</span> ${b.family.map((m) => `<a href="#customer?id=${m.id}" target="_blank">${esc(m.name)}</a>${m.relation ? ' (' + esc(m.relation) + ')' : ''}${m.has_formula ? ' 🧪' : ''}`).join(', ')}</div>` : '';
     const lh = b.last_hair ? `<div><span class="muted">Tóc lần trước (${dmy(b.last_hair.date)}):</span> ${esc([b.last_hair.hair_before, b.last_hair.result && 'KQ: ' + b.last_hair.result].filter(Boolean).join(' · '))}</div>` : '';
     $('#fHint').innerHTML = wb + (b.formula || b.hair_notes || fam || lh ? `<div class="totals small" style="margin-bottom:6px">${b.staff_name ? `<div>Thợ phụ trách: <b>${esc(b.staff_name)}</b></div>` : ''}
@@ -1996,12 +2051,15 @@ VIEWS.reminders = async (main) => {
     ${r.warranty && r.warranty.length ? `<div class="card"><h3>🛡 Bảo hành hóa chất còn hạn <span class="badge">${r.warranty.length}</span></h3><div class="small muted">Màu, uốn/duỗi/ép. Khách quay lại báo lỗi trong hạn: sửa miễn phí theo chính sách.</div>
       ${r.warranty.map((x) => `<div class="rem-pay"><div class="rem-pay-l"><b>${x.customer_id ? `<a href="#customer?id=${x.customer_id}">${esc(x.customer_name || '')}</a>` : ''}</b>
         <span class="small">${x.warranties.map((w) => esc(w.label.replace(/ \(.*\)/, ''))).join(', ')} · đến <b>${dmy(x.until).slice(0, 5)}</b></span>
-        <span class="small muted">${dmy(x.date).slice(0, 5)}${x.staff_name ? ' · ' + esc(x.staff_name) : ''}</span></div></div>`).join('')}
-      <div class="small muted" style="margin-top:6px">${esc(WARRANTY_EXCLUDE)}</div></div>` : ''}
+        <span class="small muted">${dmy(x.date).slice(0, 5)}${x.staff_name ? ' · ' + esc(x.staff_name) : ''}</span></div>${isOwner() ? `<div class="rem-pay-b"><button class="btn sm" data-wj="${x.id}">🛠 Làm lại BH</button></div>` : ''}</div>`).join('')}
+      <div class="small muted" style="margin-top:6px">${esc(WARRANTY_EXCLUDE)}${isOwner() ? ' · Lỗi kỹ thuật phải làm lại: bấm 🛠 → thợ chịu giá cốt, trừ lương.' : ''}</div></div>` : ''}
+    ${r.warranty_jobs && r.warranty_jobs.length ? `<div class="card"><h3>🛠 Đã làm lại bảo hành tháng này <span class="badge warn">${money(r.warranty_jobs.reduce((a, j) => a + j.main_penalty + j.asst_penalty, 0))}</span></h3><div class="small muted">Đã trừ vào Bảng lương. Ghi nhầm thì bấm ✕ (tháng chưa chốt).</div>${warrantyJobsHtml(r.warranty_jobs, true)}</div>` : ''}
     ${r.expenses && r.expenses.pending_count ? `<div class="card"><h3>💸 Khoản chi chờ duyệt <span class="badge bad">${r.expenses.pending_count}</span></h3><div class="small muted">Tổng ${money(r.expenses.pending_amount)} · quỹ còn ${money(r.expenses.balance)}</div><div style="margin-top:8px"><a class="btn sm primary" href="#expenses">Mở để duyệt →</a></div></div>` : ''}
     ${sec('returns', '🔁 Khách đến hạn quay lại', 'Đã quá số ngày cài đặt kể từ lần làm gần nhất và chưa có lịch hẹn.', r.returns, (c) => `<b><a href="#customer?id=${c.id}">${esc(c.name)}</a></b>${who(c)} <span class="small muted">lần cuối ${dmy(c.last_date)} · ${c.days} ngày · ${c.n} lượt</span>`)}
     </div>`;
   bindBackupBox(main, () => VIEWS.reminders(main));
+  $$('[data-wj]', main).forEach((b) => (b.onclick = () => warrantyJobForm(Number(b.dataset.wj), () => VIEWS.reminders(main))));
+  $$('[data-wjdel]', main).forEach((b) => (b.onclick = () => guard(b, async () => { if (!confirm('Xóa lần ghi bảo hành này? Lương sẽ cộng lại.')) return; await api('/warranty-jobs/' + b.dataset.wjdel, { method: 'DELETE' }); VIEWS.reminders(main); })));
   $$('[data-ord]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/stock/${b.dataset.ord}/ordered`, { method: 'POST', body: {} }); refreshReminderBadge(); VIEWS.reminders(main); })));
   $('#rsf').onchange = (e) => go('reminders', { staff: e.target.value });
   $$('[data-done]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api('/reminders/done', { method: 'POST', body: JSON.parse(b.dataset.done) }); refreshReminderBadge(); VIEWS.reminders(main); })));
@@ -2502,7 +2560,8 @@ VIEWS.sales = async (main) => {
           ${Object.entries(s.by_method).filter(([, v]) => v).map(([k, v]) => line(esc(k), money(v))).join('') || '<div class="empty">—</div>'}
         </div></div></details>`;
     })() : ''}
-    ${!isOwner() ? r.rows.map((x) => `<div class="card"><h3>${esc(x.name)}</h3>
+    ${isOwner() && r.rows.some((x) => x.hold_sales || x.late_sales) ? `<div class="card"><h3>⏳ Doanh số treo – khách chưa trả <span class="badge warn">${money(r.rows.reduce((a, x) => a + (x.hold_sales || 0), 0))}</span></h3>${r.rows.map((x) => holdHtml(x, true)).join('')}</div>` : ''}
+    ${!isOwner() ? r.rows.map((x) => `<div class="card"><h3>${esc(x.name)}</h3>${holdHtml(x)}${x.warranty_penalty ? `<div class="hold-box"><div class="stat-line"><span><b>🛠 Làm lại bảo hành (lỗi kỹ thuật)</b></span><b class="warn-t">−${money(x.warranty_penalty)}</b></div>${x.warranty_list.map((w) => `<div class="stat-line small"><span>${dmy(w.date).slice(0, 5)} · ${esc(w.customer || '')} · ${esc(w.role)}</span><span>−${money(w.amount)}</span></div>`).join('')}<div class="small muted">Trừ vào lương tháng này.</div></div>` : ''}
       <div class="stat-line"><span class="muted">Lượt làm chính / phụ</span><b>${x.main_count} / ${x.assist_count}</b></div>
       <div class="small" style="margin-top:6px"><b>① Doanh số dịch vụ</b> (xét thưởng)</div>
       ${GS.map((g) => `<div class="stat-line"><span class="muted">DS ${esc(g)}</span><b>${money(x.by_group[g])}</b></div>`).join('')}
@@ -2742,7 +2801,7 @@ VIEWS.payroll = async (main) => {
     <div class="card"><h3>Theo nhân viên <span class="small muted">(bấm tên để xem phiếu lương, nhập công/KPI/ứng lương)</span></h3><div class="table-wrap"><table><thead><tr><th>Nhân viên</th><th class="num">Công</th><th class="num">Lương cứng</th><th class="num">Phụ cấp</th><th class="num">Hoa hồng</th><th class="num">Thưởng DS</th><th class="num">KPI</th><th class="num">Bù sàn</th><th class="num">Tip</th><th class="num">Ứng / trừ</th><th class="num">Thực nhận</th></tr></thead>
       <tbody>${r.rows.map((x) => `<tr><td><a href="#" data-ps="${x.user_id}"><b>${esc(x.name)}</b></a>${x.has_params ? '' : ' <span class="badge warn">chưa cài lương</span>'}</td><td class="num">${x.days}/${x.std_days}</td>
         <td class="num">${money(x.base)}</td><td class="num">${money(x.allowance)}</td><td class="num">${money(x.commission)}</td><td class="num">${money(x.bonus)}</td><td class="num">${money(x.kpi)}</td>
-        <td class="num">${x.floor_topup ? money(x.floor_topup) : ''}</td><td class="num">${money(x.tip_shared + x.tip_private)}</td><td class="num">${x.advance + x.minus - x.plus ? money(-(x.advance + x.minus - x.plus)) : ''}</td><td class="num"><b>${money(x.net)}</b></td></tr>`).join('') || '<tr><td colspan="11" class="empty">Chưa có nhân viên</td></tr>'}</tbody>
+        <td class="num">${x.floor_topup ? money(x.floor_topup) : ''}</td><td class="num">${money(x.tip_shared + x.tip_private)}</td><td class="num">${x.advance + x.minus + (x.warranty || 0) - x.plus ? money(-(x.advance + x.minus + (x.warranty || 0) - x.plus)) : ''}</td><td class="num"><b>${money(x.net)}</b></td></tr>`).join('') || '<tr><td colspan="11" class="empty">Chưa có nhân viên</td></tr>'}</tbody>
       <tfoot><tr><td>Tổng</td><td></td><td class="num">${money(T.base)}</td><td class="num">${money(T.allowance)}</td><td class="num">${money(T.commission)}</td><td class="num">${money(T.bonus)}</td><td class="num">${money(T.kpi)}</td><td class="num">${money(T.floor_topup)}</td><td class="num">${money(T.tips)}</td><td></td><td class="num"><b>${money(T.net)}</b></td></tr></tfoot></table></div>
       <div class="small muted" style="margin-top:8px">Hoa hồng = HH dịch vụ tự làm + HH phụ + HH bán thẻ + phần phụ thu. Thưởng DS tính trên <b>DS tính thưởng</b> (không tính thẻ tri ân, khách ưu đãi đặc biệt). Ngày công lấy theo trang Chấm công; chưa chấm thì lấy công chuẩn trừ ngày off đã duyệt; bạn sửa tay được ở phiếu.</div></div>`;
   const go2 = (m) => go('payroll', { month: m });
@@ -2775,7 +2834,7 @@ function payslip(r, uid, after) {
     ${line('Tổng theo cơ chế', money(x.subtotal))}
     ${x.floor_topup ? line('Bù sàn chuyển tiếp', money(x.floor_topup), `sàn ${money(P.floor_amount)}${P.floor_until ? ' đến ' + dmy(P.floor_until) : ''}`) : ''}
     ${line('Tip chung / tip riêng', `${money(x.tip_shared)} / ${money(x.tip_private)}`, 'theo trang Chia tip')}
-    ${x.plus ? line('Cộng khác', money(x.plus)) : ''}${x.minus ? line('Trừ khác', '−' + money(x.minus)) : ''}${x.advance ? line('Đã ứng', '−' + money(x.advance)) : ''}
+    ${x.plus ? line('Cộng khác', money(x.plus)) : ''}${x.minus ? line('Trừ khác', '−' + money(x.minus)) : ''}${x.advance ? line('Đã ứng', '−' + money(x.advance)) : ''}${x.warranty ? line('🛠 Làm lại bảo hành (lỗi kỹ thuật)', '−' + money(x.warranty)) + x.warranty_list.map((w) => `<div class="small muted" style="padding-left:12px">${dmy(w.date).slice(0, 5)} · ${esc(w.customer || '')} ${esc(w.code || '')} · ${esc(w.role)} −${money(w.amount)}</div>`).join('') : ''}
     <div class="stat-line" style="font-size:1.15em"><span><b>THỰC NHẬN</b></span><b>${money(x.net)}</b></div>
     ${lk ? '<div class="small muted" style="margin-top:8px">Tháng đã chốt: mở chốt để sửa.</div>' : `
     <form id="pin" style="margin-top:12px"><h3>Nhập cuối tháng</h3><div class="form-grid">

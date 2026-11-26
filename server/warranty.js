@@ -54,4 +54,64 @@ function active(today, customerId, chemOnly) {
   return out;
 }
 
-module.exports = { forItems, forVisit, active, RULES, EXCLUDE };
+// ===== Làm lại bảo hành do LỖI KỸ THUẬT (Vinh 26/11 chọn phương án C) =====
+// Giá cốt đầu bảo hành = hóa chất dùng + phí vận hành/đầu (mặc định 50k – giả định).
+// Thợ chịu 100% giá cốt; có người phụ → phụ chịu X% (chỉnh được, mặc định 30% – giả định), thợ chính chịu phần còn lại.
+// Không có phụ → thợ chính chịu hết. Trừ vào Bảng lương tháng làm bảo hành.
+db.exec(`CREATE TABLE IF NOT EXISTS warranty_jobs (
+  id INTEGER PRIMARY KEY,
+  orig_visit_id INTEGER REFERENCES visits(id),
+  date TEXT NOT NULL,
+  chem_cost INTEGER NOT NULL DEFAULT 0,
+  fee INTEGER NOT NULL DEFAULT 0,
+  staff_pct REAL NOT NULL DEFAULT 1,
+  main_staff_id INTEGER REFERENCES users(id),
+  assistant_id INTEGER REFERENCES users(id),
+  asst_pct REAL NOT NULL DEFAULT 0,
+  main_penalty INTEGER NOT NULL DEFAULT 0,
+  asst_penalty INTEGER NOT NULL DEFAULT 0,
+  note TEXT,
+  deleted INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_wj_date ON warranty_jobs(date);`);
+for (const [k, v] of [['warranty_fee', '50000'], ['warranty_staff_pct', '100'], ['warranty_asst_pct', '30']]) db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)').run(k, v);
+const conf = () => { const g = (k) => (db.prepare('SELECT value FROM settings WHERE key=?').get(k) || {}).value;
+  return { fee: Number(g('warranty_fee')) || 0, staff_pct: Number(g('warranty_staff_pct') ?? 100), asst_pct: Number(g('warranty_asst_pct') ?? 30) }; };
+// Gợi ý cho lượt gốc: hóa chất lượt gốc đã xuất kho; chưa ghi kho thì ước 25% tiền dịch vụ hóa chất
+function preview(visitId) {
+  const v = db.prepare(`SELECT v.id, v.code, v.date, v.customer_id, v.main_staff_id, v.assistant_id, c.name customer_name, u.full_name staff_name, a.full_name assistant_name
+    FROM visits v LEFT JOIN customers c ON c.id=v.customer_id LEFT JOIN users u ON u.id=v.main_staff_id LEFT JOIN users a ON a.id=v.assistant_id WHERE v.id=? AND v.status='done'`).get(visitId);
+  if (!v) return null;
+  const items = db.prepare('SELECT name, grp, price, staff_id, assistant_id FROM visit_items WHERE visit_id=?').all(v.id);
+  const chemItems = items.filter((i) => i.grp === 'Hóa chất');
+  const used = db.prepare("SELECT COALESCE(SUM(-qty*unit_cost),0) s FROM stock_moves WHERE visit_id=? AND kind='use'").get(v.id).s;
+  const est = Math.round(chemItems.reduce((a, i) => a + i.price, 0) * 0.25);
+  // Người làm dòng hóa chất (nếu dòng có thợ/phụ riêng)
+  const ci = chemItems[0] || {};
+  const main = ci.staff_id || v.main_staff_id;
+  const asst = ci.assistant_id > 0 ? ci.assistant_id : ci.assistant_id === 0 ? null : v.assistant_id;
+  return { visit: { ...v, services: items.map((i) => i.name).join(' + ') }, chem_cost: Math.round(used) || est, chem_source: used ? 'hóa chất lượt gốc đã xuất kho' : 'ước 25% tiền dịch vụ hóa chất',
+    main_staff_id: main || null, assistant_id: asst || null, ...conf() };
+}
+function split(total, staffPct, hasAsst, asstPct) {
+  const owe = Math.round(total * staffPct / 100);
+  const a = hasAsst ? Math.round(owe * asstPct / 100) : 0;
+  return { owe, main: owe - a, asst: a };
+}
+function jobs(from, to) {
+  return db.prepare(`SELECT j.*, v.code orig_code, v.date orig_date, c.name customer_name, u.full_name main_name, a.full_name asst_name
+    FROM warranty_jobs j LEFT JOIN visits v ON v.id=j.orig_visit_id LEFT JOIN customers c ON c.id=v.customer_id
+    LEFT JOIN users u ON u.id=j.main_staff_id LEFT JOIN users a ON a.id=j.assistant_id
+    WHERE j.deleted=0 AND j.date BETWEEN ? AND ? ORDER BY j.date, j.id`).all(from, to);
+}
+// Phạt bảo hành theo người trong kỳ: Map(user_id → {amount, list})
+function penalties(from, to) {
+  const out = new Map();
+  const add = (uid, amt, j, role) => { if (!uid || !amt) return; const x = out.get(uid) || { amount: 0, list: [] }; x.amount += amt; x.list.push({ id: j.id, date: j.date, code: j.orig_code, customer: j.customer_name, role, amount: amt }); out.set(uid, x); };
+  for (const j of jobs(from, to)) { add(j.main_staff_id, j.main_penalty, j, 'thợ chính'); add(j.assistant_id, j.asst_penalty, j, 'người phụ'); }
+  return out;
+}
+
+module.exports = { forItems, forVisit, active, RULES, EXCLUDE, preview, split, jobs, penalties, conf };
