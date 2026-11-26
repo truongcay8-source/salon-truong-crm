@@ -3204,6 +3204,23 @@ function getPos() {
       () => resolve(null), { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 });
   });
 }
+// Bảng công: chấm công + lịch off gộp 1 bảng (dòng = nhân viên, cột = ngày)
+function attGrid(G) {
+  if (!G || !G.rows.length) return '';
+  const cell = (r, c) => {
+    const t = c.s === 'work' ? `<b>${esc(c.in)}</b><br>${c.out ? esc(c.out) : '<span class="bad-t">?</span>'}${c.late ? `<br><span class="g-late">⏰${c.late}′</span>` : ''}${c.part ? '<br>½' : ''}`
+      : c.s === 'off' ? 'OFF' : c.s === 'part' ? '½' : c.s === 'absent' ? '✗' : '';
+    const tip = c.s === 'work' ? `Vào ${c.in} · Ra ${c.out || 'quên chấm'}${c.late ? ' · muộn ' + c.late + ' phút' : ''}${c.part ? ' · nghỉ ' + c.part : ''}`
+      : c.s === 'off' ? 'Nghỉ cả ngày (đơn đã duyệt)' + (c.reason ? ': ' + c.reason : '') : c.s === 'part' ? 'Nghỉ vài giờ ' + c.part : c.s === 'absent' ? 'Không chấm công, không có đơn nghỉ' : '';
+    return `<td class="g-c g-${c.s || 'x'}${c.late ? ' g-l' : ''}" title="${esc(tip)}" data-gc="${r.user_id}|${c.date}">${t}</td>`;
+  };
+  return `<h3 style="margin-top:12px">Bảng công</h3>
+    <div class="small muted" style="margin-bottom:6px"><span class="g-key g-work">giờ vào/ra</span> <span class="g-key g-l">⏰ muộn</span> <span class="g-key g-off">OFF</span> <span class="g-key g-part">½ nghỉ vài giờ</span> <span class="g-key g-absent">✗ vắng không đơn</span>${isMgr() ? ' · bấm ô để chấm công hộ' : ''}</div>
+    <div class="table-wrap g-wrap"><table class="g-tab"><thead><tr><th class="g-n">Nhân viên</th>${G.dates.map((d) => `<th class="${[0, 6].includes(new Date(d + 'T00:00:00').getDay()) ? 'g-we' : ''}">${d.slice(8, 10)}<br><span class="small muted">${wday(d)}</span></th>`).join('')}
+      <th class="num">Công</th><th class="num">OFF</th><th class="num">½</th><th class="num">Vắng</th><th class="num">Muộn</th><th class="num">Giờ</th></tr></thead>
+    <tbody>${G.rows.map((r) => `<tr><td class="g-n"><b>${esc(r.name)}</b></td>${r.cells.map((c) => cell(r, c)).join('')}
+      <td class="num"><b>${r.sum.work}</b></td><td class="num">${r.sum.off || ''}</td><td class="num">${r.sum.part || ''}</td><td class="num ${r.sum.absent ? 'bad-t' : ''}">${r.sum.absent || ''}</td><td class="num">${r.sum.late || ''}</td><td class="num">${mins2h(r.sum.minutes)}</td></tr>`).join('')}</tbody></table></div>`;
+}
 const mins2h = (m) => `${Math.floor(m / 60)}g${String(m % 60).padStart(2, '0')}`;
 VIEWS.attendance = async (main) => {
   const t = S.today;
@@ -3219,16 +3236,19 @@ VIEWS.attendance = async (main) => {
       <div class="small muted">${me.on_shop_wifi ? '📶 Bạn đang dùng wifi tiệm' : me.has_gps ? `📍 Sẽ kiểm tra định vị (trong bán kính ${me.radius}m quanh tiệm)` : ''}</div>
       ${me.records.map((r) => `<div class="stat-line"><span>${r.kind === 'in' ? 'Vào' : 'Ra'} · ${M[r.method] || r.method}${r.distance != null ? ' · cách ' + r.distance + 'm' : ''}</span><b>${esc(r.time)}</b></div>`).join('')}</div>
     <div class="card"><div class="row"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="tt" value="${to}" style="width:auto">
-      ${isMgr() ? `<select id="u" style="width:auto">${staffOptions(Number(uid), 'Tất cả')}</select><button class="btn sm" id="man">+ Chấm công hộ</button><button class="btn sm" id="attX">📥 Xuất Excel</button><button class="btn sm" id="attI">📤 Nhập Excel</button>` : ''}</div>
+      ${isMgr() ? `<select id="u" style="width:auto">${staffOptions(Number(uid), 'Tất cả')}</select><button class="btn sm" id="man">+ Chấm công hộ</button><button class="btn sm" id="attX">📥 Xuất Excel (bảng công + mẫu nhập)</button><button class="btn sm" id="attI">📤 Nhập Excel</button>` : ''}</div>
+      ${attGrid(rep.grid)}
+      <details${uid ? ' open' : ''}><summary class="small muted" style="margin-top:10px">Tổng hợp & chi tiết từng lần chấm</summary>
       <h3 style="margin-top:12px">Tổng hợp</h3><div class="table-wrap"><table><thead><tr><th>Nhân viên</th><th class="num">Ngày công</th><th class="num">Tổng giờ</th><th class="num">Đi muộn</th><th class="num">Quên chấm ra</th><th class="num">Nghỉ (ngày)</th></tr></thead>
       <tbody>${rep.summary.map((p) => `<tr><td>${esc(p.staff_name)}</td><td class="num">${p.days}</td><td class="num">${mins2h(p.minutes)}</td><td class="num">${p.late_days ? `${p.late_days} lần · ${p.late_minutes}′` : '0'}</td><td class="num">${p.missing_out || 0}</td><td class="num">${p.off_days || 0}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">Chưa có dữ liệu</td></tr>'}</tbody></table></div>
       <h3 style="margin-top:12px">Chi tiết từng ngày</h3><div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Nhân viên</th><th>Vào</th><th>Ra</th><th class="num">Giờ làm</th><th></th></tr></thead>
       <tbody>${rep.days.map((d) => `<tr><td>${wday(d.date)} ${dmy(d.date).slice(0, 5)}</td><td>${esc(d.staff_name)}</td>
         <td>${esc(d.in || '—')} <span class="small muted">${d.in_method ? M[d.in_method] : ''}</span>${d.late_minutes ? ` <span class="badge bad">muộn ${d.late_minutes}′</span>` : ''}</td>
         <td>${esc(d.out || '—')}${d.missing_out ? ' <span class="badge warn">quên chấm ra</span>' : ''}</td><td class="num">${d.minutes ? mins2h(d.minutes) : ''}</td>
-        <td>${isMgr() ? d.records.map((r) => `<button class="btn sm" data-adel="${r.id}" title="Xóa lần chấm ${r.kind === 'in' ? 'vào' : 'ra'} ${r.time}">✕ ${r.time}</button>`).join('') : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">—</td></tr>'}</tbody></table></div></div>
+        <td>${isMgr() ? d.records.map((r) => `<button class="btn sm" data-adel="${r.id}" title="Xóa lần chấm ${r.kind === 'in' ? 'vào' : 'ra'} ${r.time}">✕ ${r.time}</button>`).join('') : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">—</td></tr>'}</tbody></table></div></details></div>
     ${S.me.role === 'owner' ? '<div class="card" id="attSetup"></div>' : ''}`;
   const reload = () => VIEWS.attendance(main);
+  $$('[data-gc]', main).forEach((td) => (td.onclick = () => { const [u, d] = td.dataset.gc.split('|'); if (isMgr() && $('#man')) { $('#man').click(); const f = $('#mf'); if (f) { f.user_id.value = u; f.date.value = d; } } }));
   const punch = (kind, btn) => guard(btn, async () => {
     btn.textContent = 'Đang lấy vị trí…';
     const pos = me.on_shop_wifi ? null : await getPos();
