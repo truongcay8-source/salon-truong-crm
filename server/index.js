@@ -116,11 +116,59 @@ app.post('/api/me/password', (req, res) => {
 });
 
 // ---------- Tài khoản ----------
+if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'merged_into')) db.exec('ALTER TABLE users ADD COLUMN merged_into INTEGER');
 app.get('/api/staff', (req, res) => {
-  res.json(db.prepare('SELECT id, full_name, role, active, level, works FROM users ORDER BY active DESC, id').all());
+  res.json(db.prepare('SELECT id, full_name, role, active, level, works FROM users WHERE merged_into IS NULL ORDER BY active DESC, id').all());
 });
 app.get('/api/users', OWNER, (req, res) => {
-  res.json(db.prepare('SELECT id,username,full_name,role,active,can_login,must_change_pw,commission_enabled,works,aliases,level,created_at FROM users ORDER BY id').all());
+  res.json(db.prepare('SELECT id,username,full_name,role,active,can_login,must_change_pw,commission_enabled,works,aliases,level,created_at FROM users WHERE merged_into IS NULL ORDER BY id').all());
+});
+// Chuyển TOÀN BỘ dữ liệu của 1 tài khoản sang tài khoản khác (vd tạo nhầm tài khoản mới cho cùng 1 người) rồi xóa tài khoản cũ
+// Cột tiền (assistant_commission, seller_share…) không đụng; nhật ký giữ nguyên người làm.
+const USER_REFS = [
+  ['customers', ['staff_id', 'created_by', 'formula_by']], ['appointments', ['taken_by', 'assistant_id', 'created_by', 'staff_id', 'cancelled_by']],
+  ['cards', ['consultant_id', 'created_by', 'seller_id']], ['card_txns', ['created_by']],
+  ['visits', ['tip_private_to', 'created_by', 'assistant_id', 'main_staff_id', 'debt_paid_by']], ['visit_items', ['staff_id', 'assistant_id']],
+  ['photos', ['created_by']], ['reminder_log', ['created_by']], ['staff_off', ['decided_by', 'created_by', 'user_id']], ['attendance', ['created_by', 'user_id']],
+  ['materials', ['ordered_by', 'reported_by']], ['stock_moves', ['created_by']], ['tip_paid', ['paid_by', 'user_id']],
+  ['payroll_params', ['user_id']], ['payroll_inputs', ['user_id']], ['payroll_locks', ['locked_by']], ['other_income', ['created_by']],
+  ['cash_closes', ['user_id']], ['chat_messages', ['linked_by', 'user_id']], ['chat_reads', ['user_id']], ['expenses', ['decided_by', 'created_by', 'reimbursed_by']],
+];
+function mergeUser(from, to) {
+  const n = {};
+  const has = (t, c) => db.prepare(`PRAGMA table_info(${t})`).all().some((x) => x.name === c);
+  for (const [t, cols] of USER_REFS) for (const c of cols) {
+    if (!has(t, c)) continue;
+    // bảng 1 dòng/người/tháng (lương, tip, công): dữ liệu tài khoản cũ được giữ, đè dòng trùng của tài khoản mới
+    const k = db.prepare(`UPDATE OR REPLACE ${t} SET ${c}=? WHERE ${c}=?`).run(to, from).changes;
+    if (k) n[t] = (n[t] || 0) + k;
+  }
+  if (has('chat_messages', 'mentions')) db.prepare("UPDATE chat_messages SET mentions=trim(replace(','||mentions||',', ','||?||',', ','||?||','), ',') WHERE (','||mentions||',') LIKE ?").run(from, to, `%,${from},%`);
+  db.prepare('DELETE FROM sessions WHERE user_id=?').run(from);
+  try { db.prepare('DELETE FROM push_subs WHERE user_id=?').run(from); } catch { /* chưa có bảng */ }
+  return n;
+}
+app.post('/api/users/:id/merge', OWNER, (req, res) => {
+  const from = db.prepare('SELECT * FROM users WHERE id=? AND merged_into IS NULL').get(int(req.params.id));
+  const to = db.prepare('SELECT * FROM users WHERE id=? AND merged_into IS NULL').get(int(req.body.to));
+  if (!from || !to) throw bad('Chọn tài khoản');
+  if (from.id === to.id) throw bad('Chọn tài khoản khác');
+  if (from.role === 'owner' || from.id === req.user.id) throw bad('Không chuyển được tài khoản Lãnh đạo');
+  // Bỏ trước lịch/lượt bị sổ nhân đôi giữa 2 tài khoản trùng tên, rồi mới chuyển
+  try { require('./importer').dedupeCloneStaff(); } catch (e) { console.error(e.message); }
+  let moved;
+  db.transaction(() => {
+    moved = mergeUser(from.id, to.id);
+    // tài khoản nhận lấy tên + cấp + cài đặt làm việc của tài khoản cũ (giữ tên đăng nhập, mật khẩu, vai trò của tài khoản nhận)
+    const aliases = [...new Set([...String(to.aliases || '').split(','), ...String(from.aliases || '').split(','), to.full_name].map((s) => s.trim()).filter((s) => s && s !== from.full_name))].join(', ') || null;
+    db.prepare('UPDATE users SET full_name=?, aliases=NULL, level=COALESCE(?,level), works=?, commission_enabled=?, no_cut_warranty=?, active=1 WHERE id=?')
+      .run(from.full_name, from.level, from.works, from.commission_enabled, from.no_cut_warranty || 0, to.id);
+    db.prepare("UPDATE users SET full_name=?, aliases=NULL, active=0, can_login=0, works=0, commission_enabled=0, merged_into=?, username=? WHERE id=?")
+      .run(from.full_name + ' (đã xóa)', to.id, 'da_xoa_' + from.id + '_' + from.username, from.id);
+    db.prepare('UPDATE users SET aliases=? WHERE id=?').run(aliases, to.id);
+  })();
+  audit(req.user.id, 'merge_user', 'user', from.id, { to: to.id, from_name: from.full_name, to_username: to.username, moved });
+  res.json({ ok: true, moved, name: from.full_name, username: to.username });
 });
 const LEVELS = ['Director', 'Senior', 'Stylist', 'Junior'];
 function userInput(b) {
