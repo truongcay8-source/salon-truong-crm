@@ -748,3 +748,21 @@ test('chat: xem Hôm nay chưa có tin → không kéo tin các ngày cũ', asyn
   const r = (await o.get(`/chat?after=0&date=${today}`)).data;
   assert.ok(!r.some((m) => m.body === 'tin cũ test'));
 });
+
+test('lượt bản sao (tài khoản trùng tên) bị gộp nhầm → 1 hóa đơn ×2 → tự tách lại đúng 1 lần tiền', () => {
+  const L = require('../server/logic'); const I = require('../server/importer');
+  const truong = db.prepare("SELECT id FROM users WHERE username='truong'").get().id;
+  const clone = db.prepare("INSERT INTO users(username,full_name,role) VALUES ('truongv2','TruongV2','manager')").run().lastInsertRowid;
+  const svc = db.prepare("SELECT id FROM services WHERE active=1 AND price>0 ORDER BY id LIMIT 1").get();
+  const cu = db.prepare("INSERT INTO customers(code,name) VALUES ('TUM1','A Hưng gộp test')").run().lastInsertRowid;
+  const sys = { id: 1, role: 'owner' };
+  const mk = (staff, ref) => L.saveVisit({ customer_id: cu, date: '2026-11-19', time: '09:30', main_staff_id: staff, items: [{ service_id: svc.id, price: 685000 }], tip: 50000, payment_method: 'Chuyển khoản', import_ref: ref, note: 'Sổ đặt lịch: a hưng 685' }, sys, null, { imported: true });
+  mk(truong, 'SO:um1'); mk(clone, 'SO:um2');
+  I.mergeSameVisits();
+  const live = () => db.prepare("SELECT * FROM visits WHERE customer_id=? AND status='done'").all(cu);
+  assert.equal(live().length, 1); assert.equal(live()[0].total, 1370000, 'lỗi cũ: gộp thành ×2');
+  assert.equal(I.unmergeCloneDupes(), 1);
+  assert.equal(live().length, 1); assert.equal(live()[0].total, 685000); assert.equal(live()[0].tip, 50000);
+  assert.equal(I.unmergeCloneDupes(), 0, 'chạy lại không đổi');
+  db.prepare("UPDATE users SET active=0, works=0 WHERE id=?").run(clone);
+});
