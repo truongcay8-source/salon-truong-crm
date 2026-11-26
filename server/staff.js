@@ -100,9 +100,12 @@ function report(from, to, user, userId) {
     if (r.kind === 'out' && (!d.out || r.time > d.out)) { d.out = r.time; d.out_method = r.method; }
     days.set(k, d);
   }
+  const partOff = db.prepare("SELECT user_id, date, from_time, to_time FROM staff_off WHERE status='approved' AND from_time IS NOT NULL AND date BETWEEN ? AND ?").all(from, to);
   const list = [...days.values()].map((d) => {
     const mins = d.in && d.out ? Math.max(0, hm(d.out) - hm(d.in)) : 0;
-    const late = d.in && start != null ? Math.max(0, hm(d.in) - start - grace) : 0;
+    let st = start;
+    for (const o of partOff) if (o.user_id === d.user_id && o.date === d.date && st != null && hm(o.from_time) <= st && hm(o.to_time) > st) st = hm(o.to_time);
+    const late = d.in && st != null ? Math.max(0, hm(d.in) - st - grace) : 0;
     return { ...d, minutes: mins, late_minutes: late, missing_out: !!d.in && !d.out && d.date < today() };
   });
   const per = new Map();
@@ -117,7 +120,40 @@ function report(from, to, user, userId) {
     p.off_days = (p.off_days || 0) + (o.from_time ? 0.5 : 1);
     per.set(o.user_id, p);
   }
-  return { from, to, work_start: s.work_start, late_grace: grace, days: list.reverse(), summary: [...per.values()] };
+  return { from, to, work_start: s.work_start, late_grace: grace, days: list.reverse(), summary: [...per.values()], grid: grid(from, to, user, userId, list) };
+}
+
+// Bảng công: mỗi nhân viên 1 dòng × mỗi ngày 1 ô = chấm công + lịch off (đơn đã duyệt) gộp lại
+// Ô: work (có chấm vào) · off (nghỉ cả ngày) · part (nghỉ vài giờ, có/không đi làm) · absent (ngày đã qua, không chấm, không đơn) · '' (chưa tới / trước khi dùng chấm công)
+function grid(from, to, user, userId, list) {
+  const t = today();
+  let staff = db.prepare('SELECT id, full_name FROM users WHERE active=1 AND IFNULL(works,1)=1 AND merged_into IS NULL ORDER BY id').all();
+  if (!isMgr(user)) staff = staff.filter((u) => u.id === user.id); else if (userId) staff = staff.filter((u) => u.id === userId);
+  const firstUse = (db.prepare('SELECT MIN(date) d FROM attendance').get() || {}).d;
+  const offs = db.prepare("SELECT user_id, date, from_time, to_time, reason FROM staff_off WHERE status='approved' AND date BETWEEN ? AND ?").all(from, to);
+  const dates = [];
+  for (let d = new Date(from + 'T00:00:00Z'); d.toISOString().slice(0, 10) <= to && dates.length < 62; d.setUTCDate(d.getUTCDate() + 1)) dates.push(d.toISOString().slice(0, 10));
+  const rows = staff.map((u) => {
+    const sum = { work: 0, off: 0, part: 0, absent: 0, late: 0, late_minutes: 0, missing_out: 0, minutes: 0 };
+    const cells = dates.map((date) => {
+      const a = list.find((x) => x.user_id === u.id && x.date === date);
+      const o = offs.filter((x) => x.user_id === u.id && x.date === date);
+      const full = o.find((x) => !x.from_time);
+      const part = o.filter((x) => x.from_time).map((x) => `${x.from_time}–${x.to_time}`).join(', ');
+      const c = { date };
+      if (a && a.in) {
+        Object.assign(c, { s: 'work', in: a.in, out: a.out, minutes: a.minutes, late: a.late_minutes, missing_out: a.missing_out, part: part || null });
+        sum.work++; sum.minutes += a.minutes; if (a.late_minutes) { sum.late++; sum.late_minutes += a.late_minutes; } if (a.missing_out) sum.missing_out++;
+        if (part) sum.part++;
+      } else if (full) { c.s = 'off'; c.reason = full.reason || null; sum.off++; }
+      else if (part) { c.s = 'part'; c.part = part; sum.part++; }
+      else if (date < t && firstUse && date >= firstUse) { c.s = 'absent'; sum.absent++; }
+      else c.s = '';
+      return c;
+    });
+    return { user_id: u.id, name: u.full_name, cells, sum };
+  });
+  return { dates, rows, first_use: firstUse || null };
 }
 
 function mount(app, { MGR, OWNER }) {
@@ -206,6 +242,25 @@ function mount(app, { MGR, OWNER }) {
     const get = (u, d, k) => rec.find((r) => r.user_id === u && r.date === d && r.kind === k);
     const offs = db.prepare("SELECT user_id, date, from_time, to_time FROM staff_off WHERE status='approved' AND date BETWEEN ? AND ?").all(from, to);
     const wb = new ExcelJS.Workbook();
+    // Tab 1: Bảng công (nhìn): dòng = nhân viên, cột = ngày, ô tô màu
+    const G = report(from, to, req.user, null).grid;
+    const bg = wb.addWorksheet('Bảng công', { views: [{ state: 'frozen', xSplit: 1, ySplit: 2 }] });
+    const WD = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+    bg.addRow(['Nhân viên', ...G.dates.map((d) => d.slice(8, 10) + '/' + d.slice(5, 7)), 'Ngày công', 'Nghỉ (đơn)', 'Nghỉ vài giờ', 'Vắng không đơn', 'Đi muộn', 'Quên chấm ra', 'Tổng giờ']);
+    bg.addRow(['', ...G.dates.map((d) => WD[new Date(d + 'T00:00:00Z').getUTCDay()]), '', '', '', '', '', '', '']);
+    const FILL = { work: 'FFDDF1DD', off: 'FFE3E3E3', part: 'FFFFF1C2', absent: 'FFF8D0D0' };
+    for (const r of G.rows) {
+      const vals = r.cells.map((c) => c.s === 'work' ? `${c.in}${c.out ? '-' + c.out : ' (quên ra)'}${c.late ? ' ⏰' + c.late + '′' : ''}${c.part ? ' ½' : ''}`
+        : c.s === 'off' ? 'OFF' : c.s === 'part' ? '½ ' + c.part : c.s === 'absent' ? 'Vắng' : '');
+      const row = bg.addRow([r.name, ...vals, r.sum.work, r.sum.off, r.sum.part, r.sum.absent, r.sum.late ? `${r.sum.late} lần (${r.sum.late_minutes}′)` : 0, r.sum.missing_out, `${Math.floor(r.sum.minutes / 60)}g${String(r.sum.minutes % 60).padStart(2, '0')}`]);
+      r.cells.forEach((c, k) => { const cell = row.getCell(k + 2); if (FILL[c.s]) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: c.s === 'work' && c.late ? 'FFFFE0B2' : FILL[c.s] } }; cell.alignment = { horizontal: 'center', wrapText: true }; cell.font = { size: 9 }; });
+    }
+    bg.getColumn(1).width = 14; G.dates.forEach((_, k) => (bg.getColumn(k + 2).width = 11));
+    for (let k = 0; k < 7; k++) bg.getColumn(G.dates.length + 2 + k).width = 12;
+    [1, 2].forEach((n) => { bg.getRow(n).font = { bold: true }; bg.getRow(n).alignment = { horizontal: 'center' }; bg.getRow(n).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3E6D8' } }; });
+    bg.addRow([]);
+    bg.addRow(['Chú thích: xanh = đi làm (giờ vào-ra) · cam = đi muộn ⏰ · xám = OFF cả ngày (đơn đã duyệt) · vàng = nghỉ vài giờ ½ · đỏ = vắng không chấm công, không có đơn']);
+    // Tab 2: mẫu nhập (điền giờ vào ô trống rồi Nhập Excel)
     const ws = wb.addWorksheet('Chấm công', { views: [{ state: 'frozen', ySplit: 1 }] });
     ws.columns = [{ header: 'Ngày', key: 'd', width: 12 }, { header: 'Nhân viên', key: 'n', width: 16 }, { header: 'Vào', key: 'i', width: 8 }, { header: 'Ra', key: 'o', width: 8 }, { header: 'Ghi chú', key: 'g', width: 36 }];
     ws.getRow(1).font = { bold: true }; ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3E6D8' } };

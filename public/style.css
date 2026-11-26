@@ -388,3 +388,18 @@ table.fin tr.big td{font-size:1.1em}
 .prd-opt { display: flex; justify-content: space-between; gap: 8px; width: 100%; padding: 9px 12px; border: 0; background: none; text-align: left; cursor: pointer; font: inherit; }
 .prd-opt:hover, .prd-opt.on { background: rgba(0,0,0,.05); }
 .bad-t { color: #b3261e; } .warn-t { color: #a15c00; }
+
+/* Bảng công: chấm công + lịch off */
+.g-wrap { overflow-x: auto; }
+.g-tab { border-collapse: collapse; font-size: 12px; }
+.g-tab th, .g-tab td { padding: 4px 5px; text-align: center; border: 1px solid var(--line); min-width: 44px; }
+.g-tab .g-n { position: sticky; left: 0; background: #fff; text-align: left; min-width: 90px; z-index: 1; }
+.g-tab th.g-we { background: rgba(0,0,0,.04); }
+.g-c { cursor: pointer; line-height: 1.25; }
+.g-work, .g-key.g-work { background: #ddf1dd; }
+.g-l, .g-key.g-l { background: #ffe0b2; }
+.g-off, .g-key.g-off { background: #e3e3e3; color: #555; font-weight: 600; }
+.g-part, .g-key.g-part { background: #fff1c2; }
+.g-absent, .g-key.g-absent { background: #f8d0d0; color: #b3261e; font-weight: 600; }
+.g-late { color: #a15c00; }
+.g-key { display: inline-block; padding: 1px 6px; border-radius: 6px; margin-right: 4px; }
