@@ -1815,7 +1815,7 @@ async function visitForm(v = {}, after) {
 VIEWS.visits = async (main) => {
   const from = S.params.from || S.today, to = S.params.to || from;
   const staffId = S.params.staff || '';
-  const [all, sus] = await Promise.all([api(`/visits?from=${from}&to=${to}${staffId ? '&staff_id=' + staffId : ''}`), isOwner() ? api(`/visits/suspects?from=${from}&to=${to}`) : []]);
+  const [all, sus] = await Promise.all([api(`/visits?from=${from}&to=${to}${staffId ? '&staff_id=' + staffId : ''}`), isOwner() ? api(`/visits/suspects?from=${[from, addDays(S.today, -60)].sort()[0]}&to=${S.today}`) : []]);
   const q = fold(S.params.q || '');
   const rows = q ? all.filter((v) => fold([v.code, v.customer_name, v.customer_phone, v.main_staff_name, v.payment_method, ...v.items.map((i) => i.name)].filter(Boolean).join(' ')).includes(q)) : all;
   const sum = rows.filter((r) => !r.masked).reduce((a, r) => ({ total: a.total + r.total, cash: a.cash + r.cash_paid, card: a.card + r.card_paid, tip: a.tip + r.tip }), { total: 0, cash: 0, card: 0, tip: 0 });
@@ -1825,7 +1825,7 @@ VIEWS.visits = async (main) => {
     `<div class="card"><div class="chips" style="margin-bottom:8px">${rng.map(([l, a, b]) => `<button class="chip ${from === a && to === b ? 'on' : ''}" data-rng="${a}|${b}">${l}</button>`).join('')}</div>
       <div class="row" style="flex-wrap:wrap;gap:6px"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="t" value="${to}" style="width:auto">
       <select id="st" style="width:auto">${staffOptions(Number(staffId), 'Tất cả thợ')}</select><input id="vq" placeholder="🔍 Tìm khách, mã HĐ, dịch vụ…" value="${esc(S.params.q || '')}" style="flex:1;min-width:180px"></div></div>
-    ${sus.length ? `<div class="card debt-note"><b>⚠ ${sus.length} cặp hóa đơn nghi ghi trùng</b> <span class="small muted">(cùng khách, cùng ngày, cùng 1 dịch vụ hóa chất ở 2 hóa đơn). Xem 2 hóa đơn, cái nào thừa thì bấm Sửa → bỏ dòng trùng hoặc xóa hóa đơn.</span>
+    ${sus.length ? `<div class="card debt-note"><b>⚠ ${sus.length} cặp hóa đơn nghi ghi trùng</b> <span class="small muted">(60 ngày gần đây · cùng khách, cùng ngày, cùng 1 dịch vụ hóa chất ở 2 hóa đơn). Xem 2 hóa đơn, cái nào thừa thì bấm Sửa → bỏ dòng trùng hoặc xóa hóa đơn.</span>
       ${sus.map((x) => `<div class="stat-line"><span>${dmy(x.date).slice(0, 5)} · <b>${esc(x.customer_name || '')}</b> · ${esc(x.service)}</span><span class="nowrap">
         <button class="btn sm" data-rc-id="${x.a_id}">${esc(x.a_code)} ${esc(x.a_time || '')} · ${money(x.a_total)}</button><button class="btn sm" data-ev="${x.a_id}">Sửa</button>
         <button class="btn sm" data-rc-id="${x.b_id}">${esc(x.b_code)} ${esc(x.b_time || '')} · ${money(x.b_total)}</button><button class="btn sm" data-ev="${x.b_id}">Sửa</button></span></div>`).join('')}</div>` : ''}
