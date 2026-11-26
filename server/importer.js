@@ -198,7 +198,55 @@ function samePerson(a, b, sameTime) {
     && !db.prepare('SELECT 1 FROM cards WHERE customer_id=? LIMIT 1').get(short.customer_id);
 }
 const mins = (t) => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ''); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+// 2 tài khoản là cùng 1 người: tài khoản trùng tên, hoặc tài khoản cũ đã "Chuyển & xóa" sang tài khoản kia
+function samePersonStaff() {
+  const pairs = new Set();
+  for (const [a, b] of staffClones()) { pairs.add(a + '|' + b); pairs.add(b + '|' + a); }
+  try { for (const u of db.prepare('SELECT id, merged_into FROM users WHERE merged_into IS NOT NULL').all()) { pairs.add(u.id + '|' + u.merged_into); pairs.add(u.merged_into + '|' + u.id); } } catch { /* cột chưa có */ }
+  return (a, b) => a === b || pairs.has(a + '|' + b);
+}
+// Sửa lỗi 26/11: lượt bản sao (do tài khoản TruongV1 trùng tên Trường) bị "gộp" vào lượt gốc → 1 hóa đơn có dịch vụ ×2, doanh số ×2.
+// Tách bản sao ra: bỏ các dòng dịch vụ trùng, trừ lại phụ thu / giảm giá / tip của bản sao.
+function unmergeCloneDupes() {
+  const same = samePersonStaff();
+  const sys = { id: 1, role: 'owner' };
+  const itemsOf = db.prepare('SELECT * FROM visit_items WHERE visit_id=? ORDER BY id');
+  let fixed = 0;
+  for (const d of db.prepare("SELECT * FROM visits WHERE status='deleted' AND delete_reason LIKE 'Gộp vào lượt %' AND import_ref LIKE 'SO:%'").all()) {
+    const code = (d.delete_reason.match(/^Gộp vào lượt (\S+)/) || [])[1];
+    const keep = code && db.prepare("SELECT * FROM visits WHERE (code=? OR id=?) AND status='done' AND date=?").get(code, Number(code) || -1, d.date);
+    if (!keep || IFNULL(keep.manual_edit)) continue;
+    // cùng 1 người (tài khoản trùng tên / đã chuyển) – hoặc y hệt giờ + toàn bộ dịch vụ (2 người không thể làm y hệt cho 1 khách cùng lúc)
+    if (!same(keep.main_staff_id, d.main_staff_id) && d.time !== keep.time) continue;
+    const kItems = itemsOf.all(keep.id), dItems = itemsOf.all(d.id);
+    if (!dItems.length) continue;
+    // mỗi dòng của bản sao phải có 2 dòng y hệt (cùng dịch vụ, cùng giá) trong hóa đơn gộp
+    const cnt = new Map(); for (const i of kItems) { const k = i.service_id + '|' + i.name + '|' + i.price; cnt.set(k, (cnt.get(k) || 0) + 1); }
+    const need = new Map(); for (const i of dItems) { const k = i.service_id + '|' + i.name + '|' + i.price; need.set(k, (need.get(k) || 0) + 1); }
+    if (![...need].every(([k, n]) => (cnt.get(k) || 0) >= 2 * n)) continue;
+    const drop = new Map(need); const items = [];
+    for (const i of [...kItems].reverse()) { const k = i.service_id + '|' + i.name + '|' + i.price; if (drop.get(k)) { drop.set(k, drop.get(k) - 1); continue; } items.unshift(i); }
+    const tag = ' · gộp ' + (d.code || '') + ': ';
+    let note = String(keep.note || ''); const at = note.indexOf(tag);
+    if (at >= 0) { const nx = note.indexOf(' · gộp ', at + 3); note = note.slice(0, at) + (nx >= 0 ? note.slice(nx) : ''); }
+    db.transaction(() => {
+      L.saveVisit({
+        customer_id: keep.customer_id, date: keep.date, time: keep.time, main_staff_id: keep.main_staff_id, assistant_id: keep.assistant_id,
+        items: items.map((i) => ({ service_id: i.service_id, name: i.name, grp: i.grp, price: i.price, staff_id: i.staff_id, assistant_id: i.assistant_id })),
+        surcharge: Math.max(0, (keep.surcharge || 0) - (d.surcharge || 0)), discount: Math.max(0, (keep.discount || 0) - (d.discount || 0)), discount_reason: keep.discount_reason,
+        tip: Math.max(0, (keep.tip || 0) - (d.tip || 0)), tip_private: keep.tip_private, tip_private_to: keep.tip_private_to,
+        payment_method: keep.payment_method, card_id: keep.card_id, card_paid: keep.card_paid,
+        hair_before: keep.hair_before, wish: keep.wish, formula: keep.formula, result: keep.result, note, next_visit_date: keep.next_visit_date,
+      }, sys, db.prepare('SELECT * FROM visits WHERE id=?').get(keep.id), { imported: true });
+      db.prepare("UPDATE visits SET delete_reason=? WHERE id=?").run('Trùng: bản sao do 2 tài khoản cùng tên (đã tách khỏi lượt ' + (keep.code || keep.id) + ')', d.id);
+    })();
+    fixed++;
+  }
+  return fixed;
+}
+const IFNULL = (x) => x || 0;
 function mergeSameVisits() {
+  const isSame = samePersonStaff();
   const vs = db.prepare(`SELECT v.*, c.name cname FROM visits v JOIN customers c ON c.id=v.customer_id
     WHERE v.status='done' AND v.import_ref LIKE 'SO:%' AND IFNULL(v.manual_edit,0)=0 ORDER BY v.date, v.time, v.id`).all();
   const byDate = new Map();
@@ -211,7 +259,7 @@ function mergeSameVisits() {
       if (used.has(a.id)) continue;
       const grp = [a];
       for (const b of list) {
-        if (b.id === a.id || used.has(b.id) || grp.some((g) => g.main_staff_id === b.main_staff_id)) continue;
+        if (b.id === a.id || used.has(b.id) || grp.some((g) => isSame(g.main_staff_id, b.main_staff_id))) continue;
         const ta = mins(a.time), tb = mins(b.time);
         if (ta == null || tb == null || Math.abs(ta - tb) > 60) continue;
         if (grp.every((g) => samePerson(g, b, g.time === b.time))) grp.push(b);
@@ -1057,6 +1105,7 @@ async function importWorkbook(buffer, opts, user) {
   } catch (e) {
     if (e !== ROLLBACK) throw e;
   }
+  if (!opts.dryRun) try { summary.clone_unmerged = unmergeCloneDupes(); } catch (e) { summary.warnings.push('Tách lượt gộp nhầm: ' + e.message); }
   if (!opts.dryRun) try { summary.clone_staff_fixed = dedupeCloneStaff(); } catch (e) { summary.warnings.push('Dọn lịch trùng do 2 tài khoản cùng tên: ' + e.message); }
   if (!opts.dryRun) try { summary.visits_deduped = dedupeVisits(); } catch (e) { summary.warnings.push('Dọn lượt trùng: ' + e.message); }
   if (!opts.dryRun) try { summary.visits_merged = mergeSameVisits(); } catch (e) { summary.warnings.push('Gộp lượt cùng khách: ' + e.message); }
@@ -1067,7 +1116,7 @@ async function importWorkbook(buffer, opts, user) {
   return { dry_run: opts.dryRun, summary };
 }
 
-const VERSION = 4; // 2: không ghép "E Quang" vào "Quang Anh"; 4: 2 tài khoản trùng tên
+const VERSION = 5; // 2: không ghép "E Quang" vào "Quang Anh"; 4: 2 tài khoản trùng tên
 const nameKey = (s) => stripAccents(String(s || '')).replace(/^(chi|anh|em|c|a|e)\s+/, '').trim();
 // Cặp tài khoản trùng tên/tên khác: [tài khoản gốc, tài khoản thêm sau]
 function staffClones() {
@@ -1109,4 +1158,4 @@ function dedupeCloneStaff() {
   if (n) closeUsedGifts();
   return n;
 }
-module.exports = { VERSION, nameKey, staffClones, dedupeCloneStaff, dedupeVisits, closeUsedGifts, mergeSamePhone, mergeSameVisits, mergeOrphanCustomers, dedupeAppointments, apptKey, importWorkbook, asDate, asTime };
+module.exports = { VERSION, nameKey, staffClones, dedupeCloneStaff, unmergeCloneDupes, dedupeVisits, closeUsedGifts, mergeSamePhone, mergeSameVisits, mergeOrphanCustomers, dedupeAppointments, apptKey, importWorkbook, asDate, asTime };

@@ -155,7 +155,7 @@ app.post('/api/users/:id/merge', OWNER, (req, res) => {
   if (from.id === to.id) throw bad('Chọn tài khoản khác');
   if (from.role === 'owner' || from.id === req.user.id) throw bad('Không chuyển được tài khoản Lãnh đạo');
   // Bỏ trước lịch/lượt bị sổ nhân đôi giữa 2 tài khoản trùng tên, rồi mới chuyển
-  try { require('./importer').dedupeCloneStaff(); } catch (e) { console.error(e.message); }
+  try { require('./importer').unmergeCloneDupes(); require('./importer').dedupeCloneStaff(); } catch (e) { console.error(e.message); }
   let moved;
   db.transaction(() => {
     moved = mergeUser(from.id, to.id);
@@ -167,6 +167,7 @@ app.post('/api/users/:id/merge', OWNER, (req, res) => {
       .run(from.full_name + ' (đã xóa)', to.id, 'da_xoa_' + from.id + '_' + from.username, from.id);
     db.prepare('UPDATE users SET aliases=? WHERE id=?').run(aliases, to.id);
   })();
+  try { const I = require('./importer'); I.dedupeVisits(); I.dedupeAppointments(); I.closeUsedGifts(); } catch (e) { console.error(e.message); }
   audit(req.user.id, 'merge_user', 'user', from.id, { to: to.id, from_name: from.full_name, to_username: to.username, moved });
   res.json({ ok: true, moved, name: from.full_name, username: to.username });
 });
@@ -1027,9 +1028,10 @@ if (require.main === module) {
       WHERE customer_id IS NULL AND guest_phone IS NOT NULL AND EXISTS (SELECT 1 FROM customers c WHERE c.phone=appointments.guest_phone AND c.deleted=0)`).run().changes;
     if (n) console.log(`Đã gắn ${n} lịch hẹn vào khách có sẵn theo SĐT`);
   } catch (e) { console.error('Gắn lịch theo SĐT lỗi:', e.message); }
+  try { const n = require('./importer').unmergeCloneDupes(); if (n) console.log(`Đã tách ${n} lượt bị gộp nhầm (bản sao do 2 tài khoản cùng tên)`); } catch (e) { console.error('Tách lượt gộp nhầm lỗi:', e.message); }
+  try { const n = require('./importer').dedupeCloneStaff(); if (n) console.log(`Đã dọn ${n} lịch/lượt trùng do 2 tài khoản cùng tên`); } catch (e) { console.error('Dọn trùng tài khoản lỗi:', e.message); }
   try { const n = require('./importer').mergeSameVisits(); if (n) console.log(`Đã gộp ${n} lượt cùng khách làm cùng lúc / trùng lượt ghi tay`); } catch (e) { console.error('Gộp lượt lỗi:', e.message); }
   try { const n = require('./importer').closeUsedGifts(); if (n) console.log(`Đã đóng ${n} thẻ tri ân đã dùng 1 lần`); } catch (e) { console.error('Đóng thẻ tri ân lỗi:', e.message); }
-  try { const n = require('./importer').dedupeCloneStaff(); if (n) console.log(`Đã dọn ${n} lịch/lượt trùng do 2 tài khoản cùng tên`); } catch (e) { console.error('Dọn trùng tài khoản lỗi:', e.message); }
   try { const n = require('./importer').dedupeVisits(); if (n) console.log(`Đã dọn ${n} lượt làm trùng do sổ sửa chữ`); } catch (e) { console.error('Dọn lượt trùng lỗi:', e.message); }
   try { const n = require('./importer').dedupeAppointments(); if (n) console.log(`Đã dọn ${n} lịch hẹn trùng`); } catch (e) { console.error('Dọn lịch trùng lỗi:', e.message); }
 }
