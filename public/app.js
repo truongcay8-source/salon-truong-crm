@@ -65,6 +65,37 @@ function openModal(title, html, wide) {
   $('#modal').classList.remove('hidden');
   const f = $('#modalBody input, #modalBody select, #modalBody textarea'); if (f && window.innerWidth > 820) f.focus();
 }
+// Bấm tên khách ở bất kỳ trang nào → khung khách nhanh (không rời trang đang làm)
+async function custQuick(id) {
+  const c = await api('/customers/' + id + '/quick');
+  const ta = c.today_appt;
+  const lastL = c.last.map((v) => `<div class="stat-line"><span>${dmy(v.date)} · ${esc(v.services || '')} <span class="muted">· ${esc(v.staff_name || '')}</span></span><span class="nowrap">${v.total != null ? money(v.total) + ' ' : ''}<button class="btn sm" data-qrc="${v.id}">${esc(v.code)}</button></span></div>`).join('');
+  openModal(c.name + (c.code ? ' · ' + c.code : ''), `
+    <div class="row" style="flex-wrap:wrap;gap:6px;margin-bottom:8px">${c.phone ? `<a class="btn sm" href="tel:${esc(c.phone)}">📞 ${esc(c.phone)}</a>` : ''}<span class="badge">${c.visit_count} lần đến</span>${c.staff_name ? `<span class="badge">Thợ phụ trách: ${esc(c.staff_name)}</span>` : ''}
+      ${c.debt ? `<span class="badge bad">Còn nợ ${money(c.debt)}</span>` : ''}</div>
+    ${ta ? `<div class="card debt-note" style="margin:0 0 8px">📅 Hôm nay ${esc(ta.time || '')} · ${esc(ta.service || '')} · ${esc(ta.staff_name || '')} ${ta.visit_id ? `<span class="badge ok">✓ đã thu ${esc(ta.visit_code)}</span>` : '<span class="badge warn">chưa thu</span>'}</div>` : ''}
+    ${c.next_appt ? `<div class="small">📅 Lịch sắp tới: <b>${dmy(c.next_appt.date)} ${esc(c.next_appt.time || '')}</b> · ${esc(c.next_appt.service || '')} · ${esc(c.next_appt.staff_name || '')}</div>` : ''}
+    ${c.cards.length ? `<div class="small" style="margin-top:6px">${c.cards.map((k) => `${k.gift ? '🎁' : '💳'} <b>${esc(k.name || k.code)}</b> còn <b>${money(k.balance)}</b>`).join(' · ')}</div>` : ''}
+    ${c.formula ? `<div class="small" style="margin-top:6px">🧪 Công thức ${c.formula_at ? dmy(c.formula_at) : ''}: ${esc(c.formula)}</div>` : ''}
+    ${c.notes ? `<div class="small muted" style="margin-top:6px">📝 ${esc(c.notes)}</div>` : ''}
+    ${lastL ? `<h4 style="margin:12px 0 4px">Lần gần nhất</h4>${lastL}` : '<div class="small muted" style="margin-top:8px">Chưa có hóa đơn</div>'}
+    <div class="modal-foot"><button class="btn" id="qcP">👤 Hồ sơ</button><button class="btn" id="qcA">📅 Đặt lịch</button>${ta && ta.visit_id ? '' : '<button class="btn primary" id="qcV">💰 Thanh toán</button>'}</div>`);
+  const after = () => { if (VIEWS[S.page]) VIEWS[S.page]($('#main')); };
+  $$('[data-qrc]').forEach((b) => (b.onclick = () => { closeModal(); showReceipt(Number(b.dataset.qrc)); }));
+  $('#qcP').onclick = () => { closeModal(); go('customer', { id: c.id }); };
+  $('#qcA').onclick = () => { closeModal(); apptForm({ customer_id: c.id, customer_code: c.code, name: c.name }, after); };
+  if ($('#qcV')) $('#qcV').onclick = () => { closeModal(); visitForm(ta ? { customer_id: c.id, customer: c, appointment_id: ta.id, main_staff_id: ta.staff_id, assistant_id: ta.assistant_id || null, service: ta.service, date: S.today, time: ta.time } : { customer_id: c.id, customer: c }, after); };
+}
+document.addEventListener('click', (e) => {
+  const r = e.target.closest && e.target.closest('[data-rcv]');
+  if (r) { e.preventDefault(); e.stopPropagation(); showReceipt(Number(r.dataset.rcv)); return; }
+  const a = e.target.closest && e.target.closest('a[href^="#customer?id="]');
+  if (!a || a.target === '_blank' || e.metaKey || e.ctrlKey || S.page === 'customer' || !S.me) return;
+  const id = Number(new URLSearchParams(a.getAttribute('href').split('?')[1]).get('id'));
+  if (!id) return;
+  e.preventDefault(); e.stopPropagation();
+  custQuick(id).catch((er) => toast(er.message, true));
+}, true);
 function closeModal() { $('#modal').classList.add('hidden'); $('#modalBody').innerHTML = ''; }
 $('#modalClose').onclick = closeModal;
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
@@ -436,7 +467,7 @@ VIEWS.dashboard = async (main) => {
     <div class="kpi"><div class="l">Hoa hồng tháng (tạm tính)</div><div class="v">${money(mineMonth ? mineMonth.total_commission : 0)}</div></div>`;
   const rc = d.reminder_counts;
   main.innerHTML = header(`Chào ${S.me.full_name}`, `Hôm nay ${dmy(d.today)}`,
-    `<button class="btn" data-goto2="attendance">🕘 Chấm công</button><button class="btn" id="qAppt">+ Lịch hẹn</button><button class="btn primary" id="qVisit">+ Ghi lượt làm</button>`) +
+    `<button class="btn" data-goto2="attendance">🕘 Chấm công</button><button class="btn" id="qAppt">+ Lịch hẹn</button><button class="btn primary" id="qVisit">💰 Thanh toán</button>`) +
     `<div class="grid kpis">${kpis}</div>
     <div class="grid two">
       <div class="card"><h3>Lịch hẹn hôm nay (${d.appointments.length})</h3>${apptListCompact(d.appointments)}</div>
@@ -573,7 +604,7 @@ VIEWS.pos = async (main) => {
   const key = (a) => esc(fold([a.name, a.phone, a.staff_name, a.service, a.visit_code].filter(Boolean).join(' ')));
   const late = (a) => { if (date !== S.today || !a.time) return ''; const m = toMin(new Date().toTimeString().slice(0, 5)) - toMin(a.time); return m > 15 ? `<span class="badge warn">trễ ${m} phút</span>` : ''; };
   const card = (a, kind) => `<div class="pos-tile ${kind}" data-k="${key(a)}" data-st="${esc(a.staff_name || '')}">
-    <div class="pos-h"><b>${esc(a.time || '')}</b><span class="pos-n">${esc(a.name || 'Khách lẻ')}</span>${a.gift_left && kind !== 'paid' ? `<span class="badge warn" title="Khách có thẻ tri ân chưa dùng">🎁 ${money(a.gift_left)}</span>` : ''}${kind === 'waiting' ? late(a) : ''}</div>
+    <div class="pos-h"><b>${esc(a.time || '')}</b><span class="pos-n">${a.customer_id ? `<a href="#customer?id=${a.customer_id}">${esc(a.name || 'Khách lẻ')}</a>` : esc(a.name || 'Khách lẻ')}</span>${a.gift_left && kind !== 'paid' ? `<span class="badge warn" title="Khách có thẻ tri ân chưa dùng">🎁 ${money(a.gift_left)}</span>` : ''}${kind === 'waiting' ? late(a) : ''}</div>
     <div class="small muted pos-s">${esc(a.service || '')}${a.service ? ' · ' : ''}${who(a)}</div>
     ${kind === 'waiting' ? `<div class="row"><button class="btn sm" data-in="${a.id}">✓ Khách đến</button><button class="btn sm primary" data-pay="${a.id}">💰 Thanh toán</button></div>` : ''}
     ${kind === 'serving' ? `<div class="row"><button class="btn primary" data-pay="${a.id}">💰 Thanh toán</button><button class="btn sm" data-out="${a.id}" title="Bấm nhầm">↶</button></div>` : ''}
@@ -588,7 +619,7 @@ VIEWS.pos = async (main) => {
       <div class="kpi"><div class="l">Bán thẻ</div><div class="v">${money(T.card_sales)}</div><div class="s">tip ${money(T.tips)}</div></div>
       ${T.unpaid ? `<div class="kpi"><div class="l">Khách chưa trả</div><div class="v" style="color:var(--bad,#c0392b)">${money(T.unpaid)}</div></div>` : ''}</div></div>` : '';
   main.innerHTML = header('🧾 Thu ngân', 'Ai cũng làm thu ngân được: khách đến bấm ✓, làm xong bấm 💰 Thanh toán. Sửa hóa đơn đã lưu vẫn chỉ Lãnh đạo.',
-    `<button class="btn primary" id="walk">+ Khách vãng lai</button><button class="btn" id="close">🔒 Kết ca</button>`) +
+    `<button class="btn primary" id="walk">💰 Khách vãng lai</button><button class="btn" id="close">🔒 Kết ca</button>`) +
     `${isMgr() ? `<div class="card"><div class="row"><input type="date" id="pd" value="${date}" style="width:auto">${date !== S.today ? '<button class="btn sm" id="tdy">Hôm nay</button>' : ''}<span class="small muted">${dmy(date)}</span></div></div>` : ''}
     ${tot}
     ${r.debts && r.debts.length ? `<div class="card"><h3>📝 Khách còn nợ <span class="badge bad">${money(r.debts.reduce((s, d) => s + d.debt, 0))}</span></h3>
@@ -805,7 +836,7 @@ VIEWS.appointments = async (main) => {
       openModal(`${a.time} · ${a.name}`, `<div id="oneAp">${apptList([a])}</div>`);
       bindApptList($('#oneAp'), () => { closeModal(); reload(); }, [a]);
     }));
-    $$('[data-vv]', main).forEach((el) => (el.onclick = () => go('customer', { id: el.dataset.vv })));
+    $$('[data-vv]', main).forEach((el) => (el.onclick = () => custQuick(Number(el.dataset.vv)).catch((er) => toast(er.message))));
     $$('[data-dmv]', main).forEach((a) => (a.onclick = async (e) => { e.preventDefault(); visitForm(await api('/visits/' + a.dataset.dmv), reload); }));
   }
   $('#prev').onclick = () => set({ date: addDays(date, -1) }); $('#next').onclick = () => set({ date: addDays(date, 1) });
@@ -819,7 +850,7 @@ function visitChipLine(v) {
     <div class="small muted">${esc(v.services || '')} · ${esc(staffName(v.main_staff_id))}${v.assistant_id ? ' + ' + esc(staffName(v.assistant_id)) : ''}</div></div>
     <div style="text-align:right">${v.total != null ? `<b>${money(v.total)}</b><br>` : ''}<span class="badge ok">Đã làm</span></div></div>`;
 }
-const evMoney = (a) => a.visit_id && a.visit_total != null ? `<div class="small"><b>✓ ${money(a.visit_total)}</b></div>`
+const evMoney = (a) => a.visit_id && a.v_live ? `<div class="small"><a href="#" data-rcv="${a.visit_id}" title="Xem hóa đơn"><b>✓ ${a.visit_total != null ? money(a.visit_total) : 'Đã thu'}</b> ${esc(a.visit_code || '')}</a></div>`
   : !['cancelled', 'noshow'].includes(a.status) && estTotal(a.service) ? `<div class="small">~${money(estTotal(a.service))}</div>` : '';
 // Tổng tiền trong ngày: đã thu (lượt đã lưu) + còn dự kiến (lịch chưa thu)
 function daySum(appts, visits, M) {
@@ -1330,7 +1361,7 @@ VIEWS.customer = async (main) => {
   const tab = S.params.tab || 'visits';
   const activeCards = c.cards.filter((x) => x.status === 'active');
   main.innerHTML = header(c.name, `${esc(c.code)} · ${telLinks(c.phone)}${c.relation ? ' · ' + esc(c.relation) : ''}`,
-    `<button class="btn" id="eC">Sửa</button><button class="btn" id="aC">Đặt lịch</button><button class="btn" id="sC">Bán thẻ</button><button class="btn primary" id="vC">+ Ghi lượt làm</button>`) +
+    `<button class="btn" id="eC">Sửa</button><button class="btn" id="aC">Đặt lịch</button><button class="btn" id="sC">Bán thẻ</button><button class="btn primary" id="vC">💰 Thanh toán</button>`) +
     `<div class="grid two"><div class="card">
       <div class="stat-line"><span class="muted">Thợ phụ trách</span><b>${c.staff_name ? esc(c.staff_name) : '<span class="badge warn">chưa giao</span>'}</b></div>
       <div class="stat-line"><span class="muted">Số lượt</span><b>${c.stats.visits}</b></div>
@@ -1496,7 +1527,7 @@ async function visitForm(v = {}, after) {
     if (!items.length) items = [{ service_id: '', price: '' }];
   }
   const custSel = v.customer || (v.customer_id ? { id: v.customer_id, code: v.customer_code || '', name: v.customer_name || '' } : null);
-  openModal(isEdit ? `Sửa lượt ${v.code}` : 'Ghi lượt làm / thu tiền', `<form id="vf"><div class="form-grid">
+  openModal(isEdit ? `Sửa hóa đơn ${v.code}` : '💰 Thanh toán', `<form id="vf"><div class="form-grid">
     <div class="full"><label>Khách hàng *</label>${customerPicker('customer_id', custSel)}</div>
     <div><label>Ngày</label><input type="date" name="date" value="${v.date || S.today}" ${!isMgr() ? 'readonly' : ''}></div>
     <div><label>Giờ</label><input type="time" name="time" value="${v.time || new Date().toTimeString().slice(0, 5)}"></div>
@@ -1821,7 +1852,7 @@ VIEWS.visits = async (main) => {
   const sum = rows.filter((r) => !r.masked).reduce((a, r) => ({ total: a.total + r.total, cash: a.cash + r.cash_paid, card: a.card + r.card_paid, tip: a.tip + r.tip }), { total: 0, cash: 0, card: 0, tip: 0 });
   const mStart = S.today.slice(0, 8) + '01', y = addDays(S.today, -1), w = addDays(S.today, -6);
   const rng = [['Hôm nay', S.today, S.today], ['Hôm qua', y, y], ['7 ngày', w, S.today], ['Tháng này', mStart, S.today]];
-  main.innerHTML = header('Hóa đơn bán hàng', 'Mỗi hóa đơn 1 dòng · bấm Hóa đơn để xem' + (isOwner() ? ', Sửa để chỉnh tiền / dịch vụ / thợ' : ''), `${isOwner() ? '<button class="btn" id="xlv">📥 Xuất Excel</button><button class="btn" id="delv">🗑 Đã xóa</button>' : ''}<button class="btn primary" id="nv">+ Ghi lượt làm</button>`) +
+  main.innerHTML = header('Hóa đơn bán hàng', 'Mỗi hóa đơn 1 dòng · bấm Hóa đơn để xem' + (isOwner() ? ', Sửa để chỉnh tiền / dịch vụ / thợ' : ''), `${isOwner() ? '<button class="btn" id="xlv">📥 Xuất Excel</button><button class="btn" id="delv">🗑 Đã xóa</button>' : ''}<button class="btn primary" id="nv">💰 Thanh toán</button>`) +
     `<div class="card"><div class="chips" style="margin-bottom:8px">${rng.map(([l, a, b]) => `<button class="chip ${from === a && to === b ? 'on' : ''}" data-rng="${a}|${b}">${l}</button>`).join('')}</div>
       <div class="row" style="flex-wrap:wrap;gap:6px"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="t" value="${to}" style="width:auto">
       <select id="st" style="width:auto">${staffOptions(Number(staffId), 'Tất cả thợ')}</select><input id="vq" placeholder="🔍 Tìm khách, mã HĐ, dịch vụ…" value="${esc(S.params.q || '')}" style="flex:1;min-width:180px"></div></div>
@@ -1860,7 +1891,7 @@ async function salesLines(from, to, staffId, grp, after) {
   openModal(`${esc(staffName(staffId))} – ${grp ? esc(grp) : 'tất cả dịch vụ'} (${dmy(from).slice(0, 5)}–${dmy(to).slice(0, 5)})`,
     `<div class="small muted" style="margin-bottom:8px">Dòng nào <b>không phải ${esc(staffName(staffId))} làm</b>: bấm <b>Sửa</b> → ở dòng dịch vụ đó chọn <b>Chính: tên người làm</b> → Lưu. Doanh số, hoa hồng chuyển sang đúng người. Ô "Sổ ghi" là chữ trong ô sổ đặt lịch để đối chiếu.</div>
     <div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Khách</th><th>Dịch vụ</th><th>Vai trò</th><th class="num">Tiền</th><th>Sổ ghi</th><th></th></tr></thead><tbody>
-    ${r.lines.map((l) => `<tr><td class="nowrap">${dmy(l.date).slice(0, 5)} ${esc(l.time || '')}</td><td>${esc(l.customer_name || '')}</td><td>${esc(l.name)}<div class="small muted">${esc(l.grp)}</div></td>
+    ${r.lines.map((l) => `<tr><td class="nowrap">${dmy(l.date).slice(0, 5)} ${esc(l.time || '')}</td><td>${l.customer_id ? `<a href="#customer?id=${l.customer_id}">${esc(l.customer_name || '')}</a>` : esc(l.customer_name || '')}</td><td>${esc(l.name)}<div class="small muted">${esc(l.grp)}</div></td>
       <td class="small">${esc(l.role)}</td><td class="num">${money(l.net)}</td><td class="small muted">${esc(l.note || '')}</td>
       <td class="nowrap"><button class="btn sm" data-lrc="${l.visit_id}">Hóa đơn</button>${isOwner() ? `<button class="btn sm" data-lev="${l.visit_id}">Sửa</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">Không có dòng nào</td></tr>'}
     </tbody></table></div><div class="stat-line" style="margin-top:8px"><span>Tổng (không gồm dòng làm phụ)</span><b>${money(r.total)}</b></div>`);
