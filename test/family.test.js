@@ -163,7 +163,7 @@ test('từng dòng có người phụ riêng: hoa hồng phụ tính theo dòng'
   assert.equal((await c.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
   db.prepare('UPDATE users SET commission_enabled=1 WHERE id IN (2,3,4,5)').run();
   const rate = Number(db.prepare("SELECT value FROM settings WHERE key='assistant_rate'").get().value);
-  const svc = db.prepare('SELECT id FROM services WHERE active=1 ORDER BY id LIMIT 1').get().id;
+  const svc = db.prepare("SELECT id FROM services WHERE active=1 AND grp<>'Hóa chất' AND commission_rate>=? ORDER BY id LIMIT 1").get(rate).id;
   const cid = (await c.post('/customers', { name: 'Khách phụ dòng', phone: '0912777666' })).data.id;
   const r = await c.post('/visits', { customer_id: cid, date: '2026-11-21', time: '13:30', main_staff_id: 2, assistant_id: 4, payment_method: 'Tiền mặt',
     items: [{ service_id: svc, price: 600000 }, { service_id: svc, price: 1000000, staff_id: 3, assistant_id: 5 }, { service_id: svc, price: 400000, assistant_id: 0 }] });
@@ -861,4 +861,22 @@ test('lịch hẹn ghi 2 lần (cả bản Hoàn thành / Hủy, sau khi gộp t
   const left = db.prepare("SELECT id, note FROM appointments WHERE date='2026-11-25' AND time='10:30' AND staff_id=?").all(tr);
   assert.equal(left.length, 2, 'còn 1 lịch Linh + 1 khách khác');
   assert.ok(left.some((a) => a.id === keep));
+});
+
+test('hoa hồng người phụ trích từ hoa hồng dòng: nhuộm 15% có phụ = 10% + 5%, tự làm = 15%; cắt tự phụ = thợ nhận cả 3%', async () => {
+  const c = client(); assert.equal((await c.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  db.prepare('UPDATE users SET commission_enabled=1 WHERE id IN (2,3,4,5)').run();
+  const nh = db.prepare("SELECT id, commission_rate r FROM services WHERE grp='Hóa chất' AND commission_rate=0.15 AND active=1 LIMIT 1").get();
+  const cut = db.prepare("SELECT id, commission_rate r FROM services WHERE grp='Cắt' AND active=1 LIMIT 1").get();
+  const cid = db.prepare("INSERT INTO customers(code,name) VALUES ('THH1','Khách HH')").run().lastInsertRowid;
+  const base = { customer_id: cid, date: '2026-11-20', payment_method: 'Tiền mặt' };
+  let r = await c.post('/visits', { ...base, time: '09:00', main_staff_id: 3, assistant_id: 5, items: [{ service_id: nh.id, price: 1000000 }] });
+  assert.equal(r.data.main_commission, 100000); assert.equal(r.data.assistant_commission, 50000);
+  r = await c.post('/visits', { ...base, date: '2026-11-19', time: '12:00', main_staff_id: 3, items: [{ service_id: nh.id, price: 1000000 }] });
+  assert.equal(r.data.main_commission, 150000); assert.equal(r.data.assistant_commission, 0);
+  r = await c.post('/visits', { ...base, time: '15:00', main_staff_id: 3, items: [{ service_id: cut.id, price: 500000 }] });
+  assert.equal(r.data.main_commission, Math.round(500000 * cut.r));
+  r = await c.post('/visits', { ...base, time: '17:00', main_staff_id: 3, assistant_id: 5, items: [{ service_id: cut.id, price: 500000 }] });
+  assert.equal(r.data.main_commission + r.data.assistant_commission, Math.round(500000 * cut.r), 'tổng không vượt hoa hồng dòng');
+  assert.ok(require('../server/logic').recalcCommissions('2026-11-01') > 0);
 });
