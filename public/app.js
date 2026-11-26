@@ -113,25 +113,39 @@ function renderChangePw(forced) {
 async function logout() { await api('/logout', { method: 'POST' }).catch(() => {}); S.me = null; renderLogin(); }
 
 // ---------- Khung ứng dụng ----------
+// Menu chia nhóm (Vinh 26/11: báo cáo ra báo cáo, kho ra kho, nhân viên ra nhân viên, khách ra khách)
 const PAGES = [
-  ['dashboard', 'Tổng quan', '🏠', () => true],
-  ['appointments', 'Lịch hẹn', '📅', () => true],
-  ['pos', 'Thu ngân', '🧾', () => true],
-  ['chat', 'Chat nội bộ', '💬', () => true],
-  ['customers', 'Khách hàng', '👤', () => true],
-  ['expenses', 'Chi & quỹ tiền mặt', '💸', () => true],
-  ['reminders', 'Nhắc nhở', '🔔', () => true],
-  ['cards', 'Thẻ trả trước', '💳', () => true],
-  ['sales', 'Doanh số', '📊', () => true],
-  ['tips', 'Chia tip', '💵', () => true],
-  ['payroll', 'Bảng lương', '💰', () => isOwner()],
-  ['finance', 'Báo cáo tài chính', '📈', () => isOwner()],
-  ['attendance', 'Chấm công', '🕘', () => true],
-  ['offs', 'Lịch off', '🌴', () => true],
-  ['stock', 'Kho hàng', '🧪', () => isMgr() || S.me.stock_view],
-  ['excel', 'Nhập / Xuất Excel', '📥', isMgr],
-  ['settings', 'Cài đặt', '⚙️', () => true],
+  ['dashboard', 'Tổng quan', '🏠', () => true, 'Hằng ngày'],
+  ['appointments', 'Lịch hẹn', '📅', () => true, 'Hằng ngày'],
+  ['pos', 'Thu ngân', '🧾', () => true, 'Hằng ngày'],
+  ['chat', 'Chat nội bộ', '💬', () => true, 'Hằng ngày'],
+  ['reminders', 'Nhắc nhở', '🔔', () => true, 'Hằng ngày'],
+  ['visits', 'Hóa đơn bán hàng', '📄', () => true, 'Báo cáo'],
+  ['sales', 'Doanh số', '📊', () => true, 'Báo cáo'],
+  ['finance', 'Báo cáo tài chính', '📈', () => isOwner(), 'Báo cáo'],
+  ['customers', 'Khách hàng', '👤', () => true, 'Khách hàng'],
+  ['cards', 'Thẻ trả trước', '💳', () => true, 'Khách hàng'],
+  ['attendance', 'Chấm công', '🕘', () => true, 'Nhân viên'],
+  ['offs', 'Lịch off', '🌴', () => true, 'Nhân viên'],
+  ['tips', 'Chia tip', '💵', () => true, 'Nhân viên'],
+  ['payroll', 'Bảng lương', '💰', () => isOwner(), 'Nhân viên'],
+  ['stock', 'Kho hàng', '🧪', () => isMgr() || S.me.stock_view, 'Kho & chi tiêu'],
+  ['expenses', 'Chi & quỹ tiền mặt', '💸', () => true, 'Kho & chi tiêu'],
+  ['excel', 'Nhập / Xuất Excel', '📥', isMgr, 'Hệ thống'],
+  ['settings', 'Cài đặt', '⚙️', () => true, 'Hệ thống'],
 ];
+const NAV_GROUPS = ['Hằng ngày', 'Báo cáo', 'Khách hàng', 'Nhân viên', 'Kho & chi tiêu', 'Hệ thống'];
+const navOpen = () => { try { return JSON.parse(localStorage.getItem('navOpen') || 'null') || ['Hằng ngày']; } catch { return ['Hằng ngày']; } };
+function navHtml(pages, attr = 'data-page') {
+  const open = navOpen();
+  return NAV_GROUPS.map((g) => { const ps = pages.filter((p) => p[4] === g); if (!ps.length) return '';
+    return `<div class="nav-grp ${open.includes(g) ? 'open' : ''}" data-grp="${g}"><button class="nav-grp-h" data-grph="${g}">${g}<span class="chev">▾</span></button><div class="nav-grp-b">
+      ${ps.map((p) => `<button class="nav-btn" ${attr}="${p[0]}"><span>${p[2]}</span>${p[1]}${p[0] === 'reminders' ? '<span class="badge count hidden" data-rc></span>' : ''}${p[0] === 'chat' ? '<span class="badge count hidden" data-cc></span>' : ''}</button>`).join('')}</div></div>`; }).join('');
+}
+function navToggle(root) {
+  $$('[data-grph]', root).forEach((h) => (h.onclick = () => { const box = h.parentElement; box.classList.toggle('open');
+    try { localStorage.setItem('navOpen', JSON.stringify($$('.nav-grp.open', root).map((x) => x.dataset.grp))); } catch { /* bỏ qua */ } }));
+}
 const MOBILE = ['dashboard', 'appointments', 'pos', 'chat', 'customers', 'more'];
 let reminderCount = 0;
 
@@ -150,7 +164,7 @@ function shell() {
   $('#root').innerHTML = `<div class="app">
     <aside class="side"><div class="brand"><div class="logo">N</div><div><b>${esc(S.settings.salon_name)}</b><div class="small muted">CRM</div></div></div>
       <button class="search-btn" data-search>🔍 Tìm kiếm… <kbd>/</kbd></button>
-      ${pages.map((p) => `<button class="nav-btn" data-page="${p[0]}"><span>${p[2]}</span>${p[1]}${p[0] === 'reminders' ? '<span class="badge count hidden" data-rc></span>' : ''}${p[0] === 'chat' ? '<span class="badge count hidden" data-cc></span>' : ''}</button>`).join('')}
+      <div class="nav-groups">${navHtml(pages)}</div>
       <div class="me"><b>${esc(S.me.full_name)}</b> · ${ROLE[S.me.role]}<div class="row" style="margin-top:8px"><button class="btn sm" id="pwBtn">Đổi mật khẩu</button><button class="btn sm" id="outBtn">Đăng xuất</button></div></div>
     </aside>
     <main class="main" id="main"></main>
@@ -161,6 +175,7 @@ function shell() {
       return `<button data-page="${k}"><span class="ico">${p[2]}</span>${short}${k === 'reminders' ? '<span class="badge count hidden" data-rc></span>' : ''}${k === 'chat' ? '<span class="badge count hidden" data-cc></span>' : ''}</button>`;
     }).join('')}</nav><button class="search-fab" data-search aria-label="Tìm kiếm">🔍</button></div>`;
   $$('[data-page]').forEach((b) => (b.onclick = () => go(b.dataset.page)));
+  navToggle($('.side'));
   $$('[data-search]').forEach((b) => (b.onclick = searchBox));
   $('#pwBtn').onclick = () => renderChangePw(false);
   $('#outBtn').onclick = logout;
@@ -307,6 +322,7 @@ function route() {
   const [page, q] = (location.hash.slice(1) || 'dashboard').split('?');
   S.page = page; S.params = Object.fromEntries(new URLSearchParams(q || ''));
   $$('[data-page]').forEach((b) => b.classList.toggle('active', b.dataset.page === page || (page === 'customer' && b.dataset.page === 'customers')));
+  { const a = $('.side .nav-btn.active'); if (a) a.closest('.nav-grp').classList.add('open'); }
   const main = $('#main');
   main.innerHTML = '<div class="empty">Đang tải…</div>';
   window.scrollTo(0, 0);
@@ -1787,13 +1803,18 @@ async function visitForm(v = {}, after) {
 VIEWS.visits = async (main) => {
   const from = S.params.from || S.today, to = S.params.to || from;
   const staffId = S.params.staff || '';
-  const rows = await api(`/visits?from=${from}&to=${to}${staffId ? '&staff_id=' + staffId : ''}`);
+  const all = await api(`/visits?from=${from}&to=${to}${staffId ? '&staff_id=' + staffId : ''}`);
+  const q = fold(S.params.q || '');
+  const rows = q ? all.filter((v) => fold([v.code, v.customer_name, v.customer_phone, v.main_staff_name, v.payment_method, ...v.items.map((i) => i.name)].filter(Boolean).join(' ')).includes(q)) : all;
   const sum = rows.filter((r) => !r.masked).reduce((a, r) => ({ total: a.total + r.total, cash: a.cash + r.cash_paid, card: a.card + r.card_paid, tip: a.tip + r.tip }), { total: 0, cash: 0, card: 0, tip: 0 });
-  main.innerHTML = header('Lượt làm', 'Mỗi lượt khách = 1 dòng, thay sổ thu tiền', `${isOwner() ? '<button class="btn" id="delv">🗑 Lượt đã xóa</button>' : ''}<button class="btn primary" id="nv">+ Ghi lượt làm</button>`) +
-    `<div class="card"><div class="row"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="t" value="${to}" style="width:auto">
-      <button class="btn sm" id="tod">Hôm nay</button><span class="spacer"></span><select id="st" style="width:auto">${staffOptions(Number(staffId), 'Tất cả thợ')}</select></div></div>
+  const mStart = S.today.slice(0, 8) + '01', y = addDays(S.today, -1), w = addDays(S.today, -6);
+  const rng = [['Hôm nay', S.today, S.today], ['Hôm qua', y, y], ['7 ngày', w, S.today], ['Tháng này', mStart, S.today]];
+  main.innerHTML = header('Hóa đơn bán hàng', 'Mỗi hóa đơn 1 dòng · bấm Hóa đơn để xem' + (isOwner() ? ', Sửa để chỉnh tiền / dịch vụ / thợ' : ''), `${isOwner() ? '<button class="btn" id="delv">🗑 Đã xóa</button>' : ''}<button class="btn primary" id="nv">+ Ghi lượt làm</button>`) +
+    `<div class="card"><div class="chips" style="margin-bottom:8px">${rng.map(([l, a, b]) => `<button class="chip ${from === a && to === b ? 'on' : ''}" data-rng="${a}|${b}">${l}</button>`).join('')}</div>
+      <div class="row" style="flex-wrap:wrap;gap:6px"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="t" value="${to}" style="width:auto">
+      <select id="st" style="width:auto">${staffOptions(Number(staffId), 'Tất cả thợ')}</select><input id="vq" placeholder="🔍 Tìm khách, mã HĐ, dịch vụ…" value="${esc(S.params.q || '')}" style="flex:1;min-width:180px"></div></div>
     <div class="card"><div class="table-wrap"><table><thead><tr><th>Ngày</th><th>Khách</th><th>Dịch vụ</th><th>Thợ</th><th class="num">Doanh số</th><th class="num">Trừ thẻ</th><th class="num">Thu</th><th>TT</th><th class="num">Tip</th><th></th></tr></thead>
-    <tbody>${rows.map((v) => `<tr><td>${dmy(v.date).slice(0, 5)} ${esc(v.time || '')}</td><td><a href="#customer?id=${v.customer_id}">${esc(v.customer_name)}</a></td>
+    <tbody>${rows.map((v) => `<tr><td class="nowrap">${dmy(v.date).slice(0, 5)} ${esc(v.time || '')}<div class="small muted">${esc(v.code || '')}</div></td><td><a href="#customer?id=${v.customer_id}">${esc(v.customer_name)}</a></td>
       <td>${v.items.map((i) => esc(i.name)).join(' + ')}</td><td>${esc(v.main_staff_name)}${v.assistant_name ? ' <span class="muted small">+' + esc(v.assistant_name) + '</span>' : ''}</td>
       <td class="num">${money(v.total)}</td><td class="num">${v.card_paid ? money(v.card_paid) : ''}</td><td class="num">${money(v.cash_paid)}</td><td class="small">${esc(v.payment_method || '')}</td><td class="num">${v.tip ? money(v.tip) : ''}${v.tip_private ? `<div class="small muted">riêng ${money(v.tip_private)}</div>` : ''}</td>
       <td class="nowrap">${v.masked ? '' : `<button class="btn sm" data-rc-id="${v.id}">Hóa đơn</button>`}${v.can_edit ? `<button class="btn sm" data-ev="${v.id}">${isOwner() ? 'Sửa' : 'Ghi chú'}</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="empty">Chưa có lượt nào</td></tr>'}</tbody>
@@ -1802,11 +1823,12 @@ VIEWS.visits = async (main) => {
   const set = (p) => go('visits', { from, to, ...(staffId ? { staff: staffId } : {}), ...p });
   $('#f').onchange = (e) => set({ from: e.target.value, to: e.target.value > to ? e.target.value : to });
   $('#t').onchange = (e) => set({ to: e.target.value });
-  $('#tod').onclick = () => set({ from: S.today, to: S.today });
+  $$('[data-rng]', main).forEach((b) => (b.onclick = () => { const [a, c] = b.dataset.rng.split('|'); set({ from: a, to: c }); }));
+  $('#vq').onchange = (e) => set({ q: e.target.value.trim() });
   $('#st').onchange = (e) => go('visits', { from, to, ...(e.target.value ? { staff: e.target.value } : {}) });
   $('#nv').onclick = () => visitForm({}, () => VIEWS.visits(main));
   if ($('#delv')) $('#delv').onclick = () => deletedVisits(from, to, () => VIEWS.visits(main));
-  $$('[data-ev]', main).forEach((b) => (b.onclick = () => visitForm(rows.find((r) => r.id === Number(b.dataset.ev)), () => VIEWS.visits(main))));
+  $$('[data-ev]', main).forEach((b) => (b.onclick = () => guard(b, async () => visitForm(await api('/visits/' + b.dataset.ev), () => VIEWS.visits(main)))));
   $$('[data-rc-id]', main).forEach((b) => (b.onclick = () => showReceipt(b.dataset.rcId)));
 };
 
@@ -3192,7 +3214,7 @@ async function attSetup(box, reload) {
 }
 
 VIEWS.more = async (main) => {
-  main.innerHTML = header('Thêm') + `<div class="card">${PAGES.filter((p) => p[3]() && !MOBILE.includes(p[0])).map((p) => `<button class="nav-btn" data-goto="${p[0]}"><span>${p[2]}</span>${p[1]}</button>`).join('')}
+  main.innerHTML = header('Thêm') + `<div class="card nav-groups more-nav">${NAV_GROUPS.map((g) => { const ps = PAGES.filter((p) => p[3]() && p[4] === g && !MOBILE.includes(p[0])); return ps.length ? `<div class="nav-grp-h static">${g}</div>${ps.map((p) => `<button class="nav-btn" data-goto="${p[0]}"><span>${p[2]}</span>${p[1]}</button>`).join('')}` : ''; }).join('')}
     <button class="nav-btn" id="mpw"><span>🔑</span>Đổi mật khẩu</button><button class="nav-btn" id="mlo"><span>🚪</span>Đăng xuất (${esc(S.me.full_name)})</button></div>`;
   $$('[data-goto]', main).forEach((b) => (b.onclick = () => go(b.dataset.goto)));
   $('#mpw').onclick = () => renderChangePw(false); $('#mlo').onclick = logout;

@@ -343,3 +343,11 @@ table.fin tr.big td{font-size:1.1em}
 .warn-text { color: var(--warn); }
 .year-tbl th, .year-tbl td { white-space: nowrap; }
 .year-tbl td:first-child { position: sticky; left: 0; background: var(--surface); white-space: normal; min-width: 150px; }
+
+/* Menu chia nhóm, gập được */
+.nav-grp-h { display: flex; align-items: center; width: 100%; border: 0; background: none; cursor: pointer; padding: 10px 10px 4px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.nav-grp-h .chev { margin-left: auto; transition: transform .15s; font-size: 10px; }
+.nav-grp:not(.open) .nav-grp-h .chev { transform: rotate(-90deg); }
+.nav-grp:not(.open) .nav-grp-b { display: none; }
+.nav-grp-h.static { cursor: default; padding-top: 12px; }
+.nav-grp + .nav-grp { border-top: 1px solid var(--line); margin-top: 2px; }
