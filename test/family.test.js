@@ -829,3 +829,20 @@ test('thu ngân: sổ ô hồng nhưng đã trừ thẻ hết → Đã thu; hóa
   assert.ok(r.serving.some((a) => a.id === aid && !a.visit_id), 'hóa đơn xóa → Đang phục vụ');
   assert.ok(!r.unpaid.some((a) => a.id === aid));
 });
+
+test('thanh toán từ hồ sơ khách tự gắn vào lịch hẹn cùng ngày; khung khách nhanh có thẻ, lịch hôm nay', async () => {
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const cid = db.prepare("INSERT INTO customers(code,name) VALUES ('TLK1','Khách nối lịch')").run().lastInsertRowid;
+  const tr = db.prepare("SELECT id FROM users WHERE username='truong'").get().id;
+  const cut = db.prepare("SELECT id FROM services WHERE grp='Cắt' AND active=1 ORDER BY id LIMIT 1").get();
+  const day = (await o.get('/me')).data.today;
+  const aid = db.prepare("INSERT INTO appointments(customer_id,date,time,staff_id,status) VALUES (?,?,'15:00',?,'booked')").run(cid, day, tr).lastInsertRowid;
+  let q = (await o.get('/customers/' + cid + '/quick')).data;
+  assert.equal(q.today_appt.id, aid); assert.ok(!q.today_appt.visit_id);
+  const v = await o.post('/visits', { customer_id: cid, date: day, time: '15:10', main_staff_id: tr, payment_method: 'Tiền mặt', items: [{ service_id: cut.id, price: 200000 }] });
+  assert.equal(v.status, 200);
+  const a = db.prepare('SELECT status, visit_id FROM appointments WHERE id=?').get(aid);
+  assert.equal(a.visit_id, v.data.id); assert.equal(a.status, 'done');
+  q = (await o.get('/customers/' + cid + '/quick')).data;
+  assert.equal(q.today_appt.visit_id, v.data.id); assert.equal(q.visit_count, 1); assert.equal(q.last[0].id, v.data.id);
+});

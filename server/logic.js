@@ -277,6 +277,12 @@ function saveVisit(input, user, existing, opts = {}) {
       closeGiftAfterUse(cardId, id, user.id);
     }
     if (!isNew && existing.card_id && existing.card_id !== cardId) reopenGift(existing.card_id);
+    // Thu tiền ở trang nào cũng tự gắn vào lịch hẹn cùng ngày của khách (chưa có hóa đơn) → lịch không còn treo "chờ" để thu lần 2
+    if (isNew && !input.appointment_id && !opts.imported && customerId) {
+      const ap = db.prepare(`SELECT a.id FROM appointments a LEFT JOIN visits v ON v.id=a.visit_id AND v.status='done'
+        WHERE a.customer_id=? AND a.date=? AND a.status IN ('booked','arrived','done') AND v.id IS NULL ORDER BY a.time, a.id LIMIT 1`).get(customerId, date);
+      if (ap) input.appointment_id = ap.id;
+    }
     if (input.appointment_id) {
       db.prepare("UPDATE appointments SET status='done', visit_id=?, customer_id=?, guest_name=NULL, guest_phone=NULL WHERE id=?").run(id, customerId, int(input.appointment_id));
     }

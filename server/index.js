@@ -350,6 +350,25 @@ app.get('/api/customers/:id', (req, res) => {
   c.stats = { visits: visits.length, spend: req.user.role === 'staff' ? null : visits.reduce((s, v) => s + (v.total || 0), 0), last_visit: visits[0] ? visits[0].date : null };
   res.json(c);
 });
+// Khung khách nhanh: đủ để thu ngân / lễ tân quyết định ngay (không tải cả lịch sử)
+app.get('/api/customers/:id/quick', (req, res) => {
+  const id = int(req.params.id);
+  const c = db.prepare(`SELECT c.id, c.code, c.name, c.phone, c.formula, c.formula_at, c.notes, s.full_name staff_name FROM customers c LEFT JOIN users s ON s.id=c.staff_id WHERE c.id=? AND c.deleted=0`).get(id);
+  if (!c) throw new HttpError(404, 'Không tìm thấy khách');
+  const last = db.prepare(`SELECT v.id, v.date, v.code, v.total, v.main_staff_id, u.full_name staff_name, (SELECT GROUP_CONCAT(name, ' + ') FROM visit_items WHERE visit_id=v.id) services
+    FROM visits v LEFT JOIN users u ON u.id=v.main_staff_id WHERE v.customer_id=? AND v.status='done' ORDER BY v.date DESC, v.id DESC LIMIT 3`).all(id);
+  if (req.user.role === 'staff') for (const v of last) if (v.main_staff_id !== req.user.id) v.total = null;
+  c.last = last;
+  c.visit_count = db.prepare("SELECT COUNT(*) n FROM visits WHERE customer_id=? AND status='done'").get(id).n;
+  c.cards = db.prepare("SELECT * FROM cards WHERE customer_id=? AND status='active' ORDER BY id DESC").all(id).map(L.cardRow)
+    .filter((x) => x.balance > 0).map((x) => ({ id: x.id, code: x.code, name: x.name, balance: x.balance, gift: x.sale_type === 'gift', expires_at: x.expires_at }));
+  c.debt = db.prepare("SELECT COALESCE(SUM(debt),0) s FROM visits WHERE customer_id=? AND status='done' AND debt>0 AND debt_paid_at IS NULL").get(id).s;
+  c.today_appt = db.prepare(`SELECT a.id, a.time, a.service, a.staff_id, a.assistant_id, a.status, u.full_name staff_name, v.id visit_id, v.code visit_code FROM appointments a LEFT JOIN users u ON u.id=a.staff_id
+    LEFT JOIN visits v ON v.id=a.visit_id AND v.status='done' WHERE a.customer_id=? AND a.date=? AND a.status IN ('booked','arrived','done') ORDER BY a.time LIMIT 1`).get(id, today()) || null;
+  c.next_appt = db.prepare(`SELECT a.date, a.time, a.service, u.full_name staff_name FROM appointments a LEFT JOIN users u ON u.id=a.staff_id
+    WHERE a.customer_id=? AND a.date>? AND a.status IN ('booked','arrived') ORDER BY a.date, a.time LIMIT 1`).get(id, today()) || null;
+  res.json(c);
+});
 app.put('/api/customers/:id', (req, res) => {
   const id = int(req.params.id);
   const before = db.prepare('SELECT * FROM customers WHERE id=? AND deleted=0').get(id);
@@ -480,7 +499,7 @@ app.get('/api/appointments', (req, res) => {
   if (req.query.staff_id) { extra = ' AND a.staff_id=?'; params.push(int(req.query.staff_id)); }
   const u = req.user;
   const rows = db.prepare(`SELECT a.*, COALESCE(c.name,a.guest_name) name, COALESCE(c.phone,a.guest_phone) phone, c.code customer_code, u.full_name staff_name, tk.full_name taken_by_name,
-      v.total visit_total, v.main_staff_id v_main, v.assistant_id v_asst, (SELECT GROUP_CONCAT(name, ' + ') FROM visit_items WHERE visit_id=v.id) visit_services
+      v.total visit_total, v.code visit_code, v.id v_live, v.main_staff_id v_main, v.assistant_id v_asst, (SELECT GROUP_CONCAT(name, ' + ') FROM visit_items WHERE visit_id=v.id) visit_services
     FROM appointments a LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=a.staff_id LEFT JOIN users tk ON tk.id=a.taken_by
     LEFT JOIN visits v ON v.id=a.visit_id AND v.status='done'
     WHERE a.date BETWEEN ? AND ?${extra} ORDER BY a.date, a.time`).all(...params);
@@ -873,7 +892,7 @@ app.get('/api/reports/sales-lines', (req, res) => {
   const grp = str(req.query.grp);
   const groups = new Set(require('./db').GROUPS);
   const rows = db.prepare(`SELECT vi.id item_id, vi.name, vi.grp, vi.price, vi.staff_id, vi.assistant_id, v.id visit_id, v.code, v.date, v.time, v.subtotal, v.total, v.surcharge,
-      v.main_staff_id, v.assistant_id v_asst, v.note, v.import_ref, c.name customer_name, u.full_name doer_name, m.full_name main_name
+      v.main_staff_id, v.assistant_id v_asst, v.note, v.import_ref, v.customer_id, c.name customer_name, u.full_name doer_name, m.full_name main_name
     FROM visit_items vi JOIN visits v ON v.id=vi.visit_id LEFT JOIN customers c ON c.id=v.customer_id
     LEFT JOIN users u ON u.id=COALESCE(vi.staff_id, v.main_staff_id) LEFT JOIN users m ON m.id=v.main_staff_id
     WHERE v.status='done' AND v.date BETWEEN ? AND ? ORDER BY v.date, v.time, v.id, vi.id`).all(from, to);
@@ -887,7 +906,7 @@ app.get('/api/reports/sales-lines', (req, res) => {
     if (doer === staff) role = r.staff_id && r.staff_id !== r.main_staff_id ? 'làm (phiếu của ' + (r.main_name || '') + ')' : 'làm chính';
     else if (!grp && asst === staff) role = 'phụ';
     if (!role || (grp && g !== grp)) continue;
-    out.push({ visit_id: r.visit_id, code: r.code, date: r.date, time: r.time, customer_name: r.customer_name, name: r.name, grp: g, net: Math.round(r.price * f),
+    out.push({ visit_id: r.visit_id, code: r.code, date: r.date, time: r.time, customer_id: r.customer_id, customer_name: r.customer_name, name: r.name, grp: g, net: Math.round(r.price * f),
       role, main_name: r.main_name, doer_name: r.doer_name, note: String(r.note || '').replace(/^Sổ đặt lịch: /, '').split(' · ')[0], from_book: /^SO:/.test(r.import_ref || '') });
   }
   res.json({ from, to, staff_id: staff, grp: grp || null, lines: out, total: out.filter((x) => x.role !== 'phụ').reduce((s, x) => s + x.net, 0) });
