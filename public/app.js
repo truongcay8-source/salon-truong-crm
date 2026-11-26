@@ -3236,7 +3236,7 @@ VIEWS.attendance = async (main) => {
       <div class="small muted">${me.on_shop_wifi ? '📶 Bạn đang dùng wifi tiệm' : me.has_gps ? `📍 Sẽ kiểm tra định vị (trong bán kính ${me.radius}m quanh tiệm)` : ''}</div>
       ${me.records.map((r) => `<div class="stat-line"><span>${r.kind === 'in' ? 'Vào' : 'Ra'} · ${M[r.method] || r.method}${r.distance != null ? ' · cách ' + r.distance + 'm' : ''}</span><b>${esc(r.time)}</b></div>`).join('')}</div>
     <div class="card"><div class="row"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="tt" value="${to}" style="width:auto">
-      ${isMgr() ? `<select id="u" style="width:auto">${staffOptions(Number(uid), 'Tất cả')}</select><button class="btn sm" id="man">+ Chấm công hộ</button><button class="btn sm" id="attX">📥 Xuất Excel (bảng công + mẫu nhập)</button><button class="btn sm" id="attI">📤 Nhập Excel</button>` : ''}</div>
+      ${isMgr() ? `<select id="u" style="width:auto">${staffOptions(Number(uid), 'Tất cả')}</select><button class="btn sm" id="man">+ Chấm công hộ</button><button class="btn sm primary" id="attF">⚡ Chấm đủ</button><button class="btn sm" id="attX">📥 Xuất Excel (bảng công + mẫu nhập)</button><button class="btn sm" id="attI">📤 Nhập Excel</button>` : ''}</div>
       ${attGrid(rep.grid)}
       <details${uid ? ' open' : ''}><summary class="small muted" style="margin-top:10px">Tổng hợp & chi tiết từng lần chấm</summary>
       <h3 style="margin-top:12px">Tổng hợp</h3><div class="table-wrap"><table><thead><tr><th>Nhân viên</th><th class="num">Ngày công</th><th class="num">Tổng giờ</th><th class="num">Đi muộn</th><th class="num">Quên chấm ra</th><th class="num">Nghỉ (ngày)</th></tr></thead>
@@ -3272,8 +3272,39 @@ VIEWS.attendance = async (main) => {
       openModal('Chấm công hộ', `<form id="mf"><div class="form-grid"><div class="full"><label>Nhân viên</label><select name="user_id">${staffOptions(Number(uid) || null)}</select></div>
         <div><label>Ngày</label><input type="date" name="date" value="${S.today}"></div><div><label>Giờ</label><input type="time" name="time" value="09:00"></div>
         <div><label>Loại</label><select name="kind"><option value="in">Vào ca</option><option value="out">Ra ca</option></select></div>
-        <div class="full"><label>Lý do (bắt buộc)</label><input name="note" placeholder="VD: quên chấm, điện thoại hết pin"></div></div><div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu</button></div></form>`);
+        <div class="full"><label>Lý do (bắt buộc khi lưu giờ)</label><input name="note" placeholder="VD: quên chấm, điện thoại hết pin"></div></div><div class="err"></div>
+        <div class="off-box"><b>🌴 Ngày này nghỉ?</b><label class="chk"><input type="checkbox" id="offAll"> Cả tiệm nghỉ (tất cả nhân viên)</label>
+        <button type="button" class="btn sm" id="offGo">🌴 Đánh OFF</button></div>
+        <div class="modal-foot"><button class="btn primary">Lưu giờ chấm</button></div></form>`);
       $('#mf').onsubmit = (e) => { e.preventDefault(); guard($('#mf button.primary'), async () => { await api('/attendance/manual', { method: 'POST', body: formData($('#mf')) }); closeModal(); reload(); }); };
+      $('#offGo').onclick = () => guard($('#offGo'), async () => {
+        const f = $('#mf'), all = $('#offAll').checked;
+        if (!f.date.value) throw new Error('Chọn ngày');
+        if (!all && !f.user_id.value) throw new Error('Chọn nhân viên hoặc tích Cả tiệm nghỉ');
+        const r = await api('/attendance/off', { method: 'POST', body: { date: f.date.value, user_id: f.user_id.value, all: all ? 1 : 0, reason: f.note.value } });
+        toast(all ? `Cả tiệm nghỉ ${f.date.value.split('-').reverse().join('/')} (${r.added} người)` : 'Đã đánh OFF'); closeModal(); reload();
+      });
+    };
+    $('#attF').onclick = () => {
+      const lsGet = (k, d) => { try { return localStorage.getItem(k) || d; } catch { return d; } };
+      openModal('⚡ Chấm đủ hàng loạt', `<form id="ff"><div class="small" style="margin-bottom:8px">Chấm vào/ra cho mọi người mọi ngày trong khoảng. <b>Tự bỏ qua</b> ngày OFF đã duyệt và lần đã chấm; nghỉ vài giờ thì tự lùi giờ vào/ra. Ngày cả tiệm nghỉ: đánh OFF trước (bấm ô ngày đó trong bảng công → 🌴).</div>
+        <div class="form-grid"><div><label>Từ ngày</label><input type="date" name="from" value="${from}"></div><div><label>Đến ngày</label><input type="date" name="to" value="${to > S.today ? S.today : to}"></div>
+        <div><label>Giờ vào</label><input type="time" name="in_time" value="${lsGet('fill_in', '09:00')}"></div><div><label>Giờ ra</label><input type="time" name="out_time" value="${lsGet('fill_out', '20:00')}"></div>
+        <div class="full"><label>Nhân viên</label><div class="chk-row">${activeStaff().filter((s) => s.role !== 'owner').map((s) => `<label class="chk"><input type="checkbox" name="u" value="${s.id}" checked> ${esc(s.full_name)}</label>`).join('')}</div></div></div>
+        <div id="ffr" class="small" style="margin-top:8px"></div>
+        <div class="modal-foot"><button type="button" class="btn" id="ffChk">Kiểm tra</button><button type="button" class="btn primary" id="ffGo" disabled>Chấm</button></div></form>`);
+      const f = $('#ff');
+      const send = async (dry) => {
+        const body = { from: f.from.value, to: f.to.value, in_time: f.in_time.value, out_time: f.out_time.value, user_ids: [...f.querySelectorAll('input[name=u]:checked')].map((x) => Number(x.value)), dry_run: dry };
+        if (!body.user_ids.length) throw new Error('Chọn ít nhất 1 nhân viên');
+        try { localStorage.setItem('fill_in', body.in_time); localStorage.setItem('fill_out', body.out_time); } catch { /* bỏ qua */ }
+        const r = await api('/attendance/fill', { method: 'POST', body });
+        $('#ffr').innerHTML = `${dry ? 'Sẽ chấm' : '✓ Đã chấm'} <b>${r.added}</b> lần vào/ra · ${r.people} người · ${r.from.split('-').reverse().join('/')}–${r.to.split('-').reverse().join('/')}<br>Bỏ qua: <b>${r.days_off}</b> ngày OFF · ${r.existed} lần đã có`;
+        return r;
+      };
+      f.oninput = () => { $('#ffGo').disabled = true; };
+      $('#ffChk').onclick = () => guard($('#ffChk'), async () => { const r = await send(true); $('#ffGo').disabled = !r.added; });
+      $('#ffGo').onclick = () => guard($('#ffGo'), async () => { await send(false); toast('Đã chấm đủ'); closeModal(); reload(); });
     };
     $('#attX').onclick = () => guard($('#attX'), async () => {
       const res = await api(`/attendance/export?from=${from}&to=${to}`, { raw: true });
