@@ -605,6 +605,45 @@ app.get('/api/visits', (req, res) => {
     return v;
   }));
 });
+// Xuất Excel hóa đơn bán hàng theo bộ lọc (chỉ Lãnh đạo: có tổng tiền toàn tiệm)
+app.get('/api/visits/export', OWNER, async (req, res) => {
+  const ExcelJS = require('exceljs');
+  const from = L.isDate(req.query.from) ? req.query.from : today();
+  const to = L.isDate(req.query.to) ? req.query.to : from;
+  const params = [from, to];
+  let extra = '';
+  if (req.query.staff_id) { const s = int(req.query.staff_id); extra = ' AND (v.main_staff_id=? OR v.assistant_id=? OR EXISTS (SELECT 1 FROM visit_items i WHERE i.visit_id=v.id AND (i.staff_id=? OR i.assistant_id=?)))'; params.push(s, s, s, s); }
+  const fold = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
+  const q = fold(req.query.q || '').trim();
+  let vs = db.prepare(`SELECT v.id FROM visits v WHERE v.status='done' AND v.date BETWEEN ? AND ?${extra} ORDER BY v.date, v.time, v.id`).all(...params).map((r) => L.getVisit(r.id));
+  if (q) vs = vs.filter((v) => fold([v.code, v.customer_name, v.customer_phone, v.main_staff_name, v.payment_method, ...v.items.map((i) => i.name)].filter(Boolean).join(' ')).includes(q));
+  const dmy = (d) => (d ? d.split('-').reverse().join('/') : '');
+  const wb = new ExcelJS.Workbook();
+  const M = '#,##0';
+  const mk = (name, cols) => { const ws = wb.addWorksheet(name, { views: [{ state: 'frozen', ySplit: 1 }] });
+    ws.columns = cols.map(([header, key, width, num]) => ({ header, key, width, style: num ? { numFmt: M } : {} }));
+    ws.getRow(1).font = { bold: true }; ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3E6D8' } };
+    ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: cols.length } }; return ws; };
+  const h = mk('Hóa đơn', [['Ngày', 'date', 11], ['Giờ', 'time', 7], ['Mã HĐ', 'code', 10], ['Khách', 'customer', 22], ['SĐT', 'phone', 13], ['Dịch vụ', 'services', 40],
+    ['Thợ chính', 'main', 14], ['Thợ phụ', 'asst', 14], ['Tiền dịch vụ', 'sub', 13, 1], ['Phụ thu', 'sur', 11, 1], ['Giảm giá', 'disc', 11, 1], ['Doanh số', 'total', 13, 1],
+    ['Trừ thẻ', 'card', 12, 1], ['Thẻ', 'card_code', 12], ['Khách trả', 'cash', 13, 1], ['Còn nợ', 'debt', 11, 1], ['Hình thức', 'method', 14], ['Tip', 'tip', 11, 1], ['Tip riêng', 'tip_p', 11, 1], ['Ghi chú', 'note', 40]]);
+  const sum = { sub: 0, sur: 0, disc: 0, total: 0, card: 0, cash: 0, debt: 0, tip: 0, tip_p: 0 };
+  for (const v of vs) {
+    const r = { date: dmy(v.date), time: v.time || '', code: v.code, customer: v.customer_name, phone: v.customer_phone || '', services: v.items.map((i) => i.name).join(' + '),
+      main: v.main_staff_name || '', asst: v.assistant_name || '', sub: v.items.reduce((a, i) => a + i.price, 0), sur: v.surcharge || 0, disc: v.discount || 0, total: v.total,
+      card: v.card_paid || 0, card_code: v.card_code || '', cash: v.cash_paid || 0, debt: v.debt && !v.debt_paid_at ? v.debt : 0, method: v.payment_method || '', tip: v.tip || 0, tip_p: v.tip_private || 0,
+      note: String(v.note || '').replace(/^Sổ đặt lịch: /, '') };
+    for (const k of Object.keys(sum)) sum[k] += r[k] || 0;
+    h.addRow(r);
+  }
+  const tr = h.addRow({ date: 'TỔNG', customer: vs.length + ' hóa đơn', ...sum }); tr.font = { bold: true };
+  const d = mk('Chi tiết dịch vụ', [['Ngày', 'date', 11], ['Mã HĐ', 'code', 10], ['Khách', 'customer', 22], ['Dịch vụ', 'name', 34], ['Nhóm', 'grp', 16], ['Giá', 'price', 13, 1], ['Người làm', 'staff', 14], ['Người phụ', 'asst', 14]]);
+  for (const v of vs) for (const i of v.items) d.addRow({ date: dmy(v.date), code: v.code, customer: v.customer_name, name: i.name, grp: i.grp, price: i.price, staff: i.staff_name || v.main_staff_name || '', asst: i.assistant_name || '' });
+  audit(req.user.id, 'export_visits', 'visit', null, { from, to, count: vs.length });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="hoa-don-${from}_${to}.xlsx"`);
+  await wb.xlsx.write(res); res.end();
+});
 // Lượt đã xóa (Lãnh đạo xem lại / khôi phục khi lỡ tay xóa)
 app.get('/api/visits-deleted', OWNER, (req, res) => {
   const from = L.isDate(req.query.from) ? req.query.from : '2000-01-01';

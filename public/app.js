@@ -1819,7 +1819,7 @@ VIEWS.visits = async (main) => {
   const sum = rows.filter((r) => !r.masked).reduce((a, r) => ({ total: a.total + r.total, cash: a.cash + r.cash_paid, card: a.card + r.card_paid, tip: a.tip + r.tip }), { total: 0, cash: 0, card: 0, tip: 0 });
   const mStart = S.today.slice(0, 8) + '01', y = addDays(S.today, -1), w = addDays(S.today, -6);
   const rng = [['Hôm nay', S.today, S.today], ['Hôm qua', y, y], ['7 ngày', w, S.today], ['Tháng này', mStart, S.today]];
-  main.innerHTML = header('Hóa đơn bán hàng', 'Mỗi hóa đơn 1 dòng · bấm Hóa đơn để xem' + (isOwner() ? ', Sửa để chỉnh tiền / dịch vụ / thợ' : ''), `${isOwner() ? '<button class="btn" id="delv">🗑 Đã xóa</button>' : ''}<button class="btn primary" id="nv">+ Ghi lượt làm</button>`) +
+  main.innerHTML = header('Hóa đơn bán hàng', 'Mỗi hóa đơn 1 dòng · bấm Hóa đơn để xem' + (isOwner() ? ', Sửa để chỉnh tiền / dịch vụ / thợ' : ''), `${isOwner() ? '<button class="btn" id="xlv">📥 Xuất Excel</button><button class="btn" id="delv">🗑 Đã xóa</button>' : ''}<button class="btn primary" id="nv">+ Ghi lượt làm</button>`) +
     `<div class="card"><div class="chips" style="margin-bottom:8px">${rng.map(([l, a, b]) => `<button class="chip ${from === a && to === b ? 'on' : ''}" data-rng="${a}|${b}">${l}</button>`).join('')}</div>
       <div class="row" style="flex-wrap:wrap;gap:6px"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="t" value="${to}" style="width:auto">
       <select id="st" style="width:auto">${staffOptions(Number(staffId), 'Tất cả thợ')}</select><input id="vq" placeholder="🔍 Tìm khách, mã HĐ, dịch vụ…" value="${esc(S.params.q || '')}" style="flex:1;min-width:180px"></div></div>
@@ -1838,6 +1838,12 @@ VIEWS.visits = async (main) => {
   $('#st').onchange = (e) => go('visits', { from, to, ...(e.target.value ? { staff: e.target.value } : {}) });
   $('#nv').onclick = () => visitForm({}, () => VIEWS.visits(main));
   if ($('#delv')) $('#delv').onclick = () => deletedVisits(from, to, () => VIEWS.visits(main));
+  if ($('#xlv')) $('#xlv').onclick = () => guard($('#xlv'), async () => {
+    const res = await api(`/visits/export?from=${from}&to=${to}${staffId ? '&staff_id=' + staffId : ''}${S.params.q ? '&q=' + encodeURIComponent(S.params.q) : ''}`, { raw: true });
+    if (!res.ok) throw new Error('Không xuất được file');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(await res.blob()); a.download = `Hoa-don-${from}_${to}.xlsx`; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  });
   $$('[data-ev]', main).forEach((b) => (b.onclick = () => guard(b, async () => visitForm(await api('/visits/' + b.dataset.ev), () => VIEWS.visits(main)))));
   $$('[data-rc-id]', main).forEach((b) => (b.onclick = () => showReceipt(b.dataset.rcId)));
 };
