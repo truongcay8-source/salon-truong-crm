@@ -236,7 +236,7 @@ app.post('/api/users/:id/reset-password', OWNER, (req, res) => {
 const publicSettings = () => { const s = { ...getSettings() }; delete s.anthropic_api_key; return s; };
 app.get('/api/settings', MGR, (req, res) => res.json(publicSettings()));
 app.put('/api/settings', OWNER, (req, res) => {
-  const allowed = ['salon_name', 'salon_address', 'salon_phone', 'bank_info', 'receipt_footer', 'return_days', 'birthday_days', 'card_expiry_days', 'card_low_balance', 'assistant_rate', 'card_new_rate', 'card_renewal_rate', 'payment_methods', 'surcharge_salon_rate', 'book_money_until', 'qr_bank', 'qr_account', 'qr_name'];
+  const allowed = ['salon_name', 'salon_address', 'salon_phone', 'bank_info', 'receipt_footer', 'return_days', 'birthday_days', 'card_expiry_days', 'card_low_balance', 'assistant_rate', 'assistant_rate_chem', 'card_new_rate', 'card_renewal_rate', 'payment_methods', 'surcharge_salon_rate', 'book_money_until', 'qr_bank', 'qr_account', 'qr_name'];
   const up = db.prepare('UPDATE settings SET value=? WHERE key=?');
   for (const k of allowed) if (req.body[k] != null) up.run(String(req.body[k]).trim(), k);
   audit(req.user.id, 'update_settings', 'settings', null, req.body);
@@ -1110,6 +1110,14 @@ if (require.main === module) {
   try { const n = require('./importer').dedupeCloneStaff(); if (n) console.log(`Đã dọn ${n} lịch/lượt trùng do 2 tài khoản cùng tên`); } catch (e) { console.error('Dọn trùng tài khoản lỗi:', e.message); }
   try { const n = require('./importer').mergeSameVisits(); if (n) console.log(`Đã gộp ${n} lượt cùng khách làm cùng lúc / trùng lượt ghi tay`); } catch (e) { console.error('Gộp lượt lỗi:', e.message); }
   try { const n = require('./importer').closeUsedGifts(); if (n) console.log(`Đã đóng ${n} thẻ tri ân đã dùng 1 lần`); } catch (e) { console.error('Đóng thẻ tri ân lỗi:', e.message); }
+  // 26/11/2026: người phụ trích từ hoa hồng dòng (hóa chất 5%, còn lại 3%) → tính lại 1 lần hóa đơn từ 01/11 (tháng đã chốt lương không đụng)
+  try {
+    if (!db.prepare("SELECT 1 FROM settings WHERE key='mig_hh_1126'").get()) {
+      const n = L.recalcCommissions('2026-11-01');
+      db.prepare("INSERT INTO settings(key,value) VALUES ('mig_hh_1126','1')").run();
+      console.log(`Đã tính lại hoa hồng ${n} hóa đơn theo cách chia người phụ mới`);
+    }
+  } catch (e) { console.error('Tính lại hoa hồng lỗi:', e.message); }
   try { const n = require('./importer').dedupeSameDayChem(); if (n) console.log(`Đã xóa ${n} hóa đơn sổ ghi trùng dịch vụ hóa chất`); } catch (e) { console.error('Dọn trùng hóa chất lỗi:', e.message); }
   try { const n = require('./importer').dedupeVisits(); if (n) console.log(`Đã dọn ${n} lượt làm trùng do sổ sửa chữ`); } catch (e) { console.error('Dọn lượt trùng lỗi:', e.message); }
   try { const n = require('./importer').dedupeAppointments(); if (n) console.log(`Đã dọn ${n} lịch hẹn trùng`); } catch (e) { console.error('Dọn lịch trùng lỗi:', e.message); }

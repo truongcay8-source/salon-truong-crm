@@ -210,7 +210,8 @@ const DEFAULT_SETTINGS = {
   birthday_days: '7',
   card_expiry_days: '30',
   card_low_balance: '300000',
-  assistant_rate: '0.03',
+  assistant_rate: '0.03', // người phụ dòng không phải hóa chất (cắt…): trích từ hoa hồng dòng
+  assistant_rate_chem: '0.05', // người phụ dòng hóa chất: trích 5% từ hoa hồng dòng (nhuộm 15% → chính 10% + phụ 5%)
   card_new_rate: '0.05',
   card_renewal_rate: '0.03',
   payment_methods: 'Tiền mặt,Chuyển khoản,Quẹt thẻ',

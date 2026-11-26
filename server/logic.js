@@ -117,6 +117,49 @@ function updateVisitNotes(input, user, existing) {
   audit(user.id, 'update_visit_notes', 'visit', existing.id, { code: existing.code, changes: require('./db').diffObj(existing, row, NOTE_FIELDS) });
 }
 
+// Hoa hồng từng dòng (Vinh chốt 26/11/2026): phần người phụ TRÍCH TỪ hoa hồng của dòng, cửa hàng không trả thêm.
+//  - Hóa chất: phụ 5% (assistant_rate_chem) → vd nhuộm 15%: có phụ = chính 10% + phụ 5%; tự làm tự phụ = chính 15%.
+//  - Dòng khác (cắt…): phụ 3% (assistant_rate) → cắt tự cắt tự phụ = thợ nhận cả 3%; có người phụ = người phụ nhận 3%.
+// items: { price, grp, commission_rate, staff_id (null = thợ chính), assistant_id (null = theo phụ chung, 0 = không phụ, >0 = phụ riêng) }
+function splitCommission(items, mainStaff, assistant, factor) {
+  const on = (id) => { const u = id && db.prepare('SELECT commission_enabled FROM users WHERE id=?').get(id); return !!(u && u.commission_enabled); };
+  const rateOf = (grp) => (grp === 'Hóa chất' ? num('assistant_rate_chem') : num('assistant_rate'));
+  let mainCommission = 0, assistantCommission = 0;
+  for (const i of items) {
+    const doer = i.staff_id || mainStaff;
+    const base = Math.round(i.price * factor * (i.commission_rate || 0));
+    const helper = i.assistant_id > 0 ? i.assistant_id : i.assistant_id === 0 ? null : assistant;
+    let share = 0;
+    if (helper && helper !== doer) share = Math.min(Math.round(i.price * factor * rateOf(i.grp)), base);
+    i.commission = on(doer) ? base - share : 0;
+    i.asst_commission = 0;
+    if (helper && helper !== doer && on(helper)) {
+      if (i.assistant_id > 0) i.asst_commission = share; else assistantCommission += share;
+    }
+    if (!i.staff_id) mainCommission += i.commission;
+  }
+  return { mainCommission, assistantCommission };
+}
+// Tính lại hoa hồng các hóa đơn đã lưu (tháng chưa chốt lương) theo cách chia mới – không đổi tiền, dịch vụ, người làm
+function recalcCommissions(from) {
+  const locked = new Set(db.prepare('SELECT month FROM payroll_locks').all().map((r) => r.month));
+  const vs = db.prepare("SELECT * FROM visits WHERE status='done' AND date>=?").all(from).filter((v) => !locked.has(v.date.slice(0, 7)));
+  const items = db.prepare('SELECT * FROM visit_items WHERE visit_id=?');
+  const upI = db.prepare('UPDATE visit_items SET commission=?, asst_commission=? WHERE id=?');
+  const upV = db.prepare('UPDATE visits SET main_commission=?, assistant_commission=? WHERE id=?');
+  let n = 0;
+  db.transaction(() => {
+    for (const v of vs) {
+      const its = items.all(v.id).map((i) => ({ ...i }));
+      const factor = v.subtotal > 0 ? Math.max(0, v.total - (v.surcharge || 0)) / v.subtotal : 0;
+      const r = splitCommission(its, v.main_staff_id, v.assistant_id, factor);
+      for (const i of its) upI.run(i.commission, i.asst_commission, i.id);
+      upV.run(r.mainCommission, r.assistantCommission, v.id);
+      n++;
+    }
+  })();
+  return n;
+}
 function saveVisit(input, user, existing, opts = {}) {
   const isNew = !existing;
   if (!isNew && !canEditVisit(user, existing)) throw new HttpError(403, 'Nhân viên chỉ sửa được lượt của mình trong ngày. Nhờ quản lý sửa.');
@@ -212,30 +255,14 @@ function saveVisit(input, user, existing, opts = {}) {
   // Từng dòng dịch vụ có thể do người khác làm (vd thợ chính cắt, Thu gội): hoa hồng dòng đó tính cho người làm
   for (const i of cleanItems) {
     if (i.staff_id === mainStaff) i.staff_id = null;
-    const doer = i.staff_id ? staffStmt.get(i.staff_id) : ms;
-    if (!doer) throw bad('Người làm dịch vụ không tồn tại');
-    i.commission = doer.commission_enabled ? Math.round(i.price * factor * i.commission_rate) : 0;
+    if (i.staff_id && !staffStmt.get(i.staff_id)) throw bad('Người làm dịch vụ không tồn tại');
+    if (i.assistant_id && i.assistant_id === assistant) i.assistant_id = null;
+    if (i.assistant_id && i.assistant_id === (i.staff_id || mainStaff)) i.assistant_id = 0;
+    if (i.assistant_id > 0 && !staffStmt.get(i.assistant_id)) throw bad('Người phụ của dòng không tồn tại');
   }
-  const mainCommission = cleanItems.filter((i) => !i.staff_id).reduce((s, i) => s + i.commission, 0);
-  // Người phụ: dòng không chọn riêng → theo người phụ chung của phiếu; dòng chọn riêng → hoa hồng phụ của dòng cho người đó
-  const aRate = num('assistant_rate');
-  let assistantCommission = 0;
   const as = assistant ? staffStmt.get(assistant) : null;
   if (assistant && !as) throw bad('Người phụ không tồn tại');
-  for (const i of cleanItems) {
-    if (i.assistant_id && i.assistant_id === assistant) i.assistant_id = null;
-    const doerId = i.staff_id || mainStaff;
-    if (i.assistant_id && i.assistant_id === doerId) i.assistant_id = 0;
-    i.asst_commission = 0;
-    const net = i.price * factor * aRate;
-    if (i.assistant_id === null) { if (as && as.commission_enabled && assistant !== doerId) assistantCommission += net; }
-    else if (i.assistant_id > 0) {
-      const la = staffStmt.get(i.assistant_id);
-      if (!la) throw bad('Người phụ của dòng không tồn tại');
-      i.asst_commission = la.commission_enabled ? Math.round(net) : 0;
-    }
-  }
-  assistantCommission = Math.round(assistantCommission);
+  const { mainCommission, assistantCommission } = splitCommission(cleanItems, mainStaff, assistant, factor);
   const sc = surchargeSplit(surcharge, !!assistant);
 
   const row = {
@@ -638,7 +665,7 @@ function dayMoney(date) {
   };
 }
 
-module.exports = { sameDayDupService,
+module.exports = { splitCommission, recalcCommissions, sameDayDupService,
   dayMoney,
   cardCommission, cardSplit,
   staffCustomerReport,

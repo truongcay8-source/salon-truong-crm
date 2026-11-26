@@ -87,8 +87,9 @@ test('luồng chính và phân quyền', async () => {
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(r.data.total, 1600000); assert.equal(r.data.cash_paid, 600000); assert.equal(r.data.card_paid, 1000000);
   // Hoa hồng tính trên tiền dịch vụ không gồm phụ thu: 1.600.000 − 420.000 = 1.180.000
-  assert.equal(r.data.main_commission, Math.round(1180000 * 0.15));
-  assert.equal(r.data.assistant_commission, 35400);
+  // Nhuộm 15%, có người phụ → phụ 5% trích từ 15%: chính 10%, phụ 5% (cửa hàng không trả thêm)
+  assert.equal(r.data.main_commission, Math.round(1180000 * 0.15) - Math.round(1180000 * 0.05));
+  assert.equal(r.data.assistant_commission, 59000);
   // Phụ thu 420.000: cửa hàng giữ 33% = 138.600, còn 281.400 chia đôi thợ chính / người phụ
   assert.equal(r.data.surcharge_main, 140700); assert.equal(r.data.surcharge_assist, 140700);
   ids.visit = r.data.id;
