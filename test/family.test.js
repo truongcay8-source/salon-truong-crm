@@ -739,3 +739,12 @@ test('thứ tự: Director (Trường) luôn đầu danh sách thợ và doanh s
   const rest = rows.slice(1).map((r) => r.sales + r.assist_sales + r.cards_amount);
   assert.deepEqual(rest, [...rest].sort((a, b) => b - a));
 });
+
+test('chat: xem Hôm nay chưa có tin → không kéo tin các ngày cũ', async () => {
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const u = db.prepare("SELECT id FROM users WHERE username='vinh'").get().id;
+  db.prepare("INSERT INTO chat_messages(user_id,body,created_at) VALUES (?,?,?)").run(u, 'tin cũ test', '2026-11-16 20:32:00');
+  const today = (await o.get('/me')).data.today;
+  const r = (await o.get(`/chat?after=0&date=${today}`)).data;
+  assert.ok(!r.some((m) => m.body === 'tin cũ test'));
+});
