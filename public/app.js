@@ -1792,7 +1792,9 @@ async function visitForm(v = {}, after) {
       if ($('#used')) body.materials = used.filter((u) => u.material_id && Number(u.amt) > 0).map((u) => ({ material_id: u.material_id, qty: toUnits(matById(u.material_id), u.amt) }));
       if (body.card_id && body.card_paid === '') body.card_paid = 0;
       if ($('#pay2Box').style.display === 'none') { body.pay2_method = ''; body.pay2_amount = 0; }
-      const saved = await api(isEdit ? '/visits/' + v.id : '/visits', { method: isEdit ? 'PUT' : 'POST', body });
+      let saved;
+      try { saved = await api(isEdit ? '/visits/' + v.id : '/visits', { method: isEdit ? 'PUT' : 'POST', body }); }
+      catch (er) { if (er.data && er.data.dup && confirm(er.message)) saved = await api('/visits', { method: 'POST', body: { ...body, force: true } }); else throw er; }
       if (!isEdit) {
         const pb = $('#phB').files, pa = $('#phA').files;
         if (pb.length) await uploadPhotos(saved.customer_id, pb, 'before', saved.id);
@@ -1813,7 +1815,7 @@ async function visitForm(v = {}, after) {
 VIEWS.visits = async (main) => {
   const from = S.params.from || S.today, to = S.params.to || from;
   const staffId = S.params.staff || '';
-  const all = await api(`/visits?from=${from}&to=${to}${staffId ? '&staff_id=' + staffId : ''}`);
+  const [all, sus] = await Promise.all([api(`/visits?from=${from}&to=${to}${staffId ? '&staff_id=' + staffId : ''}`), isOwner() ? api(`/visits/suspects?from=${from}&to=${to}`) : []]);
   const q = fold(S.params.q || '');
   const rows = q ? all.filter((v) => fold([v.code, v.customer_name, v.customer_phone, v.main_staff_name, v.payment_method, ...v.items.map((i) => i.name)].filter(Boolean).join(' ')).includes(q)) : all;
   const sum = rows.filter((r) => !r.masked).reduce((a, r) => ({ total: a.total + r.total, cash: a.cash + r.cash_paid, card: a.card + r.card_paid, tip: a.tip + r.tip }), { total: 0, cash: 0, card: 0, tip: 0 });
@@ -1823,6 +1825,10 @@ VIEWS.visits = async (main) => {
     `<div class="card"><div class="chips" style="margin-bottom:8px">${rng.map(([l, a, b]) => `<button class="chip ${from === a && to === b ? 'on' : ''}" data-rng="${a}|${b}">${l}</button>`).join('')}</div>
       <div class="row" style="flex-wrap:wrap;gap:6px"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="t" value="${to}" style="width:auto">
       <select id="st" style="width:auto">${staffOptions(Number(staffId), 'Tất cả thợ')}</select><input id="vq" placeholder="🔍 Tìm khách, mã HĐ, dịch vụ…" value="${esc(S.params.q || '')}" style="flex:1;min-width:180px"></div></div>
+    ${sus.length ? `<div class="card debt-note"><b>⚠ ${sus.length} cặp hóa đơn nghi ghi trùng</b> <span class="small muted">(cùng khách, cùng ngày, cùng 1 dịch vụ hóa chất ở 2 hóa đơn). Xem 2 hóa đơn, cái nào thừa thì bấm Sửa → bỏ dòng trùng hoặc xóa hóa đơn.</span>
+      ${sus.map((x) => `<div class="stat-line"><span>${dmy(x.date).slice(0, 5)} · <b>${esc(x.customer_name || '')}</b> · ${esc(x.service)}</span><span class="nowrap">
+        <button class="btn sm" data-rc-id="${x.a_id}">${esc(x.a_code)} ${esc(x.a_time || '')} · ${money(x.a_total)}</button><button class="btn sm" data-ev="${x.a_id}">Sửa</button>
+        <button class="btn sm" data-rc-id="${x.b_id}">${esc(x.b_code)} ${esc(x.b_time || '')} · ${money(x.b_total)}</button><button class="btn sm" data-ev="${x.b_id}">Sửa</button></span></div>`).join('')}</div>` : ''}
     <div class="card"><div class="table-wrap cardify"><table><thead><tr><th>Ngày</th><th>Khách</th><th>Dịch vụ</th><th>Thợ</th><th class="num">Doanh số</th><th class="num">Trừ thẻ</th><th class="num">Thu</th><th>TT</th><th class="num">Tip</th><th></th></tr></thead>
     <tbody>${rows.map((v) => `<tr><td class="nowrap">${dmy(v.date).slice(0, 5)} ${esc(v.time || '')}<div class="small muted">${esc(v.code || '')}</div></td><td><a href="#customer?id=${v.customer_id}">${esc(v.customer_name)}</a></td>
       <td>${v.items.map((i) => esc(i.name)).join(' + ')}</td><td>${esc(v.main_staff_name)}${v.assistant_name ? ' <span class="muted small">+' + esc(v.assistant_name) + '</span>' : ''}</td>
@@ -2840,6 +2846,7 @@ function showImport(r, sel) {
           ${s.book.kept_manual ? `<div class="stat-line"><span>Ô đã có lượt nhân viên tự ghi (giữ nguyên)</span><b>${s.book.kept_manual}</b></div>` : ''}
           <div class="stat-line"><span>Tip chung (cột Tiền Tip + khách trả dư ${money(s.book.extra_tip)})</span><b>${money(s.book.tip)}</b></div>
           ${s.book.unpaid ? `<div class="stat-line"><span>🩷 Đã làm chưa thanh toán (giá theo bảng giá)</span><b>${money(s.book.unpaid)}</b></div>` : ''}
+          ${(s.book.dup_service || []).length ? `<details class="small" open><summary>⚠ ${s.book.dup_service.length} ô sổ ghi lại dịch vụ hóa chất đã có trong hóa đơn khác cùng ngày → bỏ qua, kiểm tra sổ</summary>${s.book.dup_service.map((x) => `<div>${esc(x)}</div>`).join("")}</details>` : ""}
           ${(s.book.gifts_added || []).length ? `<details class="small" open><summary>🎁 Bổ sung ${s.book.gifts_added.length} thẻ tri ân (ô ghi tặng/có vc, chưa có trong tab Quản lý Thẻ 1Tr)</summary>${s.book.gifts_added.map((x) => `<div>${esc(x)}</div>`).join("")}</details>` : ""}
           ${(s.book.debts_paid || []).length ? `<details class="small" open><summary>💵 ${s.book.debts_paid.length} khách trả nợ lượt ngày trước (ghi "tt dd/mm") → đã ghi đã thu, không cộng doanh số lần nữa</summary>${s.book.debts_paid.map((x) => `<div>${esc(x)}</div>`).join("")}</details>` : ""}
           ${s.book.rows_check.length ? `<details class="small"><summary>⚠ ${s.book.rows_check.length} dòng tiền thu khác giá ghi trong ô (thẻ/voucher, sản phẩm…) — nên kiểm tra</summary>${s.book.rows_check.map((x) => `<div>${esc(x)}</div>`).join('')}</details>` : ''}

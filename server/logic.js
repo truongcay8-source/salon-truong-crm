@@ -316,6 +316,16 @@ function deleteVisit(id, reason, user) {
   })();
 }
 
+// 1 khách 1 ngày: dịch vụ hóa chất (uốn, nhuộm…) đã có trong hóa đơn khác cùng ngày → nghi ghi 2 lần
+function sameDayDupService(customerId, date, items, exceptId) {
+  if (!customerId || !date) return null;
+  const ids = (items || []).map((i) => Number(i.service_id)).filter(Boolean);
+  if (!ids.length) return null;
+  const chem = new Set(db.prepare(`SELECT id FROM services WHERE grp='Hóa chất' AND id IN (${ids.map(() => '?').join(',')})`).all(...ids).map((r) => r.id));
+  if (!chem.size) return null;
+  return db.prepare(`SELECT v.id, v.code, v.time, vi.name, u.full_name staff_name FROM visits v JOIN visit_items vi ON vi.visit_id=v.id LEFT JOIN users u ON u.id=COALESCE(vi.staff_id, v.main_staff_id)
+    WHERE v.status='done' AND v.customer_id=? AND v.date=? AND v.id<>? AND vi.service_id IN (${[...chem].map(() => '?').join(',')}) LIMIT 1`).get(customerId, date, exceptId || 0, ...chem) || null;
+}
 function getVisit(id) {
   const v = db.prepare(`SELECT v.*, c.name customer_name, c.code customer_code, c.phone customer_phone,
       m.full_name main_staff_name, a.full_name assistant_name, cd.code card_code
@@ -622,7 +632,7 @@ function dayMoney(date) {
   };
 }
 
-module.exports = {
+module.exports = { sameDayDupService,
   dayMoney,
   cardCommission, cardSplit,
   staffCustomerReport,

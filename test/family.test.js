@@ -221,7 +221,7 @@ test('thẻ tri ân chỉ dùng 1 lần: dùng chưa hết cũng đóng; xóa l�
   assert.equal(db.prepare('SELECT status FROM cards WHERE id=?').get(card.id).status, 'active');
   // bản cũ: dọn trùng xóa lượt có trừ thẻ, lượt giữ lại không trừ → sửa lại
   const a = await c.post('/visits', { customer_id: cid, date: '2026-11-22', time: '11:00', main_staff_id: 2, card_id: card.id, card_paid: 1000000, items: [{ service_id: svc.id, price: 1200000 }], payment_method: 'Tiền mặt' });
-  const b = await c.post('/visits', { customer_id: cid, date: '2026-11-22', time: '11:00', main_staff_id: 2, items: [{ service_id: svc.id, price: 1200000 }], payment_method: 'Tiền mặt' });
+  const b = await c.post('/visits', { customer_id: cid, date: '2026-11-22', time: '11:00', main_staff_id: 2, items: [{ service_id: svc.id, price: 1200000 }], payment_method: 'Tiền mặt', force: true });
   L.deleteVisit(a.data.id, 'Trùng: ô sổ đặt lịch bị sửa chữ nên nhập 2 lần (giữ lượt ' + b.data.id + ')', { id: 1 });
   assert.equal(L.cardBalance(card.id), 1000000, 'lỗi cũ: thẻ như chưa dùng');
   I.closeUsedGifts();
@@ -779,4 +779,24 @@ test('xuất Excel hóa đơn bán hàng: chỉ Lãnh đạo, đúng số hóa �
   const n = db.prepare("SELECT COUNT(*) n FROM visits WHERE status='done' AND date BETWEEN '2026-11-19' AND '2026-11-21'").get().n;
   assert.equal(ws.rowCount, n + 2);
   assert.equal(ws.getRow(ws.rowCount).getCell(1).value, 'TỔNG');
+});
+
+test('1 khách 1 ngày: uốn/nhuộm đã có trong hóa đơn khác → cảnh báo trước khi tạo; trang hóa đơn liệt kê cặp nghi trùng', async () => {
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const chem = db.prepare("SELECT id, price FROM services WHERE grp='Hóa chất' AND active=1 ORDER BY id LIMIT 1").get();
+  const cut = db.prepare("SELECT id, price FROM services WHERE grp='Cắt' AND active=1 ORDER BY id LIMIT 1").get();
+  const cid = db.prepare("INSERT INTO customers(code,name) VALUES ('TDS1','C Điệp test')").run().lastInsertRowid;
+  const thu = db.prepare("SELECT id FROM users WHERE username='thu'").get().id, tr = db.prepare("SELECT id FROM users WHERE username='truong'").get().id;
+  const base = { customer_id: cid, date: '2026-11-25', payment_method: 'Chuyển khoản' };
+  const a = await o.post('/visits', { ...base, time: '09:30', main_staff_id: tr, items: [{ service_id: cut.id, price: 785000, staff_id: tr }, { service_id: chem.id, price: 1551000, staff_id: thu }] });
+  assert.equal(a.status, 200);
+  const cutOnly = await o.post('/visits', { ...base, time: '11:00', main_staff_id: tr, items: [{ service_id: cut.id, price: 100000 }] });
+  assert.equal(cutOnly.status, 200, 'cắt thêm không cảnh báo');
+  const b = await o.post('/visits', { ...base, time: '10:00', main_staff_id: thu, items: [{ service_id: chem.id, price: 1551000 }] });
+  assert.equal(b.status, 409); assert.ok(b.data.dup);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM visits WHERE customer_id=? AND status='done'").get(cid).n, 2, 'không lưu khi chưa xác nhận');
+  const b2 = await o.post('/visits', { ...base, time: '10:00', main_staff_id: thu, items: [{ service_id: chem.id, price: 1551000 }], force: true });
+  assert.equal(b2.status, 200);
+  const sus = (await o.get('/visits/suspects?from=2026-11-25&to=2026-11-25')).data;
+  assert.ok(sus.some((x) => x.a_id === a.data.id && x.b_id === b2.data.id));
 });

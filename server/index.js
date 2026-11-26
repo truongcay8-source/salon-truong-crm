@@ -605,6 +605,16 @@ app.get('/api/visits', (req, res) => {
     return v;
   }));
 });
+// Hóa đơn nghi trùng: cùng khách, cùng ngày, cùng 1 dịch vụ hóa chất nằm ở 2 hóa đơn
+app.get('/api/visits/suspects', OWNER, (req, res) => {
+  const from = L.isDate(req.query.from) ? req.query.from : '2000-01-01';
+  const to = L.isDate(req.query.to) ? req.query.to : '2999-12-31';
+  res.json(db.prepare(`SELECT a.date, c.name customer_name, a.id a_id, a.code a_code, a.time a_time, a.total a_total, b.id b_id, b.code b_code, b.time b_time, b.total b_total, ia.name service
+    FROM visits a JOIN visits b ON b.customer_id=a.customer_id AND b.date=a.date AND b.id>a.id AND b.status='done'
+    JOIN visit_items ia ON ia.visit_id=a.id JOIN visit_items ib ON ib.visit_id=b.id AND ib.service_id=ia.service_id
+    JOIN services s ON s.id=ia.service_id AND s.grp='Hóa chất' LEFT JOIN customers c ON c.id=a.customer_id
+    WHERE a.status='done' AND a.date BETWEEN ? AND ? GROUP BY a.id, b.id ORDER BY a.date DESC`).all(from, to));
+});
 // Xuất Excel hóa đơn bán hàng theo bộ lọc (chỉ Lãnh đạo: có tổng tiền toàn tiệm)
 app.get('/api/visits/export', OWNER, async (req, res) => {
   const ExcelJS = require('exceljs');
@@ -685,9 +695,19 @@ app.get('/api/visits/:id', (req, res) => {
   res.json(out);
 });
 app.post('/api/visits', (req, res) => {
-  const { import_ref, ...body } = req.body;
+  const { import_ref, force, ...body } = req.body;
   void import_ref;
-  const id = L.saveVisit(body, req.user, null);
+  // Kiểm tra hợp lệ trước (lưu thử), rồi mới cảnh báo trùng dịch vụ hóa chất cùng khách cùng ngày
+  const ROLL = {}; let id, dup;
+  try {
+    db.transaction(() => {
+      id = L.saveVisit(body, req.user, null);
+      const v = db.prepare('SELECT customer_id, date FROM visits WHERE id=?').get(id);
+      dup = !force && L.sameDayDupService(v.customer_id, v.date, db.prepare('SELECT service_id FROM visit_items WHERE visit_id=?').all(id), id);
+      if (dup) throw ROLL;
+    })();
+  } catch (e) { if (e !== ROLL) throw e; }
+  if (dup) return res.status(409).json({ dup: true, visit_id: dup.id, error: `Khách này hôm nay đã có hóa đơn ${dup.code}${dup.time ? ' lúc ' + dup.time : ''} gồm "${dup.name}" (${dup.staff_name || ''}). 1 khách 1 ngày nên ghi chung 1 hóa đơn (mỗi dòng chọn người làm). Vẫn tạo hóa đơn mới?` });
   res.json(L.getVisit(id));
 });
 app.put('/api/visits/:id', (req, res) => {
