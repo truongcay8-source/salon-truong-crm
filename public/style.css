@@ -412,3 +412,4 @@ table.fin tr.big td{font-size:1.1em}
 .g-dh{cursor:pointer}.g-dh:hover{background:#f3e6d8}
 #oK .chip{padding:6px 12px;cursor:pointer;color:inherit}
 #oK .chip.on{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:600}
+.g-c.g-fu{opacity:.75;background-image:repeating-linear-gradient(45deg,transparent 0 6px,rgba(0,0,0,.03) 6px 12px)}

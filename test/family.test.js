@@ -983,3 +983,15 @@ test('Đánh OFF: nhiều người, nhiều ngày, nửa ngày; không trùng', 
   r = await o.post('/attendance/off', { from: '2026-07-08', all: 1 });
   assert.equal(r.data.added, 0);
 });
+
+test('Bảng công xem đến hôm nay → hiện luôn OFF sắp tới trong tháng', async () => {
+  const L = require('../server/logic'); const S = require('../server/staff');
+  const t = L.today(); const [y, m] = t.split('-').map(Number); const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+  if (end === t) return;
+  const uid = db.prepare("SELECT id FROM users WHERE role<>'owner' AND active=1 ORDER BY id").get().id;
+  db.prepare("INSERT INTO staff_off(user_id,date,status) VALUES (?,?,'approved')").run(uid, end);
+  const r = S.report(t.slice(0, 8) + '01', t, { id: 1, role: 'owner' });
+  const row = r.grid.rows.find((x) => x.user_id === uid);
+  const c = row.cells.find((x) => x.date === end);
+  assert.equal(c.s, 'off'); assert.equal(c.future, true);
+});

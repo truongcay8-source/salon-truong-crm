@@ -3226,7 +3226,7 @@ function attGrid(G) {
       : c.s === 'off' ? 'OFF' : c.s === 'part' ? '½' : c.s === 'absent' ? '✗' : '';
     const tip = c.s === 'work' ? `Vào ${c.in} · Ra ${c.out || 'quên chấm'}${c.late ? ' · muộn ' + c.late + ' phút' : ''}${c.part ? ' · nghỉ ' + c.part : ''}`
       : c.s === 'off' ? 'Nghỉ cả ngày (đơn đã duyệt)' + (c.reason ? ': ' + c.reason : '') : c.s === 'part' ? 'Nghỉ vài giờ ' + c.part : c.s === 'absent' ? 'Không chấm công, không có đơn nghỉ' : '';
-    return `<td class="g-c g-${c.s || 'x'}${c.late ? ' g-l' : ''}" title="${esc(tip)}" data-gc="${r.user_id}|${c.date}">${t}</td>`;
+    return `<td class="g-c g-${c.s || 'x'}${c.late ? ' g-l' : ''}${c.future ? ' g-fu' : ''}" title="${esc(tip)}" data-gc="${r.user_id}|${c.date}">${t}</td>`;
   };
   return `<h3 style="margin-top:12px">Bảng công</h3>
     <div class="small muted" style="margin-bottom:6px"><span class="g-key g-work">giờ vào/ra</span> <span class="g-key g-l">⏰ muộn</span> <span class="g-key g-off">OFF</span> <span class="g-key g-part">½ nghỉ vài giờ</span> <span class="g-key g-absent">✗ vắng không đơn</span>${isMgr() ? ' · bấm ô để chấm hộ · bấm <b>ngày</b> trên đầu cột để đánh OFF' : ''}</div>
