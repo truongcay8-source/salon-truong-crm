@@ -846,3 +846,19 @@ test('thanh toán từ hồ sơ khách tự gắn vào lịch hẹn cùng ngày;
   q = (await o.get('/customers/' + cid + '/quick')).data;
   assert.equal(q.today_appt.visit_id, v.data.id); assert.equal(q.visit_count, 1); assert.equal(q.last[0].id, v.data.id);
 });
+
+test('lịch hẹn ghi 2 lần (cả bản Hoàn thành / Hủy, sau khi gộp tài khoản) → tự dọn còn 1, giữ bản có hóa đơn', () => {
+  const I = require('../server/importer');
+  const cid = db.prepare("INSERT INTO customers(code,name) VALUES ('TDA1','Linh Hưng yên test')").run().lastInsertRowid;
+  const tr = db.prepare("SELECT id FROM users WHERE username='truong'").get().id;
+  const vid = db.prepare("INSERT INTO visits(code,customer_id,date,time,main_staff_id,total,cash_paid,status) VALUES ('LDA1',?,'2026-11-25','10:30',?,300000,300000,'done')").run(cid, tr).lastInsertRowid;
+  const ins = db.prepare("INSERT INTO appointments(customer_id,date,time,staff_id,status,visit_id,note) VALUES (?,'2026-11-25',?,?,?,?,?)");
+  ins.run(cid, '10:30', tr, 'done', null, 'Em Linh Hưng yên');
+  const keep = ins.run(cid, '10:30', tr, 'done', vid, 'Em Linh Hưng yên').lastInsertRowid;
+  ins.run(null, '10:30', tr, 'cancelled', null, 'Em Linh Hưng yên');
+  ins.run(null, '10:30', tr, 'booked', null, 'Khách khác hẳn');
+  I.dedupeAppointments();
+  const left = db.prepare("SELECT id, note FROM appointments WHERE date='2026-11-25' AND time='10:30' AND staff_id=?").all(tr);
+  assert.equal(left.length, 2, 'còn 1 lịch Linh + 1 khách khác');
+  assert.ok(left.some((a) => a.id === keep));
+});

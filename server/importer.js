@@ -117,30 +117,36 @@ function apptKey(text) {
 }
 // Dọn lịch hẹn bị tạo trùng do nhập lại sổ sau khi sửa chữ trong ô: giữ lịch đã thu tiền / hoàn thành, xóa bản "Đã đặt" trùng
 function dedupeAppointments() {
-  const rows = db.prepare(`SELECT id, date, time, staff_id, status, visit_id, note, guest_name, customer_id, pay_note, assistant_id, service, manual_edit, taken_by FROM appointments WHERE date>=date('now','localtime','-60 days') ORDER BY date, time, id`).all();
+  // Cùng ngày + giờ + thợ, cùng ô (chữ y hệt / cùng khách / cùng tên khách) = 1 lịch. Mọi trạng thái (kể cả "Hoàn thành", "Hủy")
+  // – vd sau khi gộp 2 tài khoản Trường, lịch của cả 2 tài khoản dồn về 1 cột thành 2 bản.
+  const rows = db.prepare(`SELECT a.id, a.date, a.time, a.staff_id, a.status, a.note, a.guest_name, a.customer_id, a.pay_note, a.assistant_id, a.service, a.manual_edit, a.taken_by,
+      v.id visit_id FROM appointments a LEFT JOIN visits v ON v.id=a.visit_id AND v.status='done' ORDER BY a.date, a.time, a.id`).all();
   const groups = new Map();
   for (const a of rows) {
-    const k = apptKey(a.note || a.guest_name || '');
-    if (!k) continue;
-    const g = `${a.date}|${a.time}|${a.staff_id || 0}|${k}`;
+    const g = `${a.date}|${a.time}|${a.staff_id || 0}`;
     if (!groups.has(g)) groups.set(g, []);
     groups.get(g).push(a);
   }
+  const same = (x, y) => (x.note && x.note === y.note) || (x.customer_id && x.customer_id === y.customer_id)
+    || (apptKey(x.note || x.guest_name || '') && apptKey(x.note || x.guest_name || '') === apptKey(y.note || y.guest_name || ''));
   let removed = 0;
-  // Ưu tiên giữ: đã thu tiền > đã sửa trên app > có dịch vụ > hoàn thành/đã đến
-  const rank = (a) => (a.visit_id ? 16 : 0) + (a.manual_edit ? 8 : 0) + (a.service ? 4 : 0) + (a.status === 'done' ? 2 : a.status === 'arrived' ? 1 : 0);
+  // Ưu tiên giữ: đã thu tiền > đã sửa trên app > còn hiệu lực (không hủy) > có dịch vụ > hoàn thành/đã đến
+  const rank = (a) => (a.visit_id ? 32 : 0) + (a.manual_edit ? 16 : 0) + (a.status !== 'cancelled' ? 8 : 0) + (a.service ? 4 : 0) + (a.status === 'done' ? 2 : a.status === 'arrived' ? 1 : 0);
   for (const list of groups.values()) {
     if (list.length < 2) continue;
     list.sort((x, y) => rank(y) - rank(x) || x.id - y.id);
-    const keep = list[0];
-    for (const a of list.slice(1)) {
-      if (a.visit_id || a.status !== 'booked' || a.manual_edit) continue; // chỉ xóa bản "Đã đặt" thừa từ sổ, không đụng lịch đã thu tiền / đã hủy / đã sửa trên app
-      if (a.customer_id && keep.customer_id && a.customer_id !== keep.customer_id) continue;
-      try { db.prepare('UPDATE chat_messages SET appointment_id=? WHERE appointment_id=?').run(keep.id, a.id); } catch { /* chưa có bảng chat */ }
-      if (a.note && (!keep.note || a.note.length > keep.note.length)) db.prepare('UPDATE appointments SET note=? WHERE id=?').run(a.note, keep.id);
-      db.prepare('UPDATE appointments SET customer_id=COALESCE(customer_id,?), pay_note=COALESCE(pay_note,?), assistant_id=COALESCE(assistant_id,?), service=COALESCE(service,?), taken_by=COALESCE(taken_by,?) WHERE id=?').run(a.customer_id, a.pay_note, a.assistant_id, a.service, a.taken_by, keep.id);
-      db.prepare('DELETE FROM appointments WHERE id=?').run(a.id);
-      removed++;
+    const gone = new Set();
+    for (const keep of list) {
+      if (gone.has(keep.id)) continue;
+      for (const a of list) {
+        if (a === keep || gone.has(a.id) || !same(keep, a)) continue;
+        if (a.visit_id && a.visit_id !== keep.visit_id) continue; // 2 hóa đơn thật → để phần dọn hóa đơn xử lý
+        try { db.prepare('UPDATE chat_messages SET appointment_id=? WHERE appointment_id=?').run(keep.id, a.id); } catch { /* chưa có bảng chat */ }
+        if (a.note && (!keep.note || a.note.length > keep.note.length) && !keep.manual_edit) db.prepare('UPDATE appointments SET note=? WHERE id=?').run(a.note, keep.id);
+        db.prepare('UPDATE appointments SET customer_id=COALESCE(customer_id,?), pay_note=COALESCE(pay_note,?), assistant_id=COALESCE(assistant_id,?), service=COALESCE(service,?), taken_by=COALESCE(taken_by,?) WHERE id=?').run(a.customer_id, a.pay_note, a.assistant_id, a.service, a.taken_by, keep.id);
+        db.prepare('DELETE FROM appointments WHERE id=?').run(a.id);
+        gone.add(a.id); removed++;
+      }
     }
   }
   return removed;
