@@ -230,7 +230,8 @@ function mount(app, { MGR, OWNER }) {
     purge();
     const after = int(req.query.after), before = int(req.query.before);
     const day = L.isDate(req.query.date) ? req.query.date : null;
-    const rows = after ? msgRows('m.id>?', [after], 200) : before ? msgRows('m.id<?', [before], 50) : day ? msgRows('substr(m.created_at,1,10)=?', [day], 1000) : msgRows('1=1', [], 80);
+    // Tin mới (đang xem 1 ngày): chỉ lấy tin của ngày đó – trước đây ngày chưa có tin thì after=0 → kéo cả tin các ngày cũ
+    const rows = req.query.after !== undefined && day ? msgRows('m.id>? AND substr(m.created_at,1,10)=?', [after || 0, day], 200) : after ? msgRows('m.id>?', [after], 200) : before ? msgRows('m.id<?', [before], 50) : day ? msgRows('substr(m.created_at,1,10)=?', [day], 1000) : msgRows('1=1', [], 80);
     const last = db.prepare('SELECT MAX(id) n FROM chat_messages').get().n || 0;
     if (!before) db.prepare('INSERT INTO chat_reads(user_id,last_id) VALUES (?,?) ON CONFLICT(user_id) DO UPDATE SET last_id=MAX(last_id, excluded.last_id)').run(req.user.id, last);
     res.json(rows);

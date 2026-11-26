@@ -1050,7 +1050,7 @@ VIEWS.chat = async (main) => {
     if (!document.body.contains(list)) { S.chatPull = null; return; }
     if (!isToday) return refreshChatBadge();
     const last = msgs.length ? msgs[msgs.length - 1].id : 0;
-    const fresh = await api('/chat?after=' + last);
+    const fresh = await api(`/chat?after=${last}&date=${day}`);
     if (fresh.length) { msgs = msgs.concat(fresh.filter((m) => !msgs.some((x) => x.id === m.id))); draw(true); }
   };
   const f = $('#chatF'), ta = f.body;
