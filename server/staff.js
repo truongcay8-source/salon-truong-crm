@@ -279,18 +279,21 @@ function mount(app, { MGR, OWNER }) {
     const hasFull = db.prepare("SELECT 1 FROM staff_off WHERE user_id=? AND date=? AND status='approved' AND from_time IS NULL");
     const hasSame = db.prepare("SELECT 1 FROM staff_off WHERE user_id=? AND date=? AND status='approved' AND from_time=? AND to_time=?");
     const ins = db.prepare("INSERT INTO staff_off(user_id,date,from_time,to_time,reason,status,created_by,decided_by) VALUES (?,?,?,?,?,'approved',?,?)");
-    let n = 0, skipped = 0;
+    // OFF cả ngày → xóa giờ do ⚡ Chấm đủ tự điền ngày đó (giờ nhân viên tự chấm / chấm hộ có lý do thì giữ)
+    const unfill = db.prepare("DELETE FROM attendance WHERE user_id=? AND date=? AND method='manual' AND note='Chấm đủ hàng loạt'");
+    let n = 0, skipped = 0, removed = 0;
     db.transaction(() => {
       for (let d = new Date(d1 + 'T00:00:00Z'), k = 0; d.toISOString().slice(0, 10) <= d2 && k < 62; d.setUTCDate(d.getUTCDate() + 1), k++) {
         const date = d.toISOString().slice(0, 10);
         for (const u of users) {
+          if (!fromT) removed += unfill.run(u, date).changes;
           if (hasFull.get(u, date) || (fromT && hasSame.get(u, date, fromT, toT))) { skipped++; continue; }
           ins.run(u, date, fromT || null, toT || null, reason, req.user.id, req.user.id); n++;
         }
       }
     })();
-    audit(req.user.id, 'quick_off', 'staff_off', null, { from: d1, to: d2, users, all, from_time: fromT, to_time: toT, reason });
-    res.json({ added: n, skipped, users: users.length });
+    audit(req.user.id, 'quick_off', 'staff_off', null, { from: d1, to: d2, users, all, from_time: fromT, to_time: toT, reason, removed });
+    res.json({ added: n, skipped, removed, users: users.length });
   });
   // ===== Excel chấm công: xuất mẫu (đã có giờ + ô trống từng người từng ngày) → điền → nhập lại hàng loạt =====
   const fold = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/\s+/g, ' ').trim();
