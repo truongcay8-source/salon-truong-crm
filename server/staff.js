@@ -127,6 +127,8 @@ function report(from, to, user, userId) {
 // Ô: work (có chấm vào) · off (nghỉ cả ngày) · part (nghỉ vài giờ, có/không đi làm) · absent (ngày đã qua, không chấm, không đơn) · '' (chưa tới / trước khi dùng chấm công)
 function grid(from, to, user, userId, list) {
   const t = today();
+  // Đang xem đến hôm nay → kéo bảng tới hết tháng để thấy luôn lịch OFF sắp tới (vd Thoại OFF 28–29/11)
+  if (to === t) { const [y, m] = t.split('-').map(Number); to = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); }
   let staff = db.prepare('SELECT id, full_name FROM users WHERE active=1 AND IFNULL(works,1)=1 AND merged_into IS NULL ORDER BY id').all();
   if (!isMgr(user)) staff = staff.filter((u) => u.id === user.id); else if (userId) staff = staff.filter((u) => u.id === userId);
   const firstUse = (db.prepare('SELECT MIN(date) d FROM attendance').get() || {}).d;
@@ -141,6 +143,7 @@ function grid(from, to, user, userId, list) {
       const full = o.find((x) => !x.from_time);
       const part = o.filter((x) => x.from_time).map((x) => `${x.from_time}–${x.to_time}`).join(', ');
       const c = { date };
+      if (date > t) c.future = true;
       if (a && a.in) {
         Object.assign(c, { s: 'work', in: a.in, out: a.out, minutes: a.minutes, late: a.late_minutes, missing_out: a.missing_out, part: part || null });
         sum.work++; sum.minutes += a.minutes; if (a.late_minutes) { sum.late++; sum.late_minutes += a.late_minutes; } if (a.missing_out) sum.missing_out++;
@@ -474,4 +477,4 @@ function mount(app, { MGR, OWNER }) {
   });
 }
 
-module.exports = { mount, offAt };
+module.exports = { mount, offAt, report };
