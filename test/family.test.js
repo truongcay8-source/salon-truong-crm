@@ -880,3 +880,19 @@ test('hoa hồng người phụ trích từ hoa hồng dòng: nhuộm 15% có ph
   assert.equal(r.data.main_commission + r.data.assistant_commission, Math.round(500000 * cut.r), 'tổng không vượt hoa hồng dòng');
   assert.ok(require('../server/logic').recalcCommissions('2026-11-01') > 0);
 });
+
+test('chia tip: nghỉ vài giờ / nửa ngày → tip của khách đến trong giờ nghỉ chỉ chia người có mặt', () => {
+  const T = require('../server/tips');
+  const pool = T.poolIds(); assert.ok(pool.length >= 2);
+  const off = pool[0];
+  db.prepare("INSERT INTO visits(code,date,time,main_staff_id,total,cash_paid,tip,status) VALUES ('LTP1','2026-09-10','10:00',?,100000,100000,90000,'done')").run(pool[1]);
+  db.prepare("INSERT INTO visits(code,date,time,main_staff_id,total,cash_paid,tip,status) VALUES ('LTP2','2026-09-10','16:00',?,100000,100000,40000,'done')").run(pool[1]);
+  db.prepare("INSERT INTO staff_off(user_id,date,from_time,to_time,status) VALUES (?,'2026-09-10','08:00','13:00','approved')").run(off);
+  const r = T.tipReport('2026-09');
+  const d = r.days.find((x) => x.date === '2026-09-10');
+  const n = pool.length;
+  assert.equal(d.by[off], Math.round(40000 / n), 'người nghỉ sáng chỉ được chia tip buổi chiều');
+  assert.equal(d.by[pool[1]], Math.round(90000 / (n - 1) + 40000 / n));
+  assert.deepEqual(d.list.find((t) => t.code === 'LTP1').away, [off]);
+  assert.equal(d.share, null);
+});

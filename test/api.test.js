@@ -319,7 +319,8 @@ test('luồng chính và phân quyền', async () => {
   assert.equal(tp.total_tip, 290000); assert.equal(tp.pay_date, '2026-04-05');
   const sh = (n) => tp.shares.find((x) => x.user_id === staff[n]).amount;
   assert.equal(sh('Thoại'), 50000, 'nghỉ ngày 11 → chỉ nhận 200k/4');
-  assert.equal(sh('Trường'), 80000); assert.equal(sh('Dương'), 80000, 'nghỉ vài giờ vẫn chia');
+  // Dương nghỉ 9h–11h, khách đến 10h → tip 90k ngày 11 chỉ chia Chị Thu + Trường
+  assert.equal(sh('Trường'), 95000); assert.equal(sh('Dương'), 50000, 'nghỉ vài giờ: tip trong giờ nghỉ không chia');
   assert.equal((await mgr.post('/tips/paid', { month: '2026-03', user_id: staff['Thoại'] })).status, 200);
   tp = (await thu.get('/tips?month=2026-03')).data;
   assert.equal(tp.shares.find((x) => x.user_id === staff['Thoại']).paid_amount, 50000);

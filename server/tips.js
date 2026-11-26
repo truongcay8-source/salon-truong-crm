@@ -1,6 +1,7 @@
 'use strict';
 // Chia tip chung: tip cả tháng gom lại, mỗi ngày chia đều cho các thợ trong nhóm có đi làm hôm đó.
 // Ai nghỉ (đơn off cả ngày đã duyệt) thì không được chia tip của ngày đó. Trả vào ngày 5 tháng kế tiếp.
+// Vinh 26/11: nghỉ vài giờ / nửa ngày → tip của khách đến TRONG giờ nghỉ không chia cho người đó, chỉ chia người có mặt.
 const { db, getSettings, audit } = require('./db');
 const L = require('./logic');
 const { bad, int } = L;
@@ -35,7 +36,9 @@ function tipReport(month) {
   const tipDays = db.prepare(`SELECT date, SUM(tip) tip, COUNT(*) n FROM visits WHERE status='done' AND tip>0 AND date BETWEEN ? AND ? GROUP BY date ORDER BY date`).all(from, to);
   const offs = db.prepare("SELECT user_id, date, from_time, to_time FROM staff_off WHERE status='approved' AND date BETWEEN ? AND ?").all(from, to);
   const fullOff = new Set(offs.filter((o) => !o.from_time || !o.to_time).map((o) => `${o.user_id}|${o.date}`));
-  const partOff = new Set(offs.filter((o) => o.from_time && o.to_time).map((o) => `${o.user_id}|${o.date}`));
+  const partOff = new Map();
+  for (const o of offs.filter((x) => x.from_time && x.to_time)) { const k = `${o.user_id}|${o.date}`; if (!partOff.has(k)) partOff.set(k, []); partOff.get(k).push([o.from_time.slice(0, 5), o.to_time.slice(0, 5)]); }
+  const awayAt = (uid, date, time) => !!time && (partOff.get(`${uid}|${date}`) || []).some(([a, b]) => time.slice(0, 5) >= a && time.slice(0, 5) < b);
   const checked = new Set(db.prepare("SELECT DISTINCT user_id||'|'||date k FROM attendance WHERE kind='in' AND date BETWEEN ? AND ?").all(from, to).map((r) => r.k));
   const usesAttendance = checked.size > 0;
   const per = new Map(members.map((m) => [m.id, { user_id: m.id, name: m.name, exact: 0, days_shared: 0, days_off: 0 }]));
@@ -49,18 +52,27 @@ function tipReport(month) {
     const m = /trả dư ([\d.]+) → tip chung/.exec(t.note || '');
     const auto = m ? Number(m[1].replace(/\./g, '')) : 0;
     if (!tipBy.has(t.date)) tipBy.set(t.date, []);
+    const inDay = members.filter((mb) => !fullOff.has(`${mb.id}|${t.date}`));
+    const away = inDay.filter((mb) => awayAt(mb.id, t.date, t.time)).map((mb) => mb.id);
     tipBy.get(t.date).push({ id: t.id, code: t.code, time: t.time, tip: t.tip, customer: t.customer_name, staff: t.staff_name,
-      source: t.import_ref ? 'sổ' : 'app', auto_extra: Math.min(auto, t.tip) });
+      source: t.import_ref ? 'sổ' : 'app', auto_extra: Math.min(auto, t.tip), shared_by: inDay.map((mb) => mb.id).filter((id) => !away.includes(id)), away });
   }
   const days = tipDays.map((d) => {
-    const present = members.filter((m) => !fullOff.has(`${m.id}|${d.date}`)).map((m) => m.id);
     const absent = members.filter((m) => fullOff.has(`${m.id}|${d.date}`)).map((m) => m.id);
-    const share = present.length ? d.tip / present.length : 0;
-    if (!present.length) unallocated += d.tip;
-    for (const id of present) { const p = per.get(id); p.exact += share; p.days_shared++; }
+    // Chia theo từng lượt: chỉ người có mặt lúc khách đó đến
+    const by = new Map();
+    for (const t of tipBy.get(d.date) || []) {
+      if (!t.shared_by.length) { unallocated += t.tip; continue; }
+      for (const id of t.shared_by) by.set(id, (by.get(id) || 0) + t.tip / t.shared_by.length);
+    }
+    const present = members.map((m) => m.id).filter((id) => by.has(id));
+    for (const [id, amt] of by) { const p = per.get(id); p.exact += amt; p.days_shared++; }
     for (const id of absent) per.get(id).days_off++;
-    return { date: d.date, tip: d.tip, visits: d.n, present, absent, share: Math.round(share), list: tipBy.get(d.date) || [],
+    const amts = [...by.values()].map(Math.round);
+    const even = amts.every((a) => Math.abs(a - amts[0]) <= 1);
+    return { date: d.date, tip: d.tip, visits: d.n, present, absent, share: even && amts.length ? amts[0] : null, by: Object.fromEntries([...by].map(([k, v]) => [k, Math.round(v)])), list: tipBy.get(d.date) || [],
       partial: members.filter((m) => partOff.has(`${m.id}|${d.date}`)).map((m) => m.id),
+      partial_times: Object.fromEntries(members.filter((m) => partOff.has(`${m.id}|${d.date}`)).map((m) => [m.id, partOff.get(`${m.id}|${d.date}`).map(([a, b]) => a + '–' + b).join(', ')])),
       no_checkin: usesAttendance ? present.filter((id) => !checked.has(`${id}|${d.date}`)) : [] };
   });
   // Tip riêng: khách tặng riêng 1 người → người đó nhận nguyên, không chia
