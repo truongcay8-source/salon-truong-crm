@@ -619,7 +619,7 @@ VIEWS.pos = async (main) => {
       <div class="kpi"><div class="l">Bán thẻ</div><div class="v">${money(T.card_sales)}</div><div class="s">tip ${money(T.tips)}</div></div>
       ${T.unpaid ? `<div class="kpi"><div class="l">Khách chưa trả</div><div class="v" style="color:var(--bad,#c0392b)">${money(T.unpaid)}</div></div>` : ''}</div></div>` : '';
   main.innerHTML = header('🧾 Thu ngân', 'Ai cũng làm thu ngân được: khách đến bấm ✓, làm xong bấm 💰 Thanh toán. Sửa hóa đơn đã lưu vẫn chỉ Lãnh đạo.',
-    `<button class="btn primary" id="walk">💰 Khách vãng lai</button><button class="btn" id="close">🔒 Kết ca</button>`) +
+    `<button class="btn primary" id="walk">💰 Khách vãng lai</button><button class="btn" id="spend">− Chi tiền</button><button class="btn" id="close">🔒 Kết ca</button>`) +
     `${isOwner() ? `<div class="card"><div class="row"><input type="date" id="pd" value="${date}" style="width:auto">${date !== S.today ? '<button class="btn sm" id="tdy">Hôm nay</button>' : ''}<span class="small muted">${dmy(date)}</span></div></div>` : ''}
     ${tot}
     ${r.debts && r.debts.length ? `<div class="card"><h3>📝 Khách còn nợ <span class="badge bad">${money(r.debts.reduce((s, d) => s + d.debt, 0))}</span></h3>
@@ -634,13 +634,17 @@ VIEWS.pos = async (main) => {
       <div class="pos-col"><h3>✅ Đã thu <span class="badge">${r.paid.length}</span></h3>${r.unpaid.map((a) => card(a, 'unpaid')).join('')}${r.paid.slice().reverse().map((a) => card(a, 'paid')).join('') || (r.unpaid.length ? '' : '<div class="small muted">Chưa thu lượt nào</div>')}</div>
     </div>
     ${isOwner() && C ? `<div class="card"><h3>💵 Tiền mặt trong két ${dmy(date)} (chỉ bạn thấy)</h3>
-      <div class="stat-line"><span>Tiền mặt từ hóa đơn (${C.invoices} hóa đơn)</span><b>${money(C.visits)}</b></div>
-      <div class="stat-line"><span>Tip chung trả tiền mặt</span><b>${money(C.tips)}</b></div>
-      <div class="stat-line"><span>Bán thẻ tiền mặt</span><b>${money(C.cards)}</b></div>
-      ${C.debts ? `<div class="stat-line"><span>Thu nợ tiền mặt</span><b>${money(C.debts)}</b></div>` : ''}
+      <div class="stat-line"><span>Quỹ có sẵn đầu ngày${C.topup ? ' + nạp thêm' : ''}${C.float < C.target ? ` <span class="small warn-t">(hôm trước để lại thiếu ${money(C.target - C.float)})</span>` : ''}</span><b>${money(C.float + C.topup)}</b></div>
+      <div class="stat-line"><span>+ Tiền mặt từ hóa đơn (${C.invoices} hóa đơn)</span><b>${money(C.visits)}</b></div>
+      ${C.tips ? `<div class="stat-line"><span>+ Tip chung trả tiền mặt</span><b>${money(C.tips)}</b></div>` : ''}
+      ${C.cards ? `<div class="stat-line"><span>+ Bán thẻ tiền mặt</span><b>${money(C.cards)}</b></div>` : ''}
+      ${C.debts ? `<div class="stat-line"><span>+ Thu nợ tiền mặt</span><b>${money(C.debts)}</b></div>` : ''}
+      <div class="stat-line"><span>− Chi lấy từ két${C.spent_rows.length ? ` <span class="small muted">${C.spent_rows.map((x) => esc(x.note || '') + ' ' + money(x.amount) + (x.by_name ? ' (' + esc(x.by_name) + ')' : '') + (x.status === 'pending' ? ' ⏳' : '')).join(' · ')}</span>` : ''}</span><b>${money(C.spent + C.reimb)}</b></div>
       <div class="stat-line"><span><b>Máy tính phải có</b></span><b>${money(C.total)}</b></div>
+      <div class="stat-line"><span>→ Để lại quỹ cho hôm sau</span><b>${money(C.keep)}</b></div>${C.short ? `<div class="small warn-t">Tiền mặt hôm nay chưa đủ ${money(C.target)} → quỹ hôm sau thiếu ${money(C.short)}, bấm Nạp quỹ nếu muốn bù.</div>` : ''}
+      <div class="stat-line"><span><b>→ Nộp anh</b></span><b>${money(C.handover)}</b></div>
       ${r.closes.map((k) => `<div class="stat-line"><span>Kết ca ${esc(k.created_at.slice(11, 16))} · ${esc(k.user_name || '')}${k.note ? ` <span class="small muted">${esc(k.note)}</span>` : ''}</span><b>đếm ${money(k.counted)} · <span style="color:${k.diff ? 'var(--bad,#c0392b)' : 'var(--ok,#1e8449)'}">${k.diff ? (k.diff > 0 ? 'thừa ' : 'thiếu ') + money(Math.abs(k.diff)) : 'khớp'}</span></b></div>`).join('') || '<div class="small muted">Chưa ai kết ca hôm nay.</div>'}
-      <div class="small muted" style="margin-top:6px">Không gồm phong bì quỹ chi tiêu 1tr và tip riêng. Người kết ca không thấy số máy tính (đếm mù) nên không "đếm cho khớp" được.</div>
+      <div class="small muted" style="margin-top:6px">1 két: quỹ ${money(C.float)} nằm sẵn trong két, chi lặt vặt lấy từ két và bấm <b>− Chi tiền</b>. Không gồm tip riêng đã đưa thợ. Người kết ca không thấy số máy tính (đếm mù) nên không "đếm cho khớp" được.</div>
       <div class="row" style="margin-top:8px"><button class="btn sm" id="hist">Lịch sử kết ca 30 ngày</button></div></div>`
     : r.closes.length ? `<div class="card small">Hôm nay đã kết ca: ${r.closes.map((k) => esc(k.created_at.slice(11, 16)) + ' · ' + esc(k.user_name || '')).join('; ')}</div>` : ''}`;
   const reload = () => VIEWS.pos(main);
@@ -674,15 +678,20 @@ VIEWS.pos = async (main) => {
   $$('[data-vw]', main).forEach((b) => (b.onclick = () => guard(b, async () => { if (isOwner()) visitForm(await api('/visits/' + b.dataset.vw), reload); else showReceipt(Number(b.dataset.vw)); })));
   if ($('#pd')) $('#pd').onchange = (e) => e.target.value && go('pos', { date: e.target.value });
   if ($('#tdy')) $('#tdy').onclick = () => go('pos', {});
+  $('#spend').onclick = () => guard($('#spend'), async () => { const ex = await api('/expenses'); expenseForm('out', ex, reload); });
   $('#close').onclick = () => {
-    openModal('🔒 Kết ca – đếm tiền mặt', `<form id="cf"><div class="small muted">Đếm toàn bộ <b>tiền mặt thu trong ngày</b> trong két (tiền khách trả + tip chung tiền mặt + bán thẻ tiền mặt). <b>Không</b> tính phong bì quỹ chi tiêu 1tr, không tính tip riêng đã đưa thợ.</div>
+    openModal('🔒 Kết ca – đếm tiền mặt', `<form id="cf"><div class="small muted">Đếm <b>TOÀN BỘ tiền mặt trong két</b> (kể cả tiền quỹ có sẵn đầu ngày). Không tính tip riêng đã đưa thợ. Đã lấy tiền mua đồ mà chưa ghi thì bấm <b>− Chi tiền</b> trước rồi mới kết ca.</div>
       <div class="form-grid" style="margin-top:10px"><label>Số tiền mặt đếm được (đ)<input name="counted" inputmode="numeric" required placeholder="VD 2.350.000"></label>
       <label>Ghi chú (nếu có)<input name="note" placeholder="VD: đã đưa anh Trường 1tr"></label></div>
       <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary">Gửi kết ca</button></div></form>`);
     const cf = $('#cf'); cf.counted.oninput = () => { const n = cf.counted.value.replace(/\D/g, ''); cf.counted.value = n ? Number(n).toLocaleString('vi-VN') : ''; };
     cf.onsubmit = (e) => { e.preventDefault(); guard($('button.primary', cf), async () => {
       const x = await api('/pos/close', { method: 'POST', body: { counted: cf.counted.value.replace(/\D/g, ''), note: cf.note.value } });
-      closeModal(); toast(x.diff == null ? 'Đã gửi kết ca. Cảm ơn bạn!' : x.diff === 0 ? 'Kết ca khớp tiền ✓' : `Kết ca lệch ${x.diff > 0 ? 'thừa' : 'thiếu'} ${money(Math.abs(x.diff))}`); reload();
+      openModal('✓ Đã kết ca', `<div class="stat-line"><span>Đếm được</span><b>${money(x.counted)}</b></div>
+        <div class="stat-line"><span>💵 Để lại trong két (quỹ hôm sau)</span><b>${money(x.keep)}</b></div>
+        <div class="stat-line"><span>✉️ Bỏ phong bì nộp chủ</span><b class="big">${money(x.handover)}</b></div>
+        ${x.diff == null ? '' : `<div class="small" style="margin-top:6px;color:${x.diff ? 'var(--bad,#c0392b)' : 'var(--ok,#1e8449)'}">${x.diff === 0 ? 'Khớp tiền ✓' : `Lệch ${x.diff > 0 ? 'thừa' : 'thiếu'} ${money(Math.abs(x.diff))}`}</div>`}
+        <div class="modal-foot"><button class="btn primary" onclick="closeModal()">Xong</button></div>`); reload();
     }); };
   };
   if ($('#hist')) $('#hist').onclick = async () => {
@@ -1161,10 +1170,10 @@ VIEWS.expenses = async (main) => {
       ${r.can_decide && e.source === 'staff' && e.status === 'approved' && !e.reimbursed_at ? `<button class="btn sm primary" data-rb="${e.id}">Hoàn ứng</button>` : ''}
       ${r.can_decide && e.kind === 'out' ? `<button class="btn sm" data-ee="${e.id}" title="Nguồn tiền / chia tháng">⚙</button>` : ''}
       ${(r.can_decide || (e.created_by === S.me.id && e.status === 'pending')) ? `<button class="btn sm" data-del="${e.id}" title="Xóa">🗑</button>` : ''}</div></div></div>`;
-  main.innerHTML = header('Chi & quỹ tiền mặt', `Quỹ để ở tiệm ${money(r.target)} · ai mua gì thì ghi lại, quản lý trở lên duyệt`,
+  main.innerHTML = header('Chi & quỹ tiền mặt', `Quỹ ${money(r.target)} nằm sẵn trong két thu ngân · chi lặt vặt lấy từ két, bấm − Chi tiền · kết ca tự trừ`,
     `<button class="btn primary" id="addE">+ Ghi khoản chi</button>${r.can_decide ? '<button class="btn" id="topE">+ Nạp quỹ</button>' : ''}`) +
     `<div class="grid kpis">
-      <div class="kpi"><div class="l">Quỹ còn (sổ sách)</div><div class="v ${r.balance < r.target * 0.3 ? 'bad-text' : ''}">${money(r.balance)}</div><div class="fund-bar"><span style="width:${pct}%"></span></div><div class="s">${r.need_topup ? `cần nạp thêm <b>${money(r.need_topup)}</b> để đủ ${money(r.target)}` : 'đủ quỹ'}</div></div>
+      <div class="kpi"><div class="l">Quỹ trong két còn (hôm nay)</div><div class="v ${r.balance < r.target * 0.3 ? 'bad-text' : ''}">${money(r.balance)}</div><div class="fund-bar"><span style="width:${pct}%"></span></div><div class="s">${r.spent_today ? `đã chi ${money(r.spent_today)} · ` : ''}kết ca tự bù đủ ${money(r.target)} từ tiền thu</div></div>
       <div class="kpi"><div class="l">Chi ${from === to ? (from === S.today ? 'hôm nay' : dmy(from)) : 'trong kỳ'}</div><div class="v">${money(r.total_out)}</div><div class="s">${r.rows.filter((x) => x.kind === 'out').length} khoản (không tính khoản bị từ chối)</div></div>
       <div class="kpi"><div class="l">Chờ duyệt</div><div class="v">${r.pending_count}</div><div class="s">${money(r.pending_amount)}</div></div>
       ${r.reimburse_due.length ? `<div class="kpi"><div class="l">Tiệm nợ nhân viên (chờ hoàn ứng)</div><div class="v warn-text">${money(r.reimburse_due.reduce((a, x) => a + x.amount, 0))}</div><div class="s">${r.reimburse_due.map((x) => esc(x.name) + ' ' + money(x.amount)).join(', ')}</div></div>` : ''}
@@ -1178,12 +1187,19 @@ VIEWS.expenses = async (main) => {
     ${r.older_pending.length ? `<div class="card"><h3>⏳ Khoản chờ duyệt từ ngày khác (${r.older_pending.length})</h3>${r.older_pending.map(row).join('')}</div>` : ''}
     <div class="grid two"><div class="card"><h3>Các khoản</h3>${r.rows.map(row).join('') || '<div class="empty">Chưa có khoản chi nào</div>'}</div>
       <div class="card"><h3>Theo loại</h3>${Object.entries(r.by_category).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="stat-line"><span>${esc(k)}</span><b>${money(v)}</b></div>`).join('') || '<div class="empty">—</div>'}
-        <div class="small muted" style="margin-top:10px">• Khoản <b>không duyệt</b> không tính vào chi phí tiệm, người chi phải hoàn tiền lại vào quỹ.<br>• Cuối ngày đếm tiền mặt trong hộp quỹ, so với “Quỹ còn”; lệch thì báo quản lý.<br>• Ảnh hóa đơn giúp duyệt nhanh, nên chụp mọi khoản trên 100.000đ.</div></div></div>`;
+        <div class="small muted" style="margin-top:10px">• Khoản <b>không duyệt</b> không tính vào chi phí tiệm, người chi phải hoàn tiền lại vào quỹ.<br>• Quỹ nằm trong két thu ngân: cuối ngày <b>Kết ca</b> ở trang Thu ngân, để lại ${money(r.target)} trong két, phần còn lại nộp chủ.<br>• Ảnh hóa đơn giúp duyệt nhanh, nên chụp mọi khoản trên 100.000đ.</div></div></div>`;
   const set = (a, b) => go('expenses', { from: a, to: b });
   $('#ef').onchange = (e) => set(e.target.value, to < e.target.value ? e.target.value : to); $('#et').onchange = (e) => set(from, e.target.value);
   $$('[data-p]', main).forEach((b) => (b.onclick = () => { const t = S.today; if (b.dataset.p === 'today') set(t, t); if (b.dataset.p === 'yest') { const y = addDays(t, -1); set(y, y); } if (b.dataset.p === 'month') set(t.slice(0, 8) + '01', t); }));
-  const form = (kind) => {
-    openModal(kind === 'in' ? 'Nạp tiền vào quỹ' : 'Ghi khoản chi', `<form id="xf"><div class="form-grid">
+  const form = (kind) => expenseForm(kind, r, reload);
+  $('#addE').onclick = () => form('out');
+  if ($('#topE')) $('#topE').onclick = () => form('in');
+  if ($('#tgE')) $('#tgE').onclick = () => { const v = prompt('Mức quỹ tiền mặt để sẵn trong két (đồng):', r.target); if (v) api('/expenses/target', { method: 'PUT', body: { target: Number(v.replace(/\D/g, '')) } }).then(reload).catch((e) => toast(e.message)); };
+  EXPENSE_REST(main, r, reload);
+};
+// Form ghi khoản chi / nạp quỹ (dùng ở trang Chi & quỹ và nút − Chi tiền ở Thu ngân)
+function expenseForm(kind, r, reload) {
+    openModal(kind === 'in' ? 'Nạp tiền vào két' : '− Chi tiền (lấy từ két)', `<form id="xf"><div class="form-grid">
       ${kind === 'out' ? `<div class="full"><label>Mua gì / chi việc gì *</label><input name="note" required placeholder="VD: 2 thùng nước suối, gửi xe…"></div>
       <div><label>Loại</label><select name="category">${r.categories.map((c) => `<option>${esc(c)}</option>`).join('')}</select></div>
       <div class="full"><label>Tiền lấy từ đâu?</label><div class="row" style="gap:6px">
@@ -1215,11 +1231,9 @@ VIEWS.expenses = async (main) => {
       const fd = new FormData($('#xf')); fd.append('kind', kind); fd.set('amount', amt.value.replace(/\D/g, ''));
       const ph = $('#xf [name=photo]'); if (ph && !ph.files.length) fd.delete('photo');
       const res = await api('/expenses', { method: 'POST', body: fd }); closeModal();
-      toast(kind === 'in' ? 'Đã nạp quỹ' : `Đã ghi chi · quỹ còn ${money(res.balance)}`); refreshReminderBadge(); reload(); }); };
-  };
-  $('#addE').onclick = () => form('out');
-  if ($('#topE')) $('#topE').onclick = () => form('in');
-  if ($('#tgE')) $('#tgE').onclick = () => { const v = prompt('Mức quỹ tiền mặt để ở tiệm (đồng):', r.target); if (v) api('/expenses/target', { method: 'PUT', body: { target: Number(v.replace(/\D/g, '')) } }).then(reload).catch((e) => toast(e.message)); };
+      toast(kind === 'in' ? 'Đã nạp vào két' : `Đã ghi chi · quỹ trong két còn ${money(res.balance)}`); refreshReminderBadge(); reload(); }); };
+}
+function EXPENSE_REST(main, r, reload) {
   $$('[data-ok]', main).forEach((b) => (b.onclick = () => guard(b, async () => { await api(`/expenses/${b.dataset.ok}/decide`, { method: 'POST', body: { status: 'approved' } }); refreshReminderBadge(); reload(); })));
   $$('[data-no]', main).forEach((b) => (b.onclick = () => { const why = prompt('Lý do không duyệt (người chi phải hoàn tiền lại quỹ):'); if (!why) return;
     guard(b, async () => { await api(`/expenses/${b.dataset.no}/decide`, { method: 'POST', body: { status: 'rejected', reason: why } }); refreshReminderBadge(); reload(); }); }));

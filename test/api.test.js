@@ -412,13 +412,13 @@ test('luồng chính và phân quyền', async () => {
   const e1 = (await thu.post('/expenses', { amount: '120.000', note: 'Nước suối', category: 'Nước uống, tiếp khách' })).data;
   const e2 = (await duong.post('/expenses', { amount: 300000, note: 'Ăn trưa' })).data;
   let fx = (await thu.get('/expenses')).data;
-  assert.equal(fx.balance, 1000000 - 420000); assert.equal(fx.pending_count, 2); assert.equal(fx.can_decide, false);
+  assert.equal(fx.balance, 1000000 + 1000000 - 420000, '1 két: quỹ đầu ngày + nạp hôm nay − chi hôm nay'); assert.equal(fx.pending_count, 2); assert.equal(fx.can_decide, false);
   assert.equal((await thu.post(`/expenses/${e1.id}/decide`, { status: 'approved' })).status, 403, 'nhân viên không tự duyệt');
   await mgr.post(`/expenses/${e1.id}/decide`, { status: 'approved' });
   assert.equal((await mgr.post(`/expenses/${e2.id}/decide`, { status: 'rejected' })).status, 400, 'không duyệt phải có lý do');
   await mgr.post(`/expenses/${e2.id}/decide`, { status: 'rejected', reason: 'Không phải chi của tiệm' });
   fx = (await mgr.get('/expenses')).data;
-  assert.equal(fx.balance, 880000); assert.equal(fx.need_topup, 120000); assert.equal(fx.pending_count, 0);
+  assert.equal(fx.balance, 1880000, 'khoản không duyệt không trừ'); assert.equal(fx.need_topup, 0); assert.equal(fx.pending_count, 0);
   assert.equal(fx.refund_due[0].amount, 300000); assert.equal(fx.total_out, 120000);
   assert.equal((await thu.del('/expenses/' + e1.id)).status, 403, 'khoản đã duyệt nhân viên không xóa được');
 

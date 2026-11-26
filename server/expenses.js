@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS expenses (
 CREATE INDEX IF NOT EXISTS idx_exp_date ON expenses(date);
 `);
 db.prepare("INSERT OR IGNORE INTO settings(key,value) VALUES ('petty_target','1000000')").run();
+// Ngày bắt đầu cách 1 két (quỹ nằm trong két thu ngân) – kết ca trước ngày này theo cách cũ, không dùng làm quỹ đầu ngày
+db.prepare("INSERT OR IGNORE INTO settings(key,value) VALUES ('one_box_from', date('now','localtime'))").run();
 // Khoản chi nhập từ sổ đặt lịch (cột Chi + Ghi chú) → không nhân đôi khi nhập lại file
 if (!db.prepare('PRAGMA table_info(expenses)').all().some((c) => c.name === 'import_ref')) db.exec('ALTER TABLE expenses ADD COLUMN import_ref TEXT');
 // Nguồn tiền: fund = tiền mặt tại tiệm (quỹ/két, mặc định); staff = nhân viên ứng trước (TM/CK cá nhân) → chờ hoàn ứng;
@@ -109,8 +111,16 @@ function fundState() {
   // Nhân viên ứng tiền mua hộ, khoản đã duyệt mà tiệm chưa trả lại
   const reimb = db.prepare(`SELECT e.created_by user_id, u.full_name name, SUM(e.amount) amount, COUNT(*) n FROM expenses e JOIN users u ON u.id=e.created_by
     WHERE e.kind='out' AND e.status='approved' AND e.source='staff' AND e.reimbursed_at IS NULL GROUP BY e.created_by`).all();
-  const balance = r.ins - r.outs;
-  return { balance, target, need_topup: Math.max(0, target - balance), pending_amount: r.pending_amount, pending_count: r.pending_count, refund_due: refund, reimburse_due: reimb };
+  // 1 két (Vinh 26/11): quỹ nằm trong két, mỗi ngày bắt đầu lại đủ mức quỹ (bù từ tiền thu trong ngày lúc kết ca)
+  const t = today();
+  const d = db.prepare(`SELECT
+      COALESCE(SUM(CASE WHEN kind='in' THEN amount END),0) ins,
+      COALESCE(SUM(CASE WHEN kind='out' AND status<>'rejected' AND COALESCE(source,'fund')='fund' THEN amount END),0) outs
+    FROM expenses WHERE date=?`).get(t);
+  const reimbToday = db.prepare("SELECT COALESCE(SUM(amount),0) s FROM expenses WHERE kind='out' AND status='approved' AND reimburse_method='fund' AND reimbursed_at=?").get(t).s;
+  const balance = require('./pos').expectedCash(t).float + d.ins - d.outs - reimbToday;
+  void r.ins; void r.outs;
+  return { balance, target, spent_today: d.outs + reimbToday, need_topup: 0, one_box: true, pending_amount: r.pending_amount, pending_count: r.pending_count, refund_due: refund, reimburse_due: reimb };
 }
 
 function mount(app, { MGR, upload, sniffImage, PHOTO_DIR }) {

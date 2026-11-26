@@ -610,10 +610,11 @@ test('chi: nguồn tiền (quỹ / nhân viên ứng / chủ trả), hoàn ứng
   await mk({ amount: 100000, note: 'nước' });
   const st = await mk({ amount: 200000, note: 'khăn – Thu mua hộ', source: 'staff', pay_method: 'Chuyển khoản' });
   await mk({ amount: 1200000, note: 'Canva 1 năm', source: 'owner', spread_months: 12 });
-  assert.equal(E.fundState().balance, b0 - 100000, 'chỉ khoản lấy TM tại tiệm trừ quỹ');
+  const P = require('../server/pos'); void b0;
+  assert.equal(P.expectedCash(d).spent, 100000, 'chỉ khoản lấy TM tại tiệm trừ tiền trong két');
   assert.equal(E.fundState().reimburse_due.reduce((a, x) => a + x.amount, 0), 200000);
   assert.equal((await o.post(`/expenses/${st.id}/reimburse`, { method: 'fund' })).status, 200);
-  assert.equal(E.fundState().balance, b0 - 300000, 'hoàn ứng bằng TM tại tiệm trừ quỹ');
+  assert.ok(P.expectedCash(require('../server/logic').today()).reimb >= 200000, 'hoàn ứng bằng TM tại tiệm trừ tiền trong két');
   assert.equal(E.fundState().reimburse_due.length, 0);
   const share = (m) => E.monthExpenses(m).reduce((a, x) => a + x.share, 0);
   assert.equal(share('2025-06'), 100000 + 200000 + 100000);
@@ -949,4 +950,16 @@ test('Quyền tiền: quản lý chỉ thấy doanh số của mình, không th�
   assert.equal(rep.summary, null); assert.ok(rep.rows.every((r) => r.user_id === (me.user || me).id));
   const pos = (await m.get('/pos?date=2026-01-02')).data;
   assert.notEqual(pos.date, '2026-01-02', 'quản lý chỉ xem Thu ngân hôm nay'); assert.equal(pos.totals, undefined);
+});
+
+test('1 két: kết ca trừ chi lấy từ két, để lại quỹ, phần vượt nộp chủ', async () => {
+  const P = require('../server/pos'), L = require('../server/logic');
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const t = L.today(); const before = P.expectedCash(t);
+  assert.equal(before.float, 1000000);
+  await o.post('/expenses', { kind: 'out', amount: 45000, note: 'gửi xe + nước', category: 'Khác' });
+  const after = P.expectedCash(t);
+  assert.equal(after.spent - before.spent, 45000); assert.equal(before.total - after.total, 45000);
+  const r = await o.post('/pos/close', { counted: String(after.total) });
+  assert.equal(r.data.diff, 0); assert.equal(r.data.keep, Math.min(after.total, 1000000)); assert.equal(r.data.handover, after.total - r.data.keep);
 });

@@ -22,7 +22,9 @@ CREATE INDEX IF NOT EXISTS idx_cash_closes_date ON cash_closes(date);
 
 const cashName = () => getSettings().payment_methods.split(',').map((s) => s.trim()).find((m) => /mặt/i.test(m)) || 'Tiền mặt';
 
-// Tiền mặt máy tính phải có trong két của ngày: phần tiền mặt của hóa đơn + tip chung trả tiền mặt + bán thẻ tiền mặt
+// Vinh 26/11 – 1 KÉT: quỹ 1tr nằm sẵn trong két đầu ngày; chi lặt vặt lấy từ két.
+// Tiền phải có = quỹ đầu ngày + nạp thêm + tiền mặt hóa đơn + tip chung TM + bán thẻ TM + thu nợ TM − chi TM tại tiệm − hoàn ứng bằng TM tiệm.
+// Kết ca: để lại đúng quỹ cho hôm sau, phần vượt nộp chủ.
 function expectedCash(date) {
   const cash = cashName();
   let visits = 0, tips = 0, n = 0;
@@ -37,7 +39,18 @@ function expectedCash(date) {
   }
   const cards = db.prepare("SELECT COALESCE(SUM(price),0) s FROM cards WHERE sold_at=? AND payment_method=? AND price>0").get(date, cash).s;
   const debts = db.prepare("SELECT COALESCE(SUM(debt),0) s FROM visits WHERE status='done' AND debt>0 AND debt_paid_at=? AND debt_paid_method=?").get(date, cash).s;
-  return { visits, tips, cards, debts, total: visits + tips + cards + debts, invoices: n };
+  // Quỹ đầu ngày = số để lại trong két ở lần kết ca gần nhất trước đó (tối đa mức quỹ); chưa kết ca lần nào theo cách 1 két → mức quỹ
+  const st = getSettings(), target = Number(st.petty_target) || 1000000;
+  const prev = db.prepare('SELECT counted FROM cash_closes WHERE date<? AND date>=? ORDER BY date DESC, id DESC LIMIT 1').get(date, st.one_box_from || '9999');
+  const float = prev ? Math.min(prev.counted, target) : target;
+  const spentRows = db.prepare(`SELECT e.id, e.amount, e.note, e.status, u.full_name by_name FROM expenses e LEFT JOIN users u ON u.id=e.created_by
+    WHERE e.kind='out' AND e.status<>'rejected' AND COALESCE(e.source,'fund')='fund' AND e.date=? ORDER BY e.id`).all(date);
+  const spent = spentRows.reduce((s, x) => s + x.amount, 0);
+  const reimb = db.prepare("SELECT COALESCE(SUM(amount),0) s FROM expenses WHERE kind='out' AND status='approved' AND reimburse_method='fund' AND reimbursed_at=?").get(date).s;
+  const topup = db.prepare("SELECT COALESCE(SUM(amount),0) s FROM expenses WHERE kind='in' AND date=?").get(date).s;
+  const income = visits + tips + cards + debts;
+  const total = float + topup + income - spent - reimb;
+  return { float, target, topup, visits, tips, cards, debts, income, spent, spent_rows: spentRows, reimb, total, keep: Math.min(total, target), handover: Math.max(0, total - target), short: Math.max(0, target - total), invoices: n };
 }
 
 function board(date, user) {
@@ -123,9 +136,11 @@ function mount(app, { OWNER }) {
     const id = db.prepare('INSERT INTO cash_closes(date,user_id,counted,expected,detail,note) VALUES (?,?,?,?,?,?)')
       .run(date, req.user.id, counted, e.total, JSON.stringify(e), L.str(b.note)).lastInsertRowid;
     audit(req.user.id, 'cash_close', 'cash_closes', id, { date, counted });
+    // Để lại quỹ trong két cho hôm sau, phần còn lại nộp chủ (tính từ số NGƯỜI ĐẾM nhập, không lộ số máy tính)
+    const keep = Math.min(counted, Number(getSettings().petty_target) || 1000000), handover = counted - keep;
     // Chỉ Lãnh đạo thấy số máy tính và lệch
-    if (req.user.role === 'owner') return res.json({ id, counted, expected: e.total, diff: counted - e.total, detail: e });
-    res.json({ id, counted });
+    if (req.user.role === 'owner') return res.json({ id, counted, keep, handover, expected: e.total, diff: counted - e.total, detail: e });
+    res.json({ id, counted, keep, handover });
   });
   app.get('/api/pos/closes', OWNER, (req, res) => {
     const to = L.isDate(req.query.to) ? req.query.to : L.today();
