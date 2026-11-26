@@ -32,7 +32,7 @@ function client() {
     const data = await res.json().catch(() => null);
     return { status: res.status, data };
   };
-  return { call, get: (p) => call('GET', p), post: (p, b) => call('POST', p, b || {}), put: (p, b) => call('PUT', p, b), del: (p, b) => call('DELETE', p, b) };
+  return { cookie: () => cookie, call, get: (p) => call('GET', p), post: (p, b) => call('POST', p, b || {}), put: (p, b) => call('PUT', p, b), del: (p, b) => call('DELETE', p, b) };
 }
 async function login(username) {
   const c = client();
@@ -765,4 +765,18 @@ test('lượt bản sao (tài khoản trùng tên) bị gộp nhầm → 1 hóa 
   assert.equal(live().length, 1); assert.equal(live()[0].total, 685000); assert.equal(live()[0].tip, 50000);
   assert.equal(I.unmergeCloneDupes(), 0, 'chạy lại không đổi');
   db.prepare("UPDATE users SET active=0, works=0 WHERE id=?").run(clone);
+});
+
+test('xuất Excel hóa đơn bán hàng: chỉ Lãnh đạo, đúng số hóa đơn + dòng tổng', async () => {
+  const ExcelJS = require('exceljs');
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const thu = client(); assert.equal((await thu.post('/login', { username: 'thu', password: 'moi-thu' })).status, 200);
+  assert.equal((await thu.get('/visits/export?from=2026-11-01&to=2026-11-30')).status, 403);
+  const res = await fetch(base + '/visits/export?from=2026-11-19&to=2026-11-21', { headers: { Cookie: o.cookie() } });
+  assert.equal(res.status, 200);
+  const wb = new ExcelJS.Workbook(); await wb.xlsx.load(Buffer.from(await res.arrayBuffer()));
+  const ws = wb.getWorksheet('Hóa đơn');
+  const n = db.prepare("SELECT COUNT(*) n FROM visits WHERE status='done' AND date BETWEEN '2026-11-19' AND '2026-11-21'").get().n;
+  assert.equal(ws.rowCount, n + 2);
+  assert.equal(ws.getRow(ws.rowCount).getCell(1).value, 'TỔNG');
 });
