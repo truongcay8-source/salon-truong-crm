@@ -294,6 +294,10 @@ function seedLevels() {
 }
 const insSetting = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)');
 for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) insSetting.run(k, v);
+if (!db.prepare("SELECT 1 FROM settings WHERE key='mig_book_until_1126'").get()) {
+  db.prepare("UPDATE settings SET value='2026-11-26' WHERE key='book_money_until' AND (value='2026-12-01' OR value='')").run();
+  db.prepare("INSERT INTO settings(key,value) VALUES ('mig_book_until_1126','1')").run();
+}
 
 function getSettings() {
   const out = {};

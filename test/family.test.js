@@ -800,3 +800,18 @@ test('1 khách 1 ngày: uốn/nhuộm đã có trong hóa đơn khác → cảnh
   const sus = (await o.get('/visits/suspects?from=2026-11-25&to=2026-11-25')).data;
   assert.ok(sus.some((x) => x.a_id === a.data.id && x.b_id === b2.data.id));
 });
+
+test('hóa đơn sổ ghi lại dịch vụ hóa chất đã có trong hóa đơn khác cùng ngày → tự xóa mềm; hóa đơn ghi tay thì giữ', () => {
+  const I = require('../server/importer');
+  const cid = db.prepare("SELECT id FROM customers WHERE code='TDS1'").get().id;
+  const vs = db.prepare("SELECT id, time FROM visits WHERE customer_id=? AND status='done' ORDER BY id").all(cid);
+  const b = vs.find((v) => v.time === '10:00');
+  assert.equal(I.dedupeSameDayChem(), 0, 'ghi tay (không từ sổ) thì không tự xóa');
+  db.prepare("UPDATE visits SET import_ref='SO:test-10h' WHERE id=?").run(b.id);
+  assert.equal(I.dedupeSameDayChem(), 1);
+  const st = db.prepare('SELECT status, delete_reason FROM visits WHERE id=?').get(b.id);
+  assert.equal(st.status, 'deleted'); assert.match(st.delete_reason, /hóa chất/);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM visits WHERE customer_id=? AND status='done'").get(cid).n, 2, 'giữ hóa đơn 09:30 và hóa đơn cắt');
+  assert.equal(I.dedupeSameDayChem(), 0);
+  assert.equal(db.prepare("SELECT value FROM settings WHERE key='book_money_until'").get().value, '2026-11-26', 'sổ chỉ lấy lịch hẹn từ 26/11');
+});
