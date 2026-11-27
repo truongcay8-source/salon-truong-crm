@@ -1065,3 +1065,21 @@ test('Phiếu nhập hàng: nhiều dòng, tạo hàng mới, CK, nợ NCC, dòn
   assert.equal(db.prepare('SELECT COALESCE(SUM(qty),0) q FROM stock_moves WHERE material_id=?').get(old).q, st0);
   assert.equal(P.paidBetween('2026-11-01', '2026-11-30'), 0);
 });
+
+test('Sửa giá nhập sai: giá vốn bình quân + giá vốn lần bán + tổng phiếu tính lại', async () => {
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const r = await o.post('/purchases', { supplier: 'Test NCC', date: '2026-09-02', paid: 0, lines: [{ new: { name: 'Wax sửa giá', kind: 'retail', unit: 'Tuýp' }, qty: 1, price: 239000 }] });
+  const mid = r.data.lines[0].material_id, mvId = r.data.lines[0].id;
+  const c = db.prepare('SELECT id FROM customers WHERE deleted=0 ORDER BY id').get().id;
+  const vid = db.prepare("INSERT INTO visits(code,customer_id,date,time,subtotal,surcharge,discount,total,card_paid,cash_paid,payment_method,status,cost) VALUES ('FXC1',?,'2026-09-03','10:00',488000,0,0,488000,0,488000,'Tiền mặt','done',239000)").run(c).lastInsertRowid;
+  db.prepare("INSERT INTO stock_moves(material_id,date,kind,qty,unit_cost,visit_id) VALUES (?,'2026-09-03','sale',-1,239000,?)").run(mid, vid);
+  let x = await o.put('/stock-moves/' + mvId, { unit_cost: 294000 });
+  assert.equal(x.status, 200); assert.equal(x.data.avg_cost, 294000);
+  assert.equal(db.prepare('SELECT cost FROM visits WHERE id=?').get(vid).cost, 294000);
+  assert.equal(db.prepare('SELECT total FROM purchases WHERE id=?').get(r.data.id).total, 294000);
+  const sale = db.prepare("SELECT id FROM stock_moves WHERE visit_id=?").get(vid).id;
+  assert.equal((await o.put('/stock-moves/' + sale, { unit_cost: 1 })).status, 400, 'dòng bán không sửa ở đây');
+  assert.equal((await o.del('/stock-moves/' + mvId)).status, 200);
+  assert.equal(db.prepare('SELECT COALESCE(SUM(qty),0) q FROM stock_moves WHERE material_id=?').get(mid).q, -1);
+  db.prepare("UPDATE visits SET status='deleted' WHERE id=?").run(vid);
+});
