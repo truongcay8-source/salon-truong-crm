@@ -453,6 +453,47 @@ function mount(app, { MGR, OWNER }) {
       WHERE s.material_id=? ORDER BY s.date DESC, s.id DESC LIMIT 200`).all(int(req.params.id)));
   });
 
+  // Sửa / xóa 1 lần nhập kho hoặc điều chỉnh khi ghi sai (chỉ Lãnh đạo). Sau khi sửa: tính lại giá vốn bình quân,
+  // cập nhật giá vốn các lần bán/dùng của hàng đó + giá cốt từng lượt, và tổng phiếu nhập nếu dòng thuộc phiếu.
+  const recost = (mid) => {
+    const avg = avgCost(mid);
+    const vids = db.prepare("SELECT DISTINCT visit_id v FROM stock_moves WHERE material_id=? AND kind IN ('use','sale') AND visit_id IS NOT NULL").all(mid).map((r) => r.v);
+    db.prepare("UPDATE stock_moves SET unit_cost=? WHERE material_id=? AND kind IN ('use','sale','adjust')").run(avg, mid);
+    const setCost = db.prepare("UPDATE visits SET cost=(SELECT COALESCE(ROUND(SUM(-qty*unit_cost)),0) FROM stock_moves WHERE visit_id=? AND kind IN ('use','sale')) WHERE id=?");
+    for (const v of vids) setCost.run(v, v);
+    return Math.round(avg);
+  };
+  const repur = (pid) => { if (!pid) return;
+    const t = Math.round(db.prepare('SELECT COALESCE(SUM(qty*unit_cost),0) s FROM stock_moves WHERE purchase_id=?').get(pid).s);
+    db.prepare('UPDATE purchases SET total=?, subtotal=?+discount WHERE id=?').run(t, t, pid); };
+  const editable = (id) => {
+    const mv = db.prepare('SELECT * FROM stock_moves WHERE id=?').get(id);
+    if (!mv) throw new HttpError(404, 'Không tìm thấy dòng kho');
+    if (!['in', 'adjust'].includes(mv.kind) || mv.visit_id) throw bad('Chỉ sửa được dòng Nhập / Điều chỉnh. Dòng bán/dùng sửa ở hóa đơn.');
+    return mv;
+  };
+  app.put('/api/stock-moves/:id', OWNER, (req, res) => {
+    const mv = editable(int(req.params.id)); const b = req.body || {};
+    const qty = b.qty == null || b.qty === '' ? mv.qty : Number(b.qty);
+    if (!qty || (mv.kind === 'in' && qty < 0)) throw bad('Số lượng không hợp lệ');
+    const price = mv.kind === 'in' && b.unit_cost !== '' && b.unit_cost != null ? Math.max(0, Number(b.unit_cost) || 0) : null;
+    const date = isDate(b.date) ? b.date : mv.date;
+    db.transaction(() => {
+      if (price != null) db.prepare('UPDATE stock_moves SET unit_cost=?, list_price=CASE WHEN list_price IS NULL THEN NULL ELSE ? END WHERE id=?').run(price, price, mv.id);
+      db.prepare('UPDATE stock_moves SET qty=?, date=?, note=COALESCE(?,note), supplier=COALESCE(?,supplier) WHERE id=?').run(qty, date, b.note == null ? null : str(b.note), b.supplier == null ? null : str(b.supplier), mv.id);
+      repur(mv.purchase_id);
+    })();
+    const avg = recost(mv.material_id);
+    audit(req.user.id, 'stock_move_edit', 'stock_moves', mv.id, { before: { qty: mv.qty, unit_cost: mv.unit_cost, date: mv.date }, after: { qty, unit_cost: price ?? mv.unit_cost, date } });
+    res.json({ ok: true, avg_cost: avg, stock: r2(stockOf(mv.material_id)) });
+  });
+  app.delete('/api/stock-moves/:id', OWNER, (req, res) => {
+    const mv = editable(int(req.params.id));
+    db.transaction(() => { db.prepare('DELETE FROM stock_moves WHERE id=?').run(mv.id); repur(mv.purchase_id); })();
+    const avg = recost(mv.material_id);
+    audit(req.user.id, 'stock_move_delete', 'stock_moves', mv.id, { qty: mv.qty, unit_cost: mv.unit_cost, date: mv.date, kind: mv.kind });
+    res.json({ ok: true, avg_cost: avg, stock: r2(stockOf(mv.material_id)) });
+  });
   // Định mức hóa chất cho từng dịch vụ (nhân viên lấy để điền sẵn; giá cốt chỉ quản lý thấy)
   app.get('/api/recipes', (req, res) => {
     const rows = db.prepare('SELECT service_id, material_id, qty FROM service_materials ORDER BY id').all();

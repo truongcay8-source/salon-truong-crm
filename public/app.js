@@ -2650,7 +2650,23 @@ VIEWS.stock = async (main) => {
         <div><label>Số lượng (${esc(m.unit || 'đơn vị')})</label><input type="number" name="qty" step="any" required></div>
         <div><label>Đơn giá nhập (khi nhập)</label><input type="number" name="unit_cost" min="0" step="1000"></div><div><label>Ngày</label><input type="date" name="date" value="${S.today}"></div>
         <div class="full"><label>Nhà cung cấp / lý do</label><input name="note"></div></div><div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu</button></div></form>
-        <h3 style="margin-top:14px">Lịch sử</h3>${hist.length ? `<table><tbody>${hist.map((h) => `<tr><td>${dmy(h.date)}</td><td>${KN[h.kind]}</td><td class="num">${Math.round(h.qty * 1000) / 1000}</td><td class="num small">${money(Math.round(h.unit_cost))}</td><td class="small muted">${esc(h.visit_code ? h.visit_code + ' · ' + (h.customer_name || '') : h.supplier || h.note || '')}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">—</div>'}`);
+        <h3 style="margin-top:14px">Lịch sử <span class="small muted">· nhập sai giá/số lượng → bấm ✏️ để sửa</span></h3>${hist.length ? `<table><tbody>${hist.map((h) => `<tr><td>${dmy(h.date)}</td><td>${KN[h.kind]}</td><td class="num">${Math.round(h.qty * 1000) / 1000}</td><td class="num small">${money(Math.round(h.unit_cost))}</td><td class="small muted">${esc(h.visit_code ? h.visit_code + ' · ' + (h.customer_name || '') : h.supplier || h.note || '')}</td>
+          <td>${['in', 'adjust'].includes(h.kind) && !h.visit_id ? `<button type="button" class="btn sm" data-hm="${h.id}">✏️</button>` : ''}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">—</div>'}`);
+      $$('[data-hm]').forEach((x) => (x.onclick = () => {
+        const h = hist.find((y) => y.id === Number(x.dataset.hm)); const tr = x.closest('tr');
+        tr.innerHTML = `<td colspan="6"><form class="row hm-f" style="gap:6px;flex-wrap:wrap;align-items:flex-end">
+          <label style="flex:1;min-width:90px">Ngày<input type="date" name="date" value="${h.date}"></label>
+          <label style="flex:1;min-width:70px">SL<input name="qty" inputmode="decimal" value="${Math.round(h.qty * 1000) / 1000}"></label>
+          ${h.kind === 'in' ? `<label style="flex:1;min-width:100px">Giá nhập/đv<input name="unit_cost" inputmode="numeric" value="${Math.round(h.list_price ?? h.unit_cost)}"></label>` : ''}
+          <label style="flex:2;min-width:120px">NCC / ghi chú<input name="note" value="${esc(h.note || h.supplier || '')}"></label>
+          <button class="btn sm primary">Lưu</button><button type="button" class="btn sm danger" data-del>Xóa dòng</button></form><div class="err"></div></td>`;
+        const fm = tr.querySelector('form');
+        fm.onsubmit = (e) => { e.preventDefault(); guard(fm.querySelector('.primary'), async () => { const d = formData(fm);
+          const r = await api('/stock-moves/' + h.id, { method: 'PUT', body: { ...d, qty: Number(String(d.qty).replace(',', '.')), unit_cost: d.unit_cost == null ? '' : Number(String(d.unit_cost).replace(/\D/g, '')) } });
+          closeModal(); toast(`Đã sửa · giá vốn mới ${money(r.avg_cost)} · tồn ${qtyFmt(r.stock)}`); reload(); }); };
+        fm.querySelector('[data-del]').onclick = (e) => guard(e.target, async () => { if (!confirm('Xóa dòng nhập/điều chỉnh này? Tồn kho và giá vốn sẽ tính lại.')) return;
+          const r = await api('/stock-moves/' + h.id, { method: 'DELETE' }); closeModal(); toast(`Đã xóa · tồn ${qtyFmt(r.stock)}`); reload(); });
+      }));
       $('#mvf').onsubmit = (e) => { e.preventDefault(); guard($('#mvf button.primary'), async () => {
         const d = formData($('#mvf')); await api(`/materials/${m.id}/move`, { method: 'POST', body: { ...d, supplier: d.kind === 'in' ? d.note : '' } }); closeModal(); toast('Đã lưu'); reload(); }); };
     }));
