@@ -1037,3 +1037,31 @@ test('Làm lại bảo hành (PA C): thợ chịu giá cốt, phụ chịu %, kh
   assert.equal((await o.get('/payroll?month=2026-08')).data.rows.find((x) => x.user_id === st[0]).warranty, 175000);
   db.prepare("UPDATE visits SET status='deleted' WHERE id=?").run(vid);
 });
+
+test('Phiếu nhập hàng: nhiều dòng, tạo hàng mới, CK, nợ NCC, dòng tiền theo ngày trả, xóa trừ kho', async () => {
+  const o = client(); assert.equal((await o.post('/login', { username: 'vinh', password: 'moi-vinh' })).status, 200);
+  const old = db.prepare("SELECT id FROM materials WHERE active=1 ORDER BY id").get().id;
+  const st0 = db.prepare('SELECT COALESCE(SUM(qty),0) q FROM stock_moves WHERE material_id=?').get(old).q;
+  let r = await o.post('/purchases', { supplier: 'Milbon', ref_no: 'BH-TEST1', date: '2026-10-05', discount: 10000, paid: 0, lines: [
+    { new: { name: 'Kem tạo kiểu Test Wax 100g', kind: 'retail', grp: 'Hàng bán lẻ – tạo kiểu', unit: 'Tuýp' }, qty: 1, price: 294000, sell_price: 488000, sku: 'MB999' },
+    { material_id: old, qty: 2, price: 100000, discount: 10000 },
+    { new: { name: 'Túi giấy Test', kind: 'service', unit: 'Cái' }, qty: 1, price: 0 }] });
+  assert.equal(r.status, 200); const p = r.data;
+  assert.equal(p.subtotal, 294000 + 180000); assert.equal(p.total, 464000); assert.equal(p.created, 2); assert.equal(p.status, 'unpaid');
+  const wax = db.prepare("SELECT * FROM materials WHERE name='Kem tạo kiểu Test Wax 100g'").get();
+  assert.equal(wax.sell_price, 488000); assert.equal(wax.sku, 'MB999'); assert.equal(wax.size, 100); assert.equal(wax.size_unit, 'g');
+  assert.equal(db.prepare('SELECT COALESCE(SUM(qty),0) q FROM stock_moves WHERE material_id=?').get(old).q - st0, 2);
+  const tot = db.prepare('SELECT SUM(qty*unit_cost) s FROM stock_moves WHERE purchase_id=?').get(p.id).s;
+  assert.equal(Math.round(tot), 464000, 'CK cả phiếu chia vào giá vốn');
+  assert.equal((await o.post('/purchases', { supplier: 'Milbon', ref_no: 'BH-TEST1', lines: [{ material_id: old, qty: 1, price: 1 }] })).status, 409, 'trùng số phiếu');
+  const P = require('../server/purchase');
+  assert.equal(P.paidBetween('2026-10-01', '2026-10-31'), 0, 'chưa trả NCC → chưa ra tiền');
+  r = await o.post(`/purchases/${p.id}/pay`, { amount: 500000, date: '2026-11-03', method: 'Chuyển khoản' });
+  assert.equal(r.data.paid, 464000); assert.equal(r.data.status, 'paid');
+  assert.equal(P.paidBetween('2026-11-01', '2026-11-30') >= 464000, true);
+  const list = (await o.get('/purchases?from=2026-10-01&to=2026-10-31')).data;
+  assert.ok(list.rows.some((x) => x.id === p.id));
+  assert.equal((await o.del('/purchases/' + p.id)).status, 200);
+  assert.equal(db.prepare('SELECT COALESCE(SUM(qty),0) q FROM stock_moves WHERE material_id=?').get(old).q, st0);
+  assert.equal(P.paidBetween('2026-11-01', '2026-11-30'), 0);
+});

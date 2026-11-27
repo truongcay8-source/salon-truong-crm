@@ -2381,21 +2381,192 @@ async function stockLevelsView(main, reload) {
   };
 }
 const perUnit = (m) => (m.size ? `${money(Math.round(m.avg_cost / m.size))}/${m.size_unit}` : '');
+// ===== Phiếu nhập hàng (kiểu KiotViet/Sapo): 1 phiếu = 1 NCC, nhiều dòng; gõ/quét tìm hàng; hàng mới tạo ngay trong phiếu; dán từ Excel =====
+const GRP_DEFAULT = { service: ['Hóa chất màu – tẩy', 'Uốn – duỗi – ép', 'Chăm sóc tóc', 'Vật tư thao tác dịch vụ', 'Bao bì – phụ kiện kèm hàng'], retail: ['Hàng bán lẻ – chăm sóc tóc', 'Hàng bán lẻ – tạo kiểu'] };
+const UNIT_DEFAULT = ['Tuýp', 'Chai', 'Hộp', 'Hũ', 'Túi', 'Lọ', 'Gói', 'Cái', 'Bộ'];
+// Gợi ý nhóm theo tên hàng
+function guessGroup(name, kind) {
+  const t = fold(name);
+  if (kind === 'retail') return /wax|pomade|clay|gel|sap|spray|xit|keo|tonic|paste|mousse|tao kieu|styling|molding|fiber/.test(t) ? 'Hàng bán lẻ – tạo kiểu' : 'Hàng bán lẻ – chăm sóc tóc';
+  if (/tui giay|tui |bao bi|hop qua/.test(t)) return 'Bao bì – phụ kiện kèm hàng';
+  if (/mau|nhuom|tay|bleach|oxi|oxy|ordeve|addicthy|developer|toner/.test(t)) return 'Hóa chất màu – tẩy';
+  if (/uon|duoi|ep|perm|neutral|thuoc dap/.test(t)) return 'Uốn – duỗi – ép';
+  if (/goi|xa|hap|u toc|duong|phuc hoi|treatment|mask|serum|linkage/.test(t)) return 'Chăm sóc tóc';
+  return '';
+}
+function guessKind(name) { return /wax|pomade|clay|gel|sap|spray|tonic|paste|mousse|molding|fiber/.test(fold(name)) ? 'retail' : 'service'; }
+function matchMat(q) {
+  const f = fold(q).trim(); if (!f) return [];
+  const code = normCode(q);
+  const exact = S.materials.filter((m) => (code && (normCode(m.sku) === code || hasCode(m, code))) || fold(m.name) === f);
+  if (exact.length) return exact;
+  const words = f.split(/\s+/).filter(Boolean);
+  return S.materials.filter((m) => { const n = fold(m.name + ' ' + (m.sku || '')); return words.every((w) => n.includes(w)); }).slice(0, 8);
+}
+// Dán từ Excel: mỗi dòng "Tên | SL | Đơn giá [| Thành tiền]", có thể kèm cột Mã hàng
+function parsePaste(text) {
+  const out = [];
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const cells = raw.split(/\t|\s{2,}|;|\|/).map((x) => x.trim()).filter(Boolean); if (!cells.length) continue;
+    const isNum = (x) => /^[\d.,]+$/.test(x) && /\d/.test(x);
+    const num = (x) => Number(String(x).replace(/[.,](?=\d{3}(\D|$))/g, '').replace(',', '.'));
+    const nums = cells.filter(isNum).map(num);
+    const sku = cells.find((x) => !isNum(x) && /^[A-Z]{1,4}[-]?\d{2,}$/i.test(x) && !/\s/.test(x));
+    const unit = cells.find((x) => UNIT_DEFAULT.some((u) => fold(u) === fold(x)));
+    const name = cells.filter((x) => !isNum(x) && x !== sku && x !== unit).sort((a, b) => b.length - a.length)[0];
+    if (!name || /^(stt|tên|ten hang|tên hàng|cộng|tổng)/i.test(name)) continue;
+    let qty = 1, price = 0;
+    if (nums.length >= 2) { const small = nums.filter((n) => n > 0 && n < 1000); qty = small.length ? small[0] : nums[0]; price = nums.find((n) => n >= 1000 && n !== qty) || 0; }
+    else if (nums.length === 1) { if (nums[0] >= 1000) price = nums[0]; else qty = nums[0]; }
+    out.push({ name, sku, unit, qty, price });
+  }
+  return out;
+}
+async function purchaseForm(after, preset) {
+  if (!S.materials || !S.materials.some((m) => 'avg_cost' in m)) S.materials = await api('/materials?all=1');
+  const meta = await api('/purchases/meta');
+  const groups = (kind) => [...new Set([...GRP_DEFAULT[kind], ...meta.groups.filter((g) => g.kind === kind).map((g) => g.grp)])];
+  const units = [...new Set([...meta.units, ...UNIT_DEFAULT])];
+  const lines = (preset && preset.lines) || [];
+  openModal('📥 Phiếu nhập hàng', `<form id="pf">
+    <div class="form-grid">
+      <div><label>Nhà cung cấp</label><input name="supplier" list="pfSup" placeholder="Gõ hoặc chọn NCC đã nhập" value="${esc((preset && preset.supplier) || '')}"><datalist id="pfSup">${meta.suppliers.map((x) => `<option value="${esc(x)}">`).join('')}</datalist></div>
+      <div><label>Số phiếu NCC</label><input name="ref_no" placeholder="vd BH-OBC8415"></div>
+      <div><label>Ngày nhập</label><input type="date" name="date" value="${S.today}"></div>
+      <div><label>Ghi chú</label><input name="note"></div>
+    </div>
+    <div class="pf-add"><input id="pfQ" autocomplete="off" placeholder="🔍 Gõ tên / mã hàng rồi Enter (chưa có → tạo hàng mới)"><button type="button" class="btn sm" id="pfScan">📷</button><button type="button" class="btn sm" id="pfPaste">📋 Dán từ Excel</button></div>
+    <div id="pfSug" class="pf-sug"></div>
+    <datalist id="pfUnits">${units.map((u) => `<option value="${esc(u)}">`).join('')}</datalist>
+    <datalist id="pfGs">${groups('service').map((g) => `<option value="${esc(g)}">`).join('')}</datalist><datalist id="pfGr">${groups('retail').map((g) => `<option value="${esc(g)}">`).join('')}</datalist>
+    <div id="pfLines"></div>
+    <div class="totals" id="pfTot"></div>
+    <div class="form-grid">
+      <div><label>Chiết khấu cả phiếu (đ)</label><input name="discount" inputmode="numeric" value="0"></div>
+      <div><label>Thanh toán NCC</label><select name="pay"><option value="ck">Đã trả đủ – Chuyển khoản</option><option value="tm">Đã trả đủ – Tiền mặt</option><option value="no">Chưa trả (ghi nợ NCC)</option><option value="part">Trả một phần</option></select></div>
+      <div id="pfPartW" style="display:none"><label>Số tiền đã trả</label><input name="paid_part" inputmode="numeric"></div>
+    </div>
+    <div class="err"></div><div class="modal-foot"><button type="button" class="btn" onclick="closeModal()">Hủy</button><button class="btn primary" id="pfSave">Lưu phiếu → cộng kho</button></div></form>`, true);
+  const f = $('#pf');
+  const n = (x) => Math.max(0, Number(String(x ?? '').replace(/[^\d.]/g, '')) || 0);
+  const addLine = (m, extra = {}) => {
+    const ex = m && lines.find((l) => l.material_id === m.id);
+    if (ex) { ex.qty = Number(ex.qty) + Number(extra.qty || 1); if (extra.price) ex.price = extra.price; return draw(); }
+    lines.push(m ? { material_id: m.id, qty: extra.qty || 1, price: extra.price ?? (m.avg_cost || ''), discount: 0, sell_price: m.kind === 'retail' ? m.sell_price ?? '' : '', sku: extra.sku || '' }
+      : { new: { name: extra.name, kind: guessKind(extra.name), grp: guessGroup(extra.name, guessKind(extra.name)), unit: '' }, qty: extra.qty || 1, price: extra.price || '', discount: 0, sell_price: '', sku: extra.sku || '' });
+    draw();
+  };
+  const draw = () => {
+    $('#pfLines').innerHTML = lines.length ? lines.map((l, i) => {
+      const m = l.material_id && matById(l.material_id); const kind = m ? m.kind : l.new.kind;
+      const net = n(l.price) - n(l.discount), amt = Math.round(n(l.qty) * net);
+      const margin = kind === 'retail' && n(l.sell_price) && net ? Math.round((n(l.sell_price) - net) / n(l.sell_price) * 100) : null;
+      return `<div class="pf-line">
+        <div class="pf-name">${m ? `<b>${esc(m.name)}</b> <span class="small muted">tồn ${qtyFmt(m.stock)} ${esc(m.unit || '')}${m.avg_cost ? ' · vốn ' + money(m.avg_cost) : ''}</span>`
+          : `<span class="badge warn">Hàng mới</span> <input data-i="${i}" data-k="name" value="${esc(l.new.name)}" style="flex:1;min-width:160px">
+          <div class="pf-new"><select data-i="${i}" data-k="kind"><option value="retail" ${kind === 'retail' ? 'selected' : ''}>🛍 Bán lẻ</option><option value="service" ${kind === 'service' ? 'selected' : ''}>🧪 Hóa chất dịch vụ</option></select>
+          <input data-i="${i}" data-k="grp" list="${kind === 'retail' ? 'pfGr' : 'pfGs'}" value="${esc(l.new.grp || '')}" placeholder="Nhóm (bấm để chọn)">
+          <input data-i="${i}" data-k="unit" list="pfUnits" value="${esc(l.new.unit || '')}" placeholder="ĐVT" style="width:80px"></div>`}</div>
+        <div class="pf-nums">
+          <label>SL<input data-i="${i}" data-k="qty" inputmode="decimal" value="${l.qty}"></label>
+          <label>Đơn giá nhập<input data-i="${i}" data-k="price" inputmode="numeric" value="${l.price}"></label>
+          <label>CK/đv<input data-i="${i}" data-k="discount" inputmode="numeric" value="${l.discount || ''}" placeholder="0"></label>
+          ${kind === 'retail' ? `<label>Giá bán lẻ<input data-i="${i}" data-k="sell_price" inputmode="numeric" value="${l.sell_price ?? ''}" placeholder="chưa có"></label>` : ''}
+          <div class="pf-amt"><b>${money(amt)}</b>${!net && n(l.qty) ? '<div class="small muted">hàng tặng 0đ</div>' : ''}${margin != null ? `<div class="small ${margin < 20 ? 'warn-t' : 'muted'}">lãi ${margin}%</div>` : ''}</div>
+          <button type="button" class="icon-btn" data-rm="${i}">×</button></div></div>`; }).join('')
+      : '<div class="empty small">Chưa có hàng. Gõ tên ở ô tìm, quét mã, hoặc dán danh sách từ Excel.</div>';
+    const sub = lines.reduce((a, l) => a + Math.round(n(l.qty) * (n(l.price) - n(l.discount))), 0), disc = Math.min(sub, n(f.discount.value));
+    $('#pfTot').innerHTML = `<div class="stat-line"><span>${lines.length} mặt hàng · ${lines.reduce((a, l) => a + n(l.qty), 0)} đơn vị</span><span>Tiền hàng ${money(sub)}</span></div>
+      ${disc ? `<div class="stat-line"><span>Chiết khấu cả phiếu</span><span>−${money(disc)}</span></div>` : ''}<div class="stat-line"><b>Phải trả NCC</b><b class="big">${money(sub - disc)}</b></div>`;
+    $$('#pfLines [data-i]').forEach((x) => (x.onchange = () => { const l = lines[x.dataset.i], k = x.dataset.k;
+      if (['name', 'kind', 'grp', 'unit'].includes(k)) { l.new[k] = x.value; if (k === 'kind') l.new.grp = guessGroup(l.new.name, x.value); if (k === 'name' && !l.new.grp) l.new.grp = guessGroup(x.value, l.new.kind); } else l[k] = x.value; draw(); }));
+    $$('#pfLines [data-rm]').forEach((x) => (x.onclick = () => { lines.splice(Number(x.dataset.rm), 1); draw(); }));
+  };
+  const q = $('#pfQ');
+  const sug = () => { const v = q.value.trim(); const ms = v ? matchMat(v) : [];
+    $('#pfSug').innerHTML = v ? ms.map((m) => `<button type="button" class="btn sm" data-pm="${m.id}">${m.kind === 'retail' ? '🛍' : '🧪'} ${esc(m.name)}</button>`).join('') + `<button type="button" class="btn sm primary" data-pnew="1">+ Tạo hàng mới “${esc(v)}”</button>` : '';
+    $$('[data-pm]', $('#pfSug')).forEach((b) => (b.onclick = () => { addLine(matById(b.dataset.pm)); q.value = ''; sug(); q.focus(); }));
+    const nb = $('[data-pnew]', $('#pfSug')); if (nb) nb.onclick = () => { addLine(null, { name: v }); q.value = ''; sug(); };
+  };
+  q.oninput = sug;
+  q.onkeydown = (e) => { if (e.key !== 'Enter') return; e.preventDefault(); const v = q.value.trim(); if (!v) return; const ms = matchMat(v); if (ms.length === 1) addLine(ms[0]); else if (!ms.length) addLine(null, { name: v }); else return; q.value = ''; sug(); };
+  $('#pfScan').onclick = () => scanBarcode({ title: 'Quét hàng nhập', continuous: true, hint: 'Quét từng sản phẩm, mỗi lần quét +1. Xong bấm “Xong”.', onCode: (code) => {
+    const m = S.materials.find((x) => hasCode(x, code) || normCode(x.sku) === normCode(code));
+    if (m) { addLine(m); return 'Đã thêm: ' + esc(m.name); } addLine(null, { name: 'Hàng mới mã ' + code }); lines[lines.length - 1].new.barcode = code; draw(); return 'Mã mới → sửa tên ở phiếu'; } });
+  $('#pfPaste').onclick = () => {
+    const box = document.createElement('div'); box.className = 'pf-paste';
+    box.innerHTML = `<div class="small">Copy các dòng trong Excel / bảng kê NCC (cột <b>Tên hàng · SL · Đơn giá</b>, có <b>Mã hàng</b> càng tốt) rồi dán vào đây:</div><textarea rows="6" placeholder="Tạo kiểu Milbon Molding Wax 3	MB442150	1	294000"></textarea><div class="row" style="gap:6px"><button type="button" class="btn sm primary">Thêm vào phiếu</button><button type="button" class="btn sm">Đóng</button></div>`;
+    $('#pfLines').before(box); const [ok, no] = box.querySelectorAll('button'); box.querySelector('textarea').focus();
+    no.onclick = () => box.remove();
+    ok.onclick = () => { const rows = parsePaste(box.querySelector('textarea').value); let hit = 0;
+      for (const r of rows) { let ms = r.sku ? matchMat(r.sku) : []; if (!ms.length) ms = matchMat(r.name); const m = ms.length === 1 ? ms[0] : null; if (m) hit++; addLine(m, { name: r.name, qty: r.qty, price: r.price, sku: r.sku }); if (!m && r.unit) lines[lines.length - 1].new.unit = r.unit; }
+      draw();
+      box.remove(); toast(`Đã thêm ${rows.length} dòng: ${hit} hàng có sẵn, ${rows.length - hit} hàng mới (kiểm tra nhóm/ĐVT)`); };
+  };
+  f.discount.oninput = draw;
+  f.pay.onchange = () => { $('#pfPartW').style.display = f.pay.value === 'part' ? '' : 'none'; };
+  f.onsubmit = (e) => { e.preventDefault(); guard($('#pfSave'), async () => {
+    if (!lines.length) throw new Error('Phiếu chưa có hàng');
+    const bad = lines.find((l) => l.new && !l.new.unit); if (bad) throw new Error(`Hàng mới “${bad.new.name}”: chọn ĐVT (tuýp, chai, hộp…)`);
+    const sub = lines.reduce((a, l) => a + Math.round(n(l.qty) * (n(l.price) - n(l.discount))), 0), total = sub - Math.min(sub, n(f.discount.value));
+    const paid = f.pay.value === 'no' ? 0 : f.pay.value === 'part' ? n(f.paid_part.value) : total;
+    const body = { supplier: f.supplier.value, ref_no: f.ref_no.value, date: f.date.value, note: f.note.value, discount: n(f.discount.value), paid, pay_method: f.pay.value === 'tm' ? 'Tiền mặt' : 'Chuyển khoản',
+      lines: lines.map((l) => ({ material_id: l.material_id || null, new: l.new || null, qty: n(l.qty), price: n(l.price), discount: n(l.discount), sell_price: l.sell_price === '' ? '' : n(l.sell_price), sku: l.sku })) };
+    let r; try { r = await api('/purchases', { method: 'POST', body }); }
+    catch (err) { if (err.status !== 409 || !confirm(err.message + '\n\nVẫn nhập?')) throw err; r = await api('/purchases', { method: 'POST', body: { ...body, force: 1 } }); }
+    closeModal(); toast(`Đã nhập ${r.code}: ${r.line_count} mặt hàng, ${money(r.total)}${r.created ? ` · tạo ${r.created} hàng mới` : ''}`);
+    S.materials = await api('/materials?all=1'); if (after) after();
+  }); };
+  draw(); q.focus();
+}
+async function purchaseView(id, reload) {
+  const p = await api('/purchases/' + id);
+  const ST = { paid: ['Đã trả đủ', 'ok'], partial: ['Trả một phần', 'warn'], unpaid: ['Chưa trả NCC', 'bad'] };
+  openModal(`${p.code} · ${p.supplier || 'Không rõ NCC'}`, `<div class="small muted">${dmy(p.date)}${p.ref_no ? ' · phiếu NCC ' + esc(p.ref_no) : ''}${p.by_name ? ' · ' + esc(p.by_name) : ''}${p.note ? ' · ' + esc(p.note) : ''}</div>
+    <div class="table-wrap"><table><thead><tr><th>Hàng</th><th class="num">SL</th><th class="num">Đơn giá</th><th class="num">Giá vốn/đv</th><th class="num">Thành tiền</th></tr></thead><tbody>
+    ${p.lines.map((l) => `<tr><td>${esc(l.name)}${l.sku ? ` <span class="muted small">${esc(l.sku)}</span>` : ''}</td><td class="num">${qtyFmt(l.qty)} ${esc(l.unit || '')}</td><td class="num">${money(l.list_price ?? l.unit_cost)}</td><td class="num">${money(Math.round(l.unit_cost))}</td><td class="num">${money(Math.round(l.qty * l.unit_cost))}</td></tr>`).join('')}</tbody></table></div>
+    <div class="totals">${p.discount ? `<div class="stat-line"><span>Chiết khấu cả phiếu</span><span>−${money(p.discount)}</span></div>` : ''}<div class="stat-line"><b>Tổng phiếu</b><b>${money(p.total)}</b></div>
+      <div class="stat-line"><span>Đã trả</span><span>${money(p.paid)} <span class="badge ${ST[p.status][1]}">${ST[p.status][0]}</span></span></div>
+      ${p.pays.map((x) => `<div class="small muted" style="padding-left:10px">${dmy(x.date)} · ${esc(x.method || '')} · ${money(x.amount)}</div>`).join('')}</div>
+    ${p.owe ? `<form id="ppf" class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px"><input name="amount" inputmode="numeric" value="${p.owe}" style="width:130px"><select name="method" style="width:auto"><option>Chuyển khoản</option><option>Tiền mặt</option></select><input type="date" name="date" value="${S.today}" style="width:auto"><button class="btn sm primary">Trả NCC</button></form>` : ''}
+    <div class="err"></div><div class="modal-foot"><button class="btn danger" id="ppDel">Xóa phiếu (trừ lại kho)</button></div>`, true);
+  if ($('#ppf')) $('#ppf').onsubmit = (e) => { e.preventDefault(); guard($('#ppf button'), async () => { await api(`/purchases/${p.id}/pay`, { method: 'POST', body: formData($('#ppf')) }); toast('Đã ghi trả NCC'); closeModal(); reload(); }); };
+  $('#ppDel').onclick = () => guard($('#ppDel'), async () => { if (!confirm(`Xóa phiếu ${p.code}? Kho sẽ trừ lại ${p.lines.length} mặt hàng.`)) return; await api('/purchases/' + p.id, { method: 'DELETE' }); toast('Đã xóa phiếu'); closeModal(); reload(); });
+}
+
 VIEWS.stock = async (main) => {
   if (!isOwner()) {
     if (!S.me.stock_view && !isMgr()) { main.innerHTML = '<div class="empty">Bạn chưa được giao quyền xem kho</div>'; return; }
     main.innerHTML = header('Kho hàng', S.me.stock_count ? 'Xem tồn, kiểm kho đếm hàng, báo hàng cần gọi thêm' : 'Xem tồn kho, báo hàng hết cần gọi thêm');
     return stockLevelsView(main, () => VIEWS.stock(main));
   }
-  const tab = S.params.tab || 'report';
+  const tab = S.params.tab || 'purchases';
   const reload = () => VIEWS.stock(main);
-  const tabs = [['report', 'Giá cốt & lãi gộp'], ['levels', 'Tồn kho & kiểm kho'], ['items', 'Hóa chất & sản phẩm'], ['recipes', 'Định mức dịch vụ']];
+  const tabs = [['purchases', '📥 Nhập hàng'], ['levels', 'Tồn kho & kiểm kho'], ['items', 'Hóa chất & sản phẩm'], ['report', 'Giá cốt & lãi gộp'], ['recipes', 'Định mức dịch vụ']];
   const top = header('Kho & giá cốt', 'Chỉ Lãnh đạo thấy giá nhập, giá cốt, lãi gộp') +
     `<div class="card"><div class="row">${tabs.map(([k, l]) => `<button class="btn sm ${k === tab ? 'primary' : ''}" data-tab="${k}">${l}</button>`).join('')}
-    <span class="spacer"></span><button class="btn sm" data-goto="excel">📥 Tải file sổ nhập hàng</button></div></div>`;
-  const bindTop = () => { $$('[data-tab]', main).forEach((b) => (b.onclick = () => go('stock', { tab: b.dataset.tab }))); $$('[data-goto]', main).forEach((b) => (b.onclick = () => go(b.dataset.goto))); };
+    <span class="spacer"></span><button class="btn sm primary" id="newPN">+ Phiếu nhập hàng</button></div></div>`;
+  const bindTop = () => { $$('[data-tab]', main).forEach((b) => (b.onclick = () => go('stock', { tab: b.dataset.tab }))); $$('[data-goto]', main).forEach((b) => (b.onclick = () => go(b.dataset.goto)));
+    $('#newPN', main).onclick = () => purchaseForm(() => go('stock', { tab: 'purchases' })); };
   if (tab === 'levels') { main.innerHTML = top; bindTop(); return stockLevelsView(main, reload); }
   S.materials = await api('/materials?all=1');
+
+  if (tab === 'purchases') {
+    const from = S.params.from || S.today.slice(0, 8) + '01', to = S.params.to || S.today;
+    const r = await api(`/purchases?from=${from}&to=${to}`);
+    const ST = { paid: ['Đã trả', 'ok'], partial: ['Trả 1 phần', 'warn'], unpaid: ['Chưa trả', 'bad'] };
+    const rowsHtml = (list) => list.map((p) => `<tr class="click" data-pv="${p.id}"><td>${dmy(p.date)}</td><td class="muted">${esc(p.code)}</td><td>${esc(p.supplier || '')}${p.ref_no ? `<div class="small muted">${esc(p.ref_no)}</div>` : ''}</td><td class="num">${p.line_count}</td><td class="num"><b>${money(p.total)}</b></td><td><span class="badge ${ST[p.status][1]}">${ST[p.status][0]}${p.status === 'partial' ? ' · nợ ' + money(p.owe) : ''}</span></td></tr>`).join('');
+    main.innerHTML = top + (r.owing.length ? `<div class="card" style="border-color:var(--warn)"><h3>💳 Còn nợ NCC <span class="badge bad">${money(r.owe_total)}</span></h3><div class="small muted">Bấm phiếu → Trả NCC. Tiền chỉ tính ra (dòng tiền) vào ngày trả.</div>
+        ${r.owing.map((p) => `<div class="stat-line click" data-pv="${p.id}"><span>${dmy(p.date).slice(0, 5)} · <b>${esc(p.supplier || '?')}</b> <span class="muted small">${esc(p.code)}${p.ref_no ? ' · ' + esc(p.ref_no) : ''}</span></span><b class="warn-t">${money(p.owe)}</b></div>`).join('')}</div>` : '') +
+      `<div class="card"><div class="row"><input type="date" id="f" value="${from}" style="width:auto"> → <input type="date" id="t" value="${to}" style="width:auto"><button class="btn sm" id="go">Xem</button><span class="spacer"></span><span class="small">Tổng nhập: <b>${money(r.total)}</b></span></div>
+      ${r.rows.length ? `<div class="table-wrap" style="margin-top:8px"><table class="cardify"><thead><tr><th>Ngày</th><th>Phiếu</th><th>NCC</th><th class="num">Mặt hàng</th><th class="num">Tổng</th><th>Thanh toán</th></tr></thead><tbody>${rowsHtml(r.rows)}</tbody></table></div>`
+        : '<div class="empty">Chưa có phiếu nhập trong kỳ. Bấm <b>+ Phiếu nhập hàng</b>: chọn NCC → gõ/quét/dán hàng → SL, giá → Lưu.</div>'}
+      <div class="small muted" style="margin-top:8px">Nhập nhiều dòng một lúc: trong phiếu bấm <b>📋 Dán từ Excel</b>. File sổ nhập hàng cũ vẫn tải ở <a href="#excel">Nhập / Xuất Excel</a>.</div></div>`;
+    bindTop();
+    $('#go').onclick = () => go('stock', { tab, from: $('#f').value, to: $('#t').value });
+    $$('[data-pv]', main).forEach((x) => (x.onclick = () => purchaseView(x.dataset.pv, reload)));
+    return;
+  }
 
   if (tab === 'report') {
     const from = S.params.from || S.today.slice(0, 8) + '01', to = S.params.to || S.today;
@@ -2437,11 +2608,16 @@ VIEWS.stock = async (main) => {
       openModal(m.id ? 'Sửa ' + m.name : 'Thêm hóa chất / sản phẩm', `<form id="mf"><div class="form-grid">
         <div class="full"><label>Tên *</label><input name="name" value="${esc(m.name || '')}" required></div>
         <div><label>Loại</label><select name="kind"><option value="service" ${m.kind === 'service' ? 'selected' : ''}>Hóa chất làm dịch vụ</option><option value="retail" ${m.kind === 'retail' ? 'selected' : ''}>Sản phẩm bán lẻ</option></select></div>
-        <div><label>Nhóm</label><input name="grp" value="${esc(m.grp || '')}"></div>
-        <div><label>ĐVT (tuýp, chai, hộp…)</label><input name="unit" value="${esc(m.unit || '')}"></div>
+        <div><label>Nhóm <span class="small muted">(bấm để chọn)</span></label><input name="grp" list="mfG" value="${esc(m.grp || '')}" autocomplete="off"><datalist id="mfG"></datalist></div>
+        <div><label>ĐVT (tuýp, chai, hộp…)</label><input name="unit" list="mfU" value="${esc(m.unit || '')}" autocomplete="off"><datalist id="mfU">${[...new Set([...S.materials.map((x) => x.unit).filter(Boolean), ...UNIT_DEFAULT])].map((u) => `<option value="${esc(u)}">`).join('')}</datalist></div>
+        ${m.id ? '' : `<div class="full mf-in"><b>📥 Nhập kho luôn</b> <span class="small muted">(bỏ trống nếu chỉ khai tên hàng)</span><div class="row" style="gap:6px;flex-wrap:wrap;margin-top:4px">
+          <label style="flex:1;min-width:80px">Số lượng<input name="in_qty" inputmode="decimal" placeholder="vd 1"></label>
+          <label style="flex:1;min-width:110px">Giá nhập 1 đơn vị<input name="in_cost" inputmode="numeric" placeholder="vd 294000"></label>
+          <label style="flex:2;min-width:150px">Nhà cung cấp<input name="in_sup" placeholder="vd Milbon"></label></div></div>`}
         <div><label>Dung tích 1 đơn vị</label><div class="row"><input type="number" name="size" step="any" min="0" value="${m.size || ''}" style="flex:1"><select name="size_unit" style="width:auto"><option ${m.size_unit !== 'g' ? 'selected' : ''}>ml</option><option ${m.size_unit === 'g' ? 'selected' : ''}>g</option></select></div></div>
         <div><label>Giá bán cho khách (sản phẩm)</label><input type="number" name="sell_price" min="0" step="1000" value="${m.sell_price ?? ''}"></div>
-        <div><label>Giá thị trường 1 đơn vị (khi nhập 0đ / hàng tặng)</label><input type="number" name="ref_cost" min="0" step="1000" value="${m.ref_cost ?? ''}"><div class="small muted">Chỉ dùng tính giá cốt khi giá nhập = 0đ</div></div>
+        <div><label>Mã hàng NCC</label><input name="sku" value="${esc(m.sku || '')}" placeholder="vd MB442150"></div>
+        <details class="full" ${m.ref_cost ? 'open' : ''}><summary class="small">🎁 Hàng được tặng 0đ? (không phải giá nhập)</summary><label>Giá trị nếu phải mua (để tính giá cốt hàng tặng)</label><input type="number" name="ref_cost" min="0" step="1000" value="${m.ref_cost ?? ''}"><div class="small muted">Giá nhập thật ghi ở <b>Phiếu nhập hàng</b>, không ghi ở đây.</div></details>
         <div><label>Mã vạch (nhiều mã cách nhau dấu phẩy)</label><div class="row" style="gap:6px"><input name="barcode" value="${esc(m.barcode || '')}" style="flex:1;min-width:0"><button type="button" class="btn sm" id="mfScan">📷</button></div></div>
         <div><label>Trạng thái</label><select name="active"><option value="1">Đang dùng</option><option value="0" ${m.active ? '' : 'selected'}>Ngừng</option></select></div>
         <div class="full"><label>Ghi chú</label><input name="note" value="${esc(m.note || '')}"></div>
@@ -2449,9 +2625,19 @@ VIEWS.stock = async (main) => {
           <label class="small" style="font-weight:normal;margin-top:6px"><input type="checkbox" name="formula_default" value="1" style="width:auto" ${m.formula_default ? 'checked' : ''}> Màu mặc định khi công thức chỉ ghi số tông (9nb, 7glca…)</label>
           <div class="small muted">Thợ gõ “9graypearl 15ml” ở lượt làm → app tự ghi hóa chất này 15${esc(m.size_unit || 'ml')} và tính giá cốt. Cần điền “Dung tích 1 đơn vị”.</div></div>` : ''}</div>
         <div class="err"></div><div class="modal-foot"><button class="btn primary">Lưu</button></div></form>`);
+      const mf = $('#mf'); let grpTouched = !!m.grp;
+      const fillG = () => { const k = mf.kind.value; $('#mfG').innerHTML = [...new Set([...GRP_DEFAULT[k], ...S.materials.filter((x) => x.kind === k).map((x) => x.grp).filter(Boolean)])].map((g) => `<option value="${esc(g)}">`).join(''); };
+      const autoG = () => { if (!grpTouched) mf.grp.value = guessGroup(mf.name.value, mf.kind.value); };
+      fillG(); mf.grp.oninput = () => { grpTouched = !!mf.grp.value; };
+      mf.kind.onchange = () => { fillG(); if (!GRP_DEFAULT[mf.kind.value].includes(mf.grp.value) && !S.materials.some((x) => x.kind === mf.kind.value && x.grp === mf.grp.value)) grpTouched = false; autoG(); };
+      mf.name.onchange = autoG;
       $('#mfScan').onclick = () => scanBarcode({ title: 'Quét mã cho ' + (m.name || 'sản phẩm mới'), onCode: (code) => { const i = $('#mf [name=barcode]'); if (!i.value.split(/[,;\s]+/).map(normCode).includes(normCode(code))) i.value = [i.value.trim(), code].filter(Boolean).join(','); } });
       $('#mf').onsubmit = (e) => { e.preventDefault(); guard($('#mf button.primary'), async () => {
-        await api(m.id ? '/materials/' + m.id : '/materials', { method: m.id ? 'PUT' : 'POST', body: formData($('#mf')) }); closeModal(); toast('Đã lưu'); reload(); }); };
+        const d = formData($('#mf'));
+        const r = await api(m.id ? '/materials/' + m.id : '/materials', { method: m.id ? 'PUT' : 'POST', body: d });
+        const q = Number(String(d.in_qty || '').replace(',', '.'));
+        if (!m.id && q > 0) await api('/purchases', { method: 'POST', body: { supplier: d.in_sup, lines: [{ material_id: r.id, qty: q, price: Number(String(d.in_cost || '').replace(/\D/g, '')) || 0 }], paid: 0 } });
+        closeModal(); toast(!m.id && q > 0 ? `Đã thêm & nhập kho ${q} ${d.unit || ''} (ghi nợ NCC – trả ở tab Nhập hàng)` : 'Đã lưu'); reload(); }); };
     };
     $('#newM').onclick = () => form();
     $$('[data-em]', main).forEach((b) => (b.onclick = () => form(matById(b.dataset.em))));
