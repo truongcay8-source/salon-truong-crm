@@ -207,7 +207,9 @@ function report(month) {
   const breakeven = cmRatio > 0 ? Math.round(fixCost / cmRatio) : null;
 
   // Dòng tiền tháng: tiền khách trả (DV + SP + bán thẻ) − tiền chi thật
-  const purchases = Math.round(db.prepare(`SELECT COALESCE(SUM(qty*unit_cost),0) c FROM stock_moves WHERE kind='in' AND date BETWEEN ? AND ?`).get(from, to).c);
+  // Hàng nhập theo Phiếu nhập: tiền ra theo ngày TRẢ NCC (nợ NCC chưa trả thì chưa ra tiền); nhập lẻ cũ: theo ngày nhập
+  const purchases = Math.round(db.prepare(`SELECT COALESCE(SUM(qty*unit_cost),0) c FROM stock_moves WHERE kind='in' AND purchase_id IS NULL AND date BETWEEN ? AND ?`).get(from, to).c)
+    + require('./purchase').paidBetween(from, to);
   const cashOut = payTotal + fundCash + (fixedTotal - depreciation) + purchases;
 
   return {

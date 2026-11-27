@@ -211,7 +211,7 @@ function materialRows(user, opts = {}) {
   const rows = db.prepare(`SELECT * FROM materials ${opts.all ? '' : 'WHERE active=1'} ORDER BY kind, grp, name`).all();
   return rows.map((m) => {
     const base = { id: m.id, code: m.code, name: m.name, kind: m.kind, grp: m.grp, unit: m.unit, size: m.size, size_unit: m.size_unit, sell_price: m.sell_price, active: m.active,
-      formula_keys: m.formula_keys, formula_default: m.formula_default, barcode: m.barcode };
+      formula_keys: m.formula_keys, formula_default: m.formula_default, barcode: m.barcode, sku: m.sku };
     // Sản phẩm bán lẻ: ai cũng thấy số còn (không có giá nhập) để biết còn hàng lúc bán cho khách
     if (!seeCost(user)) return m.kind === 'retail' || isMgr(user) ? { ...base, stock: r2(stockOf(m.id)) } : base;
     const cost = avgCost(m.id), stock = stockOf(m.id);
@@ -415,7 +415,7 @@ function mount(app, { MGR, OWNER }) {
     return { name, kind: b.kind === 'retail' ? 'retail' : 'service', grp: str(b.grp), unit: str(b.unit), size: sz, size_unit: sz ? (b.size_unit === 'g' ? 'g' : 'ml') : null,
       sell_price: b.sell_price === '' || b.sell_price == null ? null : Math.max(0, int(b.sell_price)), active: b.active === false || b.active === 0 || b.active === '0' ? 0 : 1, note: str(b.note),
       ref_cost: b.ref_cost === '' || b.ref_cost == null ? null : Math.max(0, int(b.ref_cost)) || null,
-      barcode: codeList(b.barcode).join(',') || null,
+      barcode: codeList(b.barcode).join(',') || null, sku: str(b.sku),
       formula_keys: str(b.formula_keys), formula_default: b.formula_default === '1' || b.formula_default === 1 || b.formula_default === true ? 1 : 0 };
   };
   const oneDefault = (id, m) => { if (m.formula_default) db.prepare('UPDATE materials SET formula_default=0 WHERE id<>?').run(id); };
@@ -470,6 +470,7 @@ function mount(app, { MGR, OWNER }) {
     res.json({ ok: true });
   });
 
+  require('./purchase').mount(app, { OWNER });
   // Báo cáo giá cốt & lãi gộp
   app.get('/api/reports/cost', OWNER, (req, res) => {
     const from = isDate(req.query.from) ? req.query.from : today().slice(0, 8) + '01';
