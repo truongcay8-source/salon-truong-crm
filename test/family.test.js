@@ -1083,3 +1083,35 @@ test('Sửa giá nhập sai: giá vốn bình quân + giá vốn lần bán + t�
   assert.equal(db.prepare('SELECT COALESCE(SUM(qty),0) q FROM stock_moves WHERE material_id=?').get(mid).q, -1);
   db.prepare("UPDATE visits SET status='deleted' WHERE id=?").run(vid);
 });
+
+test('Sổ đặt lịch: sửa chữ ô / đổi giờ không tạo lịch trùng', async () => {
+  const ExcelJS = require('exceljs'); const I = require('../server/importer');
+  const owner = db.prepare("SELECT id, full_name, role FROM users WHERE role='owner' ORDER BY id").get();
+  const duong = db.prepare("SELECT id FROM users WHERE full_name='Dương'").get().id;
+  const D = '2030-12-05';
+  const book = async (cells) => {
+    const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('Tháng 12');
+    ws.getCell('B1').value = new Date(Date.UTC(2030, 11, 5)); ws.getCell('A2').value = 'Giờ'; ws.getCell('B2').value = 'Dương'; ws.getCell('C2').value = 'Thu';
+    ['13:00', '14:00', '15:00'].forEach((t, i) => { ws.getCell('A' + (3 + i)).value = t; });
+    for (const [ref, v] of Object.entries(cells)) ws.getCell(ref).value = v;
+    return I.importWorkbook(Buffer.from(await wb.xlsx.writeBuffer()), { bookMoney: false }, owner);
+  };
+  const list = () => db.prepare("SELECT * FROM appointments WHERE date=? AND status<>'cancelled' ORDER BY id").all(D);
+  await book({ B3: 'E Phương 0947072992' });
+  assert.equal(list().length, 1);
+  await book({ B3: 'E Phương 0947072992 ctri 3b 870' });
+  assert.equal(list().length, 1, 'sửa thêm chữ trong ô → vẫn 1 lịch');
+  assert.match(list()[0].note, /ctri 3b/);
+  await book({ B5: 'E Phương 0947072992 ctri 3b 870' });
+  assert.equal(list().length, 1, 'khách đổi 13h → 15h trong sổ → dời lịch, không thêm');
+  assert.equal(list()[0].time, '15:00'); assert.equal(list()[0].staff_id, duong);
+  // 1 khách 2 ô trong ngày (2 dịch vụ khác thợ) vẫn là 2 lịch
+  await book({ B5: 'E Phương 0947072992 ctri 3b 870', C3: 'E Phương hấp tóc 0947072992' });
+  assert.equal(list().length, 2);
+  await book({ B5: 'E Phương 0947072992 ctri 3b 870', C3: 'E Phương hấp tóc 0947072992' });
+  assert.equal(list().length, 2, 'đồng bộ lại không nhân thêm');
+  // Lịch trùng cũ (cùng giờ, cùng thợ, chữ khác nhưng cùng SĐT) → dọn
+  db.prepare("INSERT INTO appointments(guest_name,staff_id,date,time,status,note) VALUES ('E Phương',?,?,'15:00','booked','E Phương 0947072992')").run(duong, D);
+  assert.equal(list().length, 3); I.dedupeAppointments(); assert.equal(list().length, 2);
+  db.prepare('DELETE FROM appointments WHERE date=?').run(D);
+});

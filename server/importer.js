@@ -115,11 +115,13 @@ function apptKey(text) {
     .replace(/^(chi|anh|em|c|a|e|b|ban|co|chu|bac|khach|kh)\s+/, '').split(/\s+/).filter(Boolean);
   return n.slice(0, 2).join(' ');
 }
+const apptPhone = (a) => (a.guest_phone && L.normPhone(a.guest_phone)) || extractPhone(a.note || '') || null;
+const keyLike = (k1, k2) => !!k1 && !!k2 && (k1 === k2 || ((k1 + ' ').startsWith(k2 + ' ') || (k2 + ' ').startsWith(k1 + ' ')));
 // Dọn lịch hẹn bị tạo trùng do nhập lại sổ sau khi sửa chữ trong ô: giữ lịch đã thu tiền / hoàn thành, xóa bản "Đã đặt" trùng
 function dedupeAppointments() {
   // Cùng ngày + giờ + thợ, cùng ô (chữ y hệt / cùng khách / cùng tên khách) = 1 lịch. Mọi trạng thái (kể cả "Hoàn thành", "Hủy")
   // – vd sau khi gộp 2 tài khoản Trường, lịch của cả 2 tài khoản dồn về 1 cột thành 2 bản.
-  const rows = db.prepare(`SELECT a.id, a.date, a.time, a.staff_id, a.status, a.note, a.guest_name, a.customer_id, a.pay_note, a.assistant_id, a.service, a.manual_edit, a.taken_by,
+  const rows = db.prepare(`SELECT a.id, a.date, a.time, a.staff_id, a.status, a.note, a.guest_name, a.guest_phone, a.customer_id, a.pay_note, a.assistant_id, a.service, a.manual_edit, a.taken_by,
       v.id visit_id FROM appointments a LEFT JOIN visits v ON v.id=a.visit_id AND v.status='done' ORDER BY a.date, a.time, a.id`).all();
   const groups = new Map();
   for (const a of rows) {
@@ -128,7 +130,8 @@ function dedupeAppointments() {
     groups.get(g).push(a);
   }
   const same = (x, y) => (x.note && x.note === y.note) || (x.customer_id && x.customer_id === y.customer_id)
-    || (apptKey(x.note || x.guest_name || '') && apptKey(x.note || x.guest_name || '') === apptKey(y.note || y.guest_name || ''));
+    || (apptPhone(x) && apptPhone(x) === apptPhone(y))
+    || keyLike(apptKey(x.note || x.guest_name || ''), apptKey(y.note || y.guest_name || ''));
   let removed = 0;
   // Ưu tiên giữ: đã thu tiền > đã sửa trên app > còn hiệu lực (không hủy) > có dịch vụ > hoàn thành/đã đến
   const rank = (a) => (a.visit_id ? 32 : 0) + (a.manual_edit ? 16 : 0) + (a.status !== 'cancelled' ? 8 : 0) + (a.service ? 4 : 0) + (a.status === 'done' ? 2 : a.status === 'arrived' ? 1 : 0);
@@ -813,6 +816,13 @@ async function importWorkbook(buffer, opts, user) {
       if (opts.bookMoney !== false) require('./expenses').importFromBook(blocks.filter((b) => b.date <= t && b.date < untilM).map((b) => ({ date: b.date, items: b.spend })), user, summary);
       if (opts.bookMoney !== false) require('./finance').importLixi(blocks.filter((b) => b.date <= t && b.lixi.length), user, summary);
       for (const b of blocks) {
+        const claimed = new Set(); // lịch đã khớp với 1 ô trong ngày này (không cho ô khác khớp lại)
+        const sameSlot = (b0, e0) => { const k = apptKey(e0.text), ph = extractPhone(e0.text);
+          return db.prepare(`SELECT id, status, pay_note, note, customer_id, guest_name, guest_phone, manual_edit FROM appointments WHERE date=? AND time=? AND IFNULL(staff_id,0)=IFNULL(?,0)
+              ORDER BY (visit_id IS NOT NULL) DESC, (status='done') DESC, id`).all(b0.date, e0.time, e0.staffId)
+            .filter((a) => a.note === e0.text || (ph && apptPhone(a) === ph) || keyLike(k, apptKey(a.note || a.guest_name || ''))); };
+        // Lượt 1: ô nào còn đúng giờ + thợ cũ → giữ lịch đó trước
+        for (const e of b.entries) { const x = sameSlot(b, e).find((a) => !claimed.has(a.id)); if (x) { claimed.add(x.id); e.slotHit = x.id; } }
         const until = L.isDate(getSettings().book_money_until) ? getSettings().book_money_until : null;
         const money = opts.bookMoney && b.date >= BOOK_FROM && b.date < t && (!until || b.date < until);
         if (b.date < t && !opts.includeHistory && !money) { summary.appointments_past_skipped += b.entries.length; continue; }
@@ -834,9 +844,20 @@ async function importWorkbook(buffer, opts, user) {
           if (asst) summary.assistants_found++;
           // Trùng = cùng ngày + giờ + thợ và cùng ô (chữ y hệt, hoặc cùng khách / cùng tên khách — sổ sửa thêm tiền "A thái uk" → "A thái uk 685" vẫn là 1 lịch)
           const key = apptKey(e.text);
-          const dup = db.prepare(`SELECT id, status, pay_note, note, customer_id, guest_name, manual_edit FROM appointments WHERE date=? AND time=? AND IFNULL(staff_id,0)=IFNULL(?,0)
+          let dup = db.prepare(`SELECT id, status, pay_note, note, customer_id, guest_name, guest_phone, manual_edit FROM appointments WHERE date=? AND time=? AND IFNULL(staff_id,0)=IFNULL(?,0)
               ORDER BY (visit_id IS NOT NULL) DESC, (status='done') DESC, id`).all(b.date, e.time, e.staffId)
-            .find((a) => a.note === e.text || (hit && a.customer_id === hit.id) || (key && apptKey(a.note || a.guest_name || '') === key));
+            .find((a) => (e.slotHit ? a.id === e.slotHit : !claimed.has(a.id)) && (a.note === e.text || (hit && a.customer_id === hit.id) || (phone && apptPhone(a) === phone) || keyLike(key, apptKey(a.note || a.guest_name || ''))));
+          // Khách đổi giờ / đổi thợ: cùng ngày có lịch của đúng khách này (cùng SĐT / hồ sơ / tên) mà ô cũ không còn trong sổ
+          //  → sổ dời: lịch chưa sửa trên app thì dời theo sổ; lịch đã đổi giờ trên app thì giữ theo app, không tạo thêm
+          if (!dup && !cancelled) {
+            const mv = db.prepare(`SELECT id, status, pay_note, note, customer_id, guest_name, guest_phone, manual_edit, time, staff_id, visit_id FROM appointments WHERE date=? AND status<>'cancelled' ORDER BY id`).all(b.date)
+              .find((a) => !claimed.has(a.id) && ((hit && a.customer_id === hit.id) || (phone && apptPhone(a) === phone) || (key && key.includes(' ') && apptKey(a.note || a.guest_name || '') === key)));
+            if (mv) {
+              if (!mv.manual_edit && !mv.visit_id) { db.prepare('UPDATE appointments SET time=?, staff_id=? WHERE id=?').run(e.time, e.staffId, mv.id); summary.appointments_moved = (summary.appointments_moved || 0) + 1; }
+              dup = mv;
+            }
+          }
+          if (dup) claimed.add(dup.id);
           let apptId;
           if (dup && hit) db.prepare('UPDATE appointments SET customer_id=COALESCE(customer_id,?) WHERE id=?').run(hit.id, dup.id);
           if (dup) {
